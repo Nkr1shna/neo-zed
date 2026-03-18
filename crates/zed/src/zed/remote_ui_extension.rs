@@ -19,8 +19,8 @@ use extension::{
 use extension_host::ExtensionStore;
 use gpui::{
     Action, AnyElement, App, AppContext as _, BorrowAppContext as _, ClipboardItem, Context,
-    Entity, EventEmitter, FocusHandle, Focusable, Global, IntoElement, Pixels, Render,
-    SharedString, Styled, Task, WeakEntity, Window, prelude::*, px,
+    Entity, EventEmitter, FocusHandle, Focusable, Global, InteractiveElement, IntoElement,
+    MouseButton, Pixels, Render, SharedString, Styled, Task, WeakEntity, Window, prelude::*, px,
 };
 use project_panel::ProjectPanelContextMenuHooks;
 use schemars::JsonSchema;
@@ -29,7 +29,7 @@ use theme::ActiveTheme;
 use title_bar::TitleBar;
 use ui::{
     Button, ButtonCommon, Clickable, ContextMenu, ContextMenuEntry, ContextMenuItem, Divider,
-    Icon, ProgressBar,
+    Icon, IconButton, IconName, IconSize, PopoverMenu, ProgressBar, Tooltip,
     utils::platform_title_bar_height, v_flex,
 };
 use workspace::dock::{DockPosition, PanelEvent, PanelHandle};
@@ -583,6 +583,20 @@ impl ExtensionRemoteUiProxy for RemoteUiProxy {
                     cx,
                 )?;
             }
+            HostMutation::TogglePanel(panel_id) => {
+                let qualified_panel_id = qualified_remote_ui_id(extension_id, panel_id.as_str());
+                let _ = window_handle.update(cx, |_, window, cx| {
+                    workspace.update(cx, |workspace, cx| {
+                        toggle_panel_visibility(
+                            workspace,
+                            window,
+                            workspace_id,
+                            qualified_panel_id.as_ref(),
+                            cx,
+                        )
+                    })
+                })?;
+            }
             HostMutation::ClosePanel(panel_id) => {
                 let qualified_panel_id = qualified_remote_ui_id(extension_id, panel_id.as_str());
                 set_panel_open_state(
@@ -657,7 +671,12 @@ impl RemoteUiPanel {
                 if is_extension_not_loaded_error(&error) {
                     self.error_message = None;
                 } else {
-                    self.error_message = Some(error.to_string().into());
+                    let message = format!(
+                        "Extension panel `{}` reload failed: {error}",
+                        descriptor.qualified_panel_id
+                    );
+                    log::error!("{message}");
+                    self.error_message = Some(message.into());
                 }
                 cx.notify();
                 return;
@@ -696,7 +715,12 @@ impl RemoteUiPanel {
                         panel.error_message = None;
                     }
                     Err(error) => {
-                        panel.error_message = Some(error.to_string().into());
+                        let message = format!(
+                            "Extension panel `{}` reload failed: {error}",
+                            descriptor.qualified_panel_id
+                        );
+                        log::error!("{message}");
+                        panel.error_message = Some(message.into());
                     }
                 }
                 cx.notify();
@@ -721,7 +745,12 @@ impl RemoteUiPanel {
         let extension = match extension_for_id(descriptor.extension_id.as_ref(), cx) {
             Ok(extension) => extension,
             Err(error) => {
-                self.error_message = Some(error.to_string().into());
+                let message = format!(
+                    "Extension panel `{}` event setup failed: {error}",
+                    descriptor.qualified_panel_id
+                );
+                log::error!("{message}");
+                self.error_message = Some(message.into());
                 cx.notify();
                 return;
             }
@@ -774,51 +803,93 @@ impl RemoteUiPanel {
     }
 
     fn render_content(&mut self, window: &mut Window, cx: &mut Context<Self>) -> AnyElement {
-        if let Some(error_message) = &self.error_message {
-            return v_flex()
+        let body = if let Some(error_message) = &self.error_message {
+            v_flex().gap_2().p_2().child(error_message.clone()).into_any_element()
+        } else if self.loading && self.tree.is_none() {
+            v_flex()
                 .gap_2()
                 .p_2()
-                .child(self.descriptor.title.clone())
-                .child(error_message.clone())
-                .into_any_element();
-        }
-
-        if self.loading && self.tree.is_none() {
-            return v_flex()
-                .gap_2()
-                .p_2()
-                .child(self.descriptor.title.clone())
                 .child("Loading extension panel...")
-                .into_any_element();
-        }
+                .into_any_element()
+        } else {
+            let Some(tree) = self.tree.clone() else {
+                return self.render_panel_frame(
+                    "Extension panel has no content.".into_any_element(),
+                    window,
+                    cx,
+                );
+            };
 
-        let Some(tree) = self.tree.clone() else {
-            return v_flex()
-                .gap_2()
-                .p_2()
-                .child(self.descriptor.title.clone())
-                .child("Extension panel has no content.")
-                .into_any_element();
+            let mut nodes = HashMap::default();
+            let mut children_by_parent: HashMap<Option<String>, Vec<String>> = HashMap::default();
+            for node in tree.nodes {
+                let node_id = node.node_id.clone();
+                children_by_parent
+                    .entry(node.parent_id.clone())
+                    .or_default()
+                    .push(node_id.clone());
+                nodes.insert(node_id, node);
+            }
+
+            self.render_remote_view_node(
+                tree.root_id.as_str(),
+                &nodes,
+                &children_by_parent,
+                false,
+                window,
+                cx,
+            )
         };
 
-        let mut nodes = HashMap::default();
-        let mut children_by_parent: HashMap<Option<String>, Vec<String>> = HashMap::default();
-        for node in tree.nodes {
-            let node_id = node.node_id.clone();
-            children_by_parent
-                .entry(node.parent_id.clone())
-                .or_default()
-                .push(node_id.clone());
-            nodes.insert(node_id, node);
-        }
+        self.render_panel_frame(body, window, cx)
+    }
 
-        self.render_remote_view_node(
-            tree.root_id.as_str(),
-            &nodes,
-            &children_by_parent,
+    fn render_panel_frame(
+        &mut self,
+        body: AnyElement,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> AnyElement {
+        let menu = build_remote_ui_panel_overflow_menu(
+            self.workspace.clone(),
+            self.descriptor.qualified_panel_id.clone(),
             window,
             cx,
-        )
+        );
+
+        v_flex()
+            .size_full()
+            .child(
+                ui::h_flex()
+                    .justify_between()
+                    .items_center()
+                    .px_2()
+                    .py_1()
+                    .child(self.descriptor.title.clone())
+                    .children(menu.into_iter().map(|_| {
+                        let workspace = self.workspace.clone();
+                        let panel_id = self.descriptor.qualified_panel_id.clone();
+                        let popover_id = format!("remote-ui-panel-menu-{}", panel_id);
+                        let button_id = format!("remote-ui-panel-menu-button-{}", panel_id);
+                        PopoverMenu::new(popover_id)
+                            .menu(move |window, cx| {
+                                build_remote_ui_panel_overflow_menu(
+                                    workspace.clone(),
+                                    panel_id.clone(),
+                                    window,
+                                    cx,
+                                )
+                            })
+                            .trigger_with_tooltip(
+                                IconButton::new(button_id, IconName::Ellipsis)
+                                    .icon_size(IconSize::Small),
+                                Tooltip::text("Panel actions"),
+                            )
+                    })),
+            )
+            .child(Divider::horizontal())
+            .child(body)
+            .into_any_element()
     }
 
     fn render_remote_view_node(
@@ -826,6 +897,7 @@ impl RemoteUiPanel {
         node_id: &str,
         nodes: &HashMap<String, RemoteViewNode>,
         children_by_parent: &HashMap<Option<String>, Vec<String>>,
+        ancestor_is_clickable: bool,
         window: &mut Window,
         cx: &mut Context<Self>,
     ) -> AnyElement {
@@ -842,6 +914,7 @@ impl RemoteUiPanel {
                     child_id.as_str(),
                     nodes,
                     children_by_parent,
+                    ancestor_is_clickable || node_is_clickable(node),
                     window,
                     cx,
                 )
@@ -852,6 +925,7 @@ impl RemoteUiPanel {
             RemoteViewNodeKind::Row => {
                 let node_id = node.node_id.clone();
                 let gap = node_gap(node, 8.);
+                let tooltip = node_tooltip(node);
                 if node_is_clickable(node) {
                     ui::h_flex()
                         .id(node_id.clone())
@@ -861,6 +935,7 @@ impl RemoteUiPanel {
                         .cursor_pointer()
                         .hover(|style| style.bg(cx.theme().colors().ghost_element_hover))
                         .active(|style| style.bg(cx.theme().colors().ghost_element_active))
+                        .when_some(tooltip, |this, tooltip| this.tooltip(Tooltip::text(tooltip)))
                         .on_click(cx.listener(move |panel, _, window, cx| {
                             panel.handle_remote_event(
                                 RemoteViewEvent {
@@ -1145,7 +1220,12 @@ impl RemoteUiWidget {
                 if is_extension_not_loaded_error(&error) {
                     self.error_message = None;
                 } else {
-                    self.error_message = Some(error.to_string().into());
+                    let message = format!(
+                        "Extension widget `{}` reload failed: {error}",
+                        descriptor.qualified_widget_id
+                    );
+                    log::error!("{message}");
+                    self.error_message = Some(message.into());
                 }
                 cx.notify();
                 return;
@@ -1186,13 +1266,23 @@ impl RemoteUiWidget {
                                 widget.error_message = None;
                             }
                             Err(error) => {
+                                let message = format!(
+                                    "Extension widget `{}` validation failed: {error}",
+                                    widget.descriptor.qualified_widget_id
+                                );
+                                log::error!("{message}");
                                 widget.tree = None;
-                                widget.error_message = Some(error.to_string().into());
+                                widget.error_message = Some(message.into());
                             }
                         }
                     }
                     Err(error) => {
-                        widget.error_message = Some(error.to_string().into());
+                        let message = format!(
+                            "Extension widget `{}` reload failed: {error}",
+                            descriptor.qualified_widget_id
+                        );
+                        log::error!("{message}");
+                        widget.error_message = Some(message.into());
                     }
                 }
                 cx.notify();
@@ -1231,6 +1321,13 @@ impl RemoteUiWidget {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
+        log::info!(
+            "remote ui widget event widget_id={} workspace_id={} node_id={} kind={:?}",
+            self.descriptor.qualified_widget_id,
+            self.workspace_id,
+            event.node_id,
+            event.kind
+        );
         let Some(instance_id) = self.instance_id else {
             return;
         };
@@ -1239,7 +1336,12 @@ impl RemoteUiWidget {
         let extension = match extension_for_id(descriptor.extension_id.as_ref(), cx) {
             Ok(extension) => extension,
             Err(error) => {
-                self.error_message = Some(error.to_string().into());
+                let message = format!(
+                    "Extension widget `{}` event setup failed: {error}",
+                    descriptor.qualified_widget_id
+                );
+                log::error!("{message}");
+                self.error_message = Some(message.into());
                 cx.notify();
                 return;
             }
@@ -1319,6 +1421,7 @@ impl RemoteUiWidget {
             tree.root_id.as_str(),
             &nodes,
             &children_by_parent,
+            false,
             window,
             cx,
         )
@@ -1329,6 +1432,7 @@ impl RemoteUiWidget {
         node_id: &str,
         nodes: &HashMap<String, RemoteViewNode>,
         children_by_parent: &HashMap<Option<String>, Vec<String>>,
+        ancestor_is_clickable: bool,
         window: &mut Window,
         cx: &mut Context<Self>,
     ) -> AnyElement {
@@ -1345,6 +1449,7 @@ impl RemoteUiWidget {
                     child_id.as_str(),
                     nodes,
                     children_by_parent,
+                    ancestor_is_clickable || node_is_clickable(node),
                     window,
                     cx,
                 )
@@ -1355,15 +1460,19 @@ impl RemoteUiWidget {
             RemoteViewNodeKind::Row => {
                 let node_id = node.node_id.clone();
                 let gap = node_gap(node, 8.);
+                let tooltip = node_tooltip(node);
                 if node_is_clickable(node) {
                     ui::h_flex()
                         .id(node_id.clone())
                         .gap(gap)
                         .children(rendered_children)
+                        .px_1()
                         .rounded_sm()
                         .cursor_pointer()
                         .hover(|style| style.bg(cx.theme().colors().ghost_element_hover))
                         .active(|style| style.bg(cx.theme().colors().ghost_element_active))
+                        .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
+                        .when_some(tooltip, |this, tooltip| this.tooltip(Tooltip::text(tooltip)))
                         .on_click(cx.listener(move |widget, _, window, cx| {
                             widget.handle_remote_event(
                                 RemoteViewEvent {
@@ -1386,15 +1495,19 @@ impl RemoteUiWidget {
             RemoteViewNodeKind::Column => {
                 let node_id = node.node_id.clone();
                 let gap = node_gap(node, 8.);
+                let tooltip = node_tooltip(node);
                 if node_is_clickable(node) {
                     v_flex()
                         .id(node_id.clone())
                         .gap(gap)
                         .children(rendered_children)
+                        .px_1()
                         .rounded_sm()
                         .cursor_pointer()
                         .hover(|style| style.bg(cx.theme().colors().ghost_element_hover))
                         .active(|style| style.bg(cx.theme().colors().ghost_element_active))
+                        .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
+                        .when_some(tooltip, |this, tooltip| this.tooltip(Tooltip::text(tooltip)))
                         .on_click(cx.listener(move |widget, _, window, cx| {
                             widget.handle_remote_event(
                                 RemoteViewEvent {
@@ -1414,15 +1527,19 @@ impl RemoteUiWidget {
             RemoteViewNodeKind::Stack => {
                 let node_id = node.node_id.clone();
                 let gap = node_gap(node, 4.);
+                let tooltip = node_tooltip(node);
                 if node_is_clickable(node) {
                     v_flex()
                         .id(node_id.clone())
                         .gap(gap)
                         .children(rendered_children)
+                        .px_1()
                         .rounded_sm()
                         .cursor_pointer()
                         .hover(|style| style.bg(cx.theme().colors().ghost_element_hover))
                         .active(|style| style.bg(cx.theme().colors().ghost_element_active))
+                        .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
+                        .when_some(tooltip, |this, tooltip| this.tooltip(Tooltip::text(tooltip)))
                         .on_click(cx.listener(move |widget, _, window, cx| {
                             widget.handle_remote_event(
                                 RemoteViewEvent {
@@ -1442,26 +1559,34 @@ impl RemoteUiWidget {
             RemoteViewNodeKind::Text(text) => text.clone().into_any_element(),
             RemoteViewNodeKind::Icon(icon) => {
                 let node_id = node.node_id.clone();
-                ui::ButtonLike::new(node_id.clone())
-                    .style(ui::ButtonStyle::Transparent)
-                    .size(ui::ButtonSize::Compact)
-                    .child(Icon::from_path(icon.clone()))
-                    .on_click(cx.listener(move |widget, _, window, cx| {
-                        widget.handle_remote_event(
-                            RemoteViewEvent {
-                                node_id: node_id.clone(),
-                                kind: RemoteViewEventKind::Click,
-                                payload_json: None,
-                            },
-                            window,
-                            cx,
-                        );
-                    }))
-                    .into_any_element()
+                let tooltip = node_tooltip(node);
+                if ancestor_is_clickable {
+                    Icon::from_path(icon.clone()).into_any_element()
+                } else {
+                    ui::ButtonLike::new(node_id.clone())
+                        .style(ui::ButtonStyle::Transparent)
+                        .size(ui::ButtonSize::Compact)
+                        .when_some(tooltip, |this, tooltip| this.tooltip(Tooltip::text(tooltip)))
+                        .child(Icon::from_path(icon.clone()))
+                        .on_click(cx.listener(move |widget, _, window, cx| {
+                            widget.handle_remote_event(
+                                RemoteViewEvent {
+                                    node_id: node_id.clone(),
+                                    kind: RemoteViewEventKind::Click,
+                                    payload_json: None,
+                                },
+                                window,
+                                cx,
+                            );
+                        }))
+                        .into_any_element()
+                }
             }
             RemoteViewNodeKind::Button(label) => {
                 let node_id = node.node_id.clone();
+                let tooltip = node_tooltip(node);
                 Button::new(node_id.clone(), label.clone())
+                    .when_some(tooltip, |this, tooltip| this.tooltip(Tooltip::text(tooltip)))
                     .on_click(cx.listener(move |widget, _, window, cx| {
                         widget.handle_remote_event(
                             RemoteViewEvent {
@@ -1485,22 +1610,28 @@ impl RemoteUiWidget {
             RemoteViewNodeKind::TextInput(value) => value.clone().into_any_element(),
             RemoteViewNodeKind::Badge(value) => {
                 let node_id = node.node_id.clone();
-                ui::ButtonLike::new(node_id.clone())
-                    .style(ui::ButtonStyle::Transparent)
-                    .size(ui::ButtonSize::Compact)
-                    .child(value.clone())
-                    .on_click(cx.listener(move |widget, _, window, cx| {
-                        widget.handle_remote_event(
-                            RemoteViewEvent {
-                                node_id: node_id.clone(),
-                                kind: RemoteViewEventKind::Click,
-                                payload_json: None,
-                            },
-                            window,
-                            cx,
-                        );
-                    }))
-                    .into_any_element()
+                let tooltip = node_tooltip(node);
+                if ancestor_is_clickable {
+                    value.clone().into_any_element()
+                } else {
+                    ui::ButtonLike::new(node_id.clone())
+                        .style(ui::ButtonStyle::Transparent)
+                        .size(ui::ButtonSize::Compact)
+                        .when_some(tooltip, |this, tooltip| this.tooltip(Tooltip::text(tooltip)))
+                        .child(value.clone())
+                        .on_click(cx.listener(move |widget, _, window, cx| {
+                            widget.handle_remote_event(
+                                RemoteViewEvent {
+                                    node_id: node_id.clone(),
+                                    kind: RemoteViewEventKind::Click,
+                                    payload_json: None,
+                                },
+                                window,
+                                cx,
+                            );
+                        }))
+                        .into_any_element()
+                }
             }
             RemoteViewNodeKind::ProgressBar(props) => ProgressBar::new(
                 node.node_id.clone(),
@@ -1523,44 +1654,12 @@ impl RemoteUiWidget {
 
 impl Render for RemoteUiWidget {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
-        let content = ui::h_flex()
+        ui::h_flex()
             .h_full()
             .flex_none()
             .items_center()
             .overflow_hidden()
-            .child(self.render_content(window, cx));
-
-        let Some(root_node_id) = self.clickable_root_node_id() else {
-            return content.into_any_element();
-        };
-
-        ui::ButtonLike::new(root_node_id.clone())
-            .style(ui::ButtonStyle::Transparent)
-            .size(ui::ButtonSize::Compact)
-            .child(content)
-            .on_click(cx.listener(move |widget, _, window, cx| {
-                widget.handle_remote_event(
-                    RemoteViewEvent {
-                        node_id: root_node_id.clone(),
-                        kind: RemoteViewEventKind::Click,
-                        payload_json: None,
-                    },
-                    window,
-                    cx,
-                );
-            }))
-            .into_any_element()
-    }
-}
-
-impl RemoteUiWidget {
-    fn clickable_root_node_id(&self) -> Option<String> {
-        let tree = self.tree.as_ref()?;
-        let root_id = tree.root_id.as_str();
-        tree.nodes
-            .iter()
-            .find(|node| node.node_id == root_id && node_is_clickable(node))
-            .map(|node| node.node_id.clone())
+            .child(self.render_content(window, cx))
     }
 }
 
@@ -1671,6 +1770,13 @@ fn node_gap(node: &RemoteViewNode, default_gap_pixels: f32) -> Pixels {
         .and_then(|property| property.value.parse::<f32>().ok())
         .unwrap_or(default_gap_pixels);
     px(gap_pixels)
+}
+
+fn node_tooltip(node: &RemoteViewNode) -> Option<SharedString> {
+    node.properties
+        .iter()
+        .find(|property| property.name == "tooltip")
+        .map(|property| SharedString::from(property.value.clone()))
 }
 
 fn widget_width_bounds(widget: &RegisteredRemoteUiWidget) -> (Option<u32>, Option<u32>) {
@@ -2109,6 +2215,16 @@ fn mount_remote_ui_panels_for_workspace(
                 cx,
             )
         });
+        if let Some(size) = workspace
+            .dock_at_position(descriptor.default_dock)
+            .read(cx)
+            .active_panel()
+            .map(|active_panel| active_panel.size(window, cx))
+        {
+            panel.update(cx, |panel, cx| {
+                panel.set_size(Some(size), window, cx);
+            });
+        }
         workspace.add_panel(panel.clone(), window, cx);
         RemoteUiRegistry::update_global(cx, |registry| {
             registry.remember_mounted_panel(
@@ -2184,6 +2300,12 @@ fn set_panel_open_state(
     open: bool,
     cx: &mut App,
 ) -> Result<()> {
+    log::info!(
+        "remote ui set_panel_open_state workspace_id={} panel_id={} open={}",
+        workspace_id,
+        panel_id,
+        open
+    );
     let panel = RemoteUiRegistry::read_global(cx)
         .and_then(|registry| {
             registry
@@ -2197,6 +2319,7 @@ fn set_panel_open_state(
     let _ = window_handle.update(cx, |_, window, cx| {
         workspace.update(cx, |workspace, cx| {
             if open {
+                sync_remote_ui_panel_size_with_dock(workspace, panel.clone(), window, cx);
                 panel.update(cx, |_, cx| cx.emit(PanelEvent::Activate));
             } else {
                 panel.update(cx, |_, cx| cx.emit(PanelEvent::Close));
@@ -2320,10 +2443,33 @@ fn toggle_panel_visibility(
             window.focus(&pane.focus_handle(cx), cx);
         });
     } else {
+        sync_remote_ui_panel_size_with_dock(workspace, panel.clone(), window, cx);
         panel.update(cx, |_, cx| cx.emit(PanelEvent::Activate));
     }
 
     Ok(())
+}
+
+fn sync_remote_ui_panel_size_with_dock(
+    workspace: &mut Workspace,
+    panel: Entity<RemoteUiPanel>,
+    window: &mut Window,
+    cx: &mut Context<Workspace>,
+) {
+    let position = panel.read(cx).position(window, cx);
+    let size = workspace
+        .dock_at_position(position)
+        .read(cx)
+        .active_panel()
+        .and_then(|active_panel| {
+            (active_panel.panel_id() != panel.entity_id()).then(|| active_panel.size(window, cx))
+        });
+
+    if let Some(size) = size {
+        panel.update(cx, |panel, cx| {
+            panel.set_size(Some(size), window, cx);
+        });
+    }
 }
 
 fn dock_position_for_panel(panel: &ExtensionPanelManifestEntry) -> DockPosition {
@@ -2512,20 +2658,67 @@ fn append_remote_ui_context_menu_entries(
     window: &mut Window,
     cx: &mut App,
 ) -> ContextMenu {
-    let Some(workspace) = workspace.upgrade() else {
-        return menu;
-    };
-
-    let entries = RemoteUiRegistry::read_global(cx)
-        .map(|registry| {
-            registry.context_menu_entries(menu_location, action_target, current_panel_qualified_id)
-        })
-        .unwrap_or_default();
+    let entries =
+        remote_ui_context_menu_entries(menu_location, action_target, current_panel_qualified_id, cx);
     if entries.is_empty() {
         return menu;
     }
 
     menu = menu.separator();
+    append_registered_remote_ui_context_menu_entries(menu, workspace, entries, window, cx)
+}
+
+fn build_remote_ui_panel_overflow_menu(
+    workspace: WeakEntity<Workspace>,
+    panel_qualified_id: Arc<str>,
+    window: &mut Window,
+    cx: &mut App,
+) -> Option<Entity<ContextMenu>> {
+    let entries = remote_ui_context_menu_entries(
+        MenuLocation::PanelOverflow,
+        ContextActionTarget::Panel,
+        Some(panel_qualified_id.as_ref()),
+        cx,
+    );
+    if entries.is_empty() {
+        return None;
+    }
+
+    Some(ContextMenu::build(window, cx, move |menu, window, cx| {
+        append_registered_remote_ui_context_menu_entries(
+            menu,
+            workspace.clone(),
+            entries.clone(),
+            window,
+            cx,
+        )
+    }))
+}
+
+fn remote_ui_context_menu_entries(
+    menu_location: MenuLocation,
+    action_target: ContextActionTarget,
+    current_panel_qualified_id: Option<&str>,
+    cx: &App,
+) -> Vec<RegisteredRemoteUiContextMenuEntry> {
+    RemoteUiRegistry::read_global(cx)
+        .map(|registry| {
+            registry.context_menu_entries(menu_location, action_target, current_panel_qualified_id)
+        })
+        .unwrap_or_default()
+}
+
+fn append_registered_remote_ui_context_menu_entries(
+    mut menu: ContextMenu,
+    workspace: WeakEntity<Workspace>,
+    entries: Vec<RegisteredRemoteUiContextMenuEntry>,
+    window: &mut Window,
+    _cx: &mut App,
+) -> ContextMenu {
+    let Some(workspace) = workspace.upgrade() else {
+        return menu;
+    };
+
     for entry in entries {
         let command_id = entry.command_id.clone();
         let title = entry.title.clone();

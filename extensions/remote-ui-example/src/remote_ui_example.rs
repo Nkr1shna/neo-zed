@@ -21,42 +21,44 @@ struct DemoViewState {
 #[derive(Clone)]
 struct SidecarSnapshot {
     auth_status: String,
-    status_label: String,
-    detail: String,
     plan_type: Option<String>,
-    account_label: Option<String>,
-    primary_window_label: String,
-    secondary_window_label: String,
     primary_used_percent: u32,
     secondary_used_percent: u32,
-    busy: bool,
+    usage_limits: Vec<UsageLimitCard>,
+    credits_summary: CreditsSummary,
+}
+
+#[derive(Clone)]
+struct UsageLimitCard {
+    id: String,
+    title: String,
+    remaining_percent: u32,
+    resets_at_label: Option<String>,
+}
+
+#[derive(Clone)]
+struct CreditsSummary {
+    balance_label: String,
+    detail: String,
 }
 
 impl SidecarSnapshot {
     fn signed_out() -> Self {
         Self {
             auth_status: "signed-out".to_string(),
-            status_label: "Sign in to ChatGPT".to_string(),
-            detail: "Start the OAuth flow to read your Codex usage windows.".to_string(),
             plan_type: None,
-            account_label: None,
-            primary_window_label: "5h window".to_string(),
-            secondary_window_label: "7d window".to_string(),
             primary_used_percent: 0,
             secondary_used_percent: 0,
-            busy: false,
+            usage_limits: Vec::new(),
+            credits_summary: CreditsSummary {
+                balance_label: "0".to_string(),
+                detail: "Use credits to send messages beyond your plan limit.".to_string(),
+            },
         }
     }
 
     fn status_badge(&self) -> String {
         format!("{}%", self.primary_used_percent)
-    }
-
-    fn plan_badge(&self) -> Option<&str> {
-        match self.plan_type.as_deref() {
-            Some(plan_type) if !plan_type.is_empty() => Some(plan_type),
-            _ => None,
-        }
     }
 
     fn footer_state_label(&self, sidecar_error: Option<&str>) -> &'static str {
@@ -66,18 +68,6 @@ impl SidecarSnapshot {
             "Waiting"
         } else if self.is_authenticated() {
             "Weekly"
-        } else {
-            "Log in"
-        }
-    }
-
-    fn auth_button_label(&self, sidecar_error: Option<&str>) -> &'static str {
-        if sidecar_error.is_some() {
-            "Retry"
-        } else if self.is_authenticated() {
-            "Sign Out"
-        } else if self.is_pending() {
-            "Waiting"
         } else {
             "Log in"
         }
@@ -107,10 +97,7 @@ impl zed::Extension for RemoteUiExampleExtension {
         _payload_json: Option<String>,
     ) -> zed::Result<(), String> {
         match command_id.as_str() {
-            "demo-open-panel" => zed::request_host_mutation(
-                context.workspace_id,
-                &HostMutation::OpenPanel("demo".to_string()),
-            ),
+            "demo-toggle-panel" => toggle_panel(context.workspace_id),
             "demo-refresh" => {
                 refresh_sidecar_usage()?;
                 zed::request_host_mutation(
@@ -192,7 +179,6 @@ impl zed::Extension for RemoteUiExampleExtension {
 
         match (event.node_id.as_str(), event.kind) {
             ("titlebar.sync", RemoteViewEventKind::Click)
-            | ("footer.sync", RemoteViewEventKind::Click)
             | ("panel.refresh", RemoteViewEventKind::Click) => {
                 refresh_sidecar_usage()?;
                 sync_sidecar_snapshot(view, true);
@@ -200,10 +186,7 @@ impl zed::Extension for RemoteUiExampleExtension {
             }
             ("footer.status", RemoteViewEventKind::Click) => {
                 if view.snapshot.is_authenticated() {
-                    zed::request_host_mutation(
-                        context.workspace_id,
-                        &HostMutation::OpenPanel("demo".to_string()),
-                    )?;
+                    toggle_panel(context.workspace_id)?;
                     Ok(EventOutcome::Noop)
                 } else if !view.snapshot.is_pending() {
                     begin_sidecar_login()?;
@@ -213,13 +196,11 @@ impl zed::Extension for RemoteUiExampleExtension {
                     Ok(EventOutcome::Noop)
                 }
             }
-            ("titlebar.icon", RemoteViewEventKind::Click)
+            ("titlebar.root", RemoteViewEventKind::Click)
+            | ("titlebar.icon", RemoteViewEventKind::Click)
             | ("titlebar.badge", RemoteViewEventKind::Click)
-            | ("titlebar.open-panel", RemoteViewEventKind::Click) => {
-                zed::request_host_mutation(
-                    context.workspace_id,
-                    &HostMutation::OpenPanel("demo".to_string()),
-                )?;
+            | ("titlebar.toggle-panel", RemoteViewEventKind::Click) => {
+                toggle_panel(context.workspace_id)?;
                 Ok(EventOutcome::Noop)
             }
             ("titlebar.auth", RemoteViewEventKind::Click)
@@ -233,30 +214,6 @@ impl zed::Extension for RemoteUiExampleExtension {
                 sync_sidecar_snapshot(view, false);
                 Ok(EventOutcome::Rerender)
             }
-            ("footer.open-panel", RemoteViewEventKind::Click) => {
-                zed::request_host_mutation(
-                    context.workspace_id,
-                    &HostMutation::OpenPanel("demo".to_string()),
-                )?;
-                Ok(EventOutcome::Noop)
-            }
-            ("panel.copy-status", RemoteViewEventKind::Click) => {
-                zed::request_host_mutation(
-                    context.workspace_id,
-                    &HostMutation::CopyToClipboard(snapshot_status_text(
-                        &view.snapshot,
-                        view.sidecar_error.as_deref(),
-                    )),
-                )?;
-                Ok(EventOutcome::Noop)
-            }
-            ("panel.open-url", RemoteViewEventKind::Click) => {
-                zed::request_host_mutation(
-                    context.workspace_id,
-                    &HostMutation::OpenExternalUrl("https://chatgpt.com".to_string()),
-                )?;
-                Ok(EventOutcome::Noop)
-            }
             _ => Ok(EventOutcome::Noop),
         }
     }
@@ -267,12 +224,16 @@ impl zed::Extension for RemoteUiExampleExtension {
 }
 
 fn render_titlebar_view(view: &DemoViewState) -> RemoteViewTree {
-    let mut nodes = vec![
+    let nodes = vec![
         node(
             "titlebar.root",
             None,
             RemoteViewNodeKind::Row,
-            [("clickable", "true"), ("gap", "4")],
+            [
+                ("clickable", "true"),
+                ("gap", "4"),
+                ("tooltip", "Toggle Codex usage panel"),
+            ],
         ),
         node(
             "titlebar.icon",
@@ -287,15 +248,6 @@ fn render_titlebar_view(view: &DemoViewState) -> RemoteViewTree {
             [],
         ),
     ];
-
-    if let Some(plan_badge) = view.snapshot.plan_badge() {
-        nodes.push(node(
-            "titlebar.plan",
-            Some("titlebar.root"),
-            RemoteViewNodeKind::Badge(plan_badge.to_string()),
-            [],
-        ));
-    }
     RemoteViewTree {
         revision: view.revision,
         root_id: "titlebar.root".to_string(),
@@ -308,12 +260,12 @@ fn render_footer_view(view: &DemoViewState) -> RemoteViewTree {
         revision: view.revision,
         root_id: "footer.root".to_string(),
         nodes: vec![
-            node("footer.root", None, RemoteViewNodeKind::Row, []),
+            node("footer.root", None, RemoteViewNodeKind::Row, [("gap", "4")]),
             node(
                 "footer.icon",
                 Some("footer.root"),
                 RemoteViewNodeKind::Icon("icons/ai_open_ai.svg".to_string()),
-                [],
+                [("tooltip", "ChatGPT Codex usage")],
             ),
             node(
                 "footer.status",
@@ -323,13 +275,13 @@ fn render_footer_view(view: &DemoViewState) -> RemoteViewTree {
                         .footer_state_label(view.sidecar_error.as_deref())
                         .to_string(),
                 ),
-                [],
+                [("tooltip", "Authenticate or open the Codex usage panel")],
             ),
             node(
                 "footer.badge",
                 Some("footer.root"),
                 RemoteViewNodeKind::Badge(format!("7d {}", view.snapshot.secondary_used_percent)),
-                [],
+                [("tooltip", "Seven day Codex usage")],
             ),
             node(
                 "footer.progress",
@@ -340,169 +292,97 @@ fn render_footer_view(view: &DemoViewState) -> RemoteViewTree {
                 }),
                 [],
             ),
-            node(
-                "footer.sync",
-                Some("footer.root"),
-                RemoteViewNodeKind::Button("Sync".to_string()),
-                [],
-            ),
-            node(
-                "footer.auth",
-                Some("footer.root"),
-                RemoteViewNodeKind::Button(
-                    view.snapshot
-                        .auth_button_label(view.sidecar_error.as_deref())
-                        .to_string(),
-                ),
-                [],
-            ),
-            node(
-                "footer.open-panel",
-                Some("footer.root"),
-                RemoteViewNodeKind::Button("Open".to_string()),
-                [],
-            ),
         ],
     }
 }
 
 fn render_panel_view(view: &DemoViewState) -> RemoteViewTree {
     let mut nodes = vec![
-        node("panel.root", None, RemoteViewNodeKind::Column, []),
-        node(
-            "panel.header",
-            Some("panel.root"),
-            RemoteViewNodeKind::Row,
-            [],
-        ),
-        node(
-            "panel.icon",
-            Some("panel.header"),
-            RemoteViewNodeKind::Icon("icons/ai_open_ai.svg".to_string()),
-            [],
-        ),
-        node(
-            "panel.title",
-            Some("panel.header"),
-            RemoteViewNodeKind::Text("ChatGPT Codex Usage".to_string()),
-            [],
-        ),
-        node(
-            "panel.badge",
-            Some("panel.header"),
-            RemoteViewNodeKind::Badge(view.snapshot.status_badge()),
-            [],
-        ),
-        node(
-            "panel.fill",
-            Some("panel.header"),
-            RemoteViewNodeKind::Spacer,
-            [],
-        ),
-        node(
-            "panel.refresh",
-            Some("panel.header"),
-            RemoteViewNodeKind::Button("Refresh".to_string()),
-            [],
-        ),
-        node(
-            "panel.auth",
-            Some("panel.header"),
-            RemoteViewNodeKind::Button(
-                view.snapshot
-                    .auth_button_label(view.sidecar_error.as_deref())
-                    .to_string(),
-            ),
-            [],
-        ),
-        node(
-            "panel.copy-status",
-            Some("panel.header"),
-            RemoteViewNodeKind::Button("Copy".to_string()),
-            [],
-        ),
-        node(
-            "panel.open-url",
-            Some("panel.header"),
-            RemoteViewNodeKind::Button("ChatGPT".to_string()),
-            [],
-        ),
-        node(
-            "panel.summary",
-            Some("panel.root"),
-            RemoteViewNodeKind::Text(snapshot_status_text(
-                &view.snapshot,
-                view.sidecar_error.as_deref(),
-            )),
-            [],
-        ),
-        node(
-            "panel.primary.label",
-            Some("panel.root"),
-            RemoteViewNodeKind::Text(view.snapshot.primary_window_label.clone()),
-            [],
-        ),
-        node(
-            "panel.primary.progress",
-            Some("panel.root"),
-            RemoteViewNodeKind::ProgressBar(ProgressBarProps {
-                value: view.snapshot.primary_used_percent,
-                max_value: 100,
-            }),
-            [],
-        ),
-        node(
-            "panel.secondary.label",
-            Some("panel.root"),
-            RemoteViewNodeKind::Text(view.snapshot.secondary_window_label.clone()),
-            [],
-        ),
-        node(
-            "panel.secondary.progress",
-            Some("panel.root"),
-            RemoteViewNodeKind::ProgressBar(ProgressBarProps {
-                value: view.snapshot.secondary_used_percent,
-                max_value: 100,
-            }),
-            [],
-        ),
-        node(
-            "panel.rule",
-            Some("panel.root"),
-            RemoteViewNodeKind::Divider,
-            [],
-        ),
-        node(
-            "panel.scroll",
-            Some("panel.root"),
-            RemoteViewNodeKind::ScrollView,
-            [],
-        ),
-        node(
-            "panel.scroll.body",
-            Some("panel.scroll"),
-            RemoteViewNodeKind::Column,
-            [],
-        ),
-        node(
-            "panel.status",
-            Some("panel.scroll.body"),
-            RemoteViewNodeKind::Text(view.snapshot.status_label.clone()),
-            [],
-        ),
-        node(
-            "panel.detail",
-            Some("panel.scroll.body"),
-            RemoteViewNodeKind::Text(view.snapshot.detail.clone()),
-            [],
-        ),
+        node("panel.root", None, RemoteViewNodeKind::Column, [("gap", "8")]),
     ];
 
-    if let Some(account_label) = &view.snapshot.account_label {
+    for usage_limit in view.snapshot.usage_limits.iter().take(5) {
+        let section_id = format!("panel.limit.{}", usage_limit.id);
+        let title_id = format!("{section_id}.title");
+        let value_id = format!("{section_id}.value");
+        let progress_id = format!("{section_id}.progress");
         nodes.push(node(
-            "panel.account",
-            Some("panel.scroll.body"),
-            RemoteViewNodeKind::Text(account_label.clone()),
+            section_id.clone(),
+            Some("panel.root"),
+            RemoteViewNodeKind::Column,
+            [("gap", "4")],
+        ));
+        nodes.push(node(
+            title_id,
+            Some(section_id.as_str()),
+            RemoteViewNodeKind::Text(usage_limit.title.clone()),
+            [],
+        ));
+        nodes.push(node(
+            value_id,
+            Some(section_id.as_str()),
+            RemoteViewNodeKind::Text(format!("{}% remaining", usage_limit.remaining_percent)),
+            [],
+        ));
+        nodes.push(node(
+            progress_id,
+            Some(section_id.as_str()),
+            RemoteViewNodeKind::ProgressBar(ProgressBarProps {
+                value: usage_limit.remaining_percent,
+                max_value: 100,
+            }),
+            [],
+        ));
+        if let Some(resets_at_label) = usage_limit.resets_at_label.as_deref() {
+            let reset_id = format!("{section_id}.reset");
+            nodes.push(node(
+                reset_id,
+                Some(section_id.as_str()),
+                RemoteViewNodeKind::Text(format!("Resets {resets_at_label}")),
+                [],
+            ));
+        }
+    }
+
+    nodes.push(node(
+        "panel.credits",
+        Some("panel.root"),
+        RemoteViewNodeKind::Column,
+        [("gap", "4")],
+    ));
+    nodes.push(node(
+        "panel.credits.title",
+        Some("panel.credits"),
+        RemoteViewNodeKind::Text("Credits remaining".to_string()),
+        [],
+    ));
+    nodes.push(node(
+        "panel.credits.balance",
+        Some("panel.credits"),
+        RemoteViewNodeKind::Text(view.snapshot.credits_summary.balance_label.clone()),
+        [],
+    ));
+    nodes.push(node(
+        "panel.credits.detail",
+        Some("panel.credits"),
+        RemoteViewNodeKind::Text(view.snapshot.credits_summary.detail.clone()),
+        [],
+    ));
+
+    if let Some(plan_type) = &view.snapshot.plan_type {
+        nodes.push(node(
+            "panel.plan",
+            Some("panel.credits"),
+            RemoteViewNodeKind::Badge(plan_type.clone()),
+            [],
+        ));
+    }
+
+    if let Some(sidecar_error) = view.sidecar_error.as_deref() {
+        nodes.push(node(
+            "panel.error",
+            Some("panel.root"),
+            RemoteViewNodeKind::Text(sidecar_error.to_string()),
             [],
         ));
     }
@@ -546,33 +426,68 @@ fn load_sidecar_snapshot(force_refresh: bool) -> (SidecarSnapshot, Option<String
     }
 }
 
+fn toggle_panel(workspace_id: u64) -> zed::Result<(), String> {
+    zed::request_host_mutation(
+        workspace_id,
+        &HostMutation::TogglePanel("demo".to_string()),
+    )
+}
+
 fn parse_sidecar_snapshot(value: zed::serde_json::Value) -> zed::Result<SidecarSnapshot, String> {
     let object = value
         .as_object()
         .ok_or_else(|| "sidecar snapshot must be a JSON object".to_string())?;
 
     let auth_status = required_string(object, "auth_status")?;
-    let status_label = required_string(object, "status_label")?;
-    let detail = required_string(object, "detail")?;
-    let primary_window_label = required_string(object, "primary_window_label")?;
-    let secondary_window_label = required_string(object, "secondary_window_label")?;
 
     Ok(SidecarSnapshot {
         auth_status,
-        status_label,
-        detail,
         plan_type: optional_string(object, "plan_type"),
-        account_label: optional_string(object, "account_label"),
-        primary_window_label,
-        secondary_window_label,
         primary_used_percent: optional_u32(object, "primary_used_percent")
             .unwrap_or(0)
             .min(100),
         secondary_used_percent: optional_u32(object, "secondary_used_percent")
             .unwrap_or(0)
             .min(100),
-        busy: optional_bool(object, "busy").unwrap_or(false),
+        usage_limits: parse_usage_limits(object.get("usage_limits")),
+        credits_summary: parse_credits_summary(object.get("credits_summary")),
     })
+}
+
+fn parse_usage_limits(value: Option<&zed::serde_json::Value>) -> Vec<UsageLimitCard> {
+    let Some(array) = value.and_then(zed::serde_json::Value::as_array) else {
+        return Vec::new();
+    };
+
+    array
+        .iter()
+        .filter_map(zed::serde_json::Value::as_object)
+        .filter_map(|object| {
+            Some(UsageLimitCard {
+                id: required_string(object, "id").ok()?,
+                title: required_string(object, "title").ok()?,
+                remaining_percent: optional_u32(object, "remaining_percent")
+                    .unwrap_or(0)
+                    .min(100),
+                resets_at_label: optional_string(object, "resets_at_label"),
+            })
+        })
+        .collect()
+}
+
+fn parse_credits_summary(value: Option<&zed::serde_json::Value>) -> CreditsSummary {
+    let Some(object) = value.and_then(zed::serde_json::Value::as_object) else {
+        return CreditsSummary {
+            balance_label: "0".to_string(),
+            detail: "Use credits to send messages beyond your plan limit.".to_string(),
+        };
+    };
+
+    CreditsSummary {
+        balance_label: optional_string(object, "balance_label").unwrap_or_else(|| "0".to_string()),
+        detail: optional_string(object, "detail")
+            .unwrap_or_else(|| "Use credits to send messages beyond your plan limit.".to_string()),
+    }
 }
 
 fn required_string(
@@ -606,36 +521,6 @@ fn optional_u32(
         .map(|value| value.min(u32::MAX as u64) as u32)
 }
 
-fn optional_bool(
-    object: &zed::serde_json::Map<String, zed::serde_json::Value>,
-    field_name: &str,
-) -> Option<bool> {
-    object
-        .get(field_name)
-        .and_then(zed::serde_json::Value::as_bool)
-}
-
-fn snapshot_status_text(snapshot: &SidecarSnapshot, sidecar_error: Option<&str>) -> String {
-    let mut status = format!(
-        "{} · {}% / {}%",
-        snapshot.status_label, snapshot.primary_used_percent, snapshot.secondary_used_percent
-    );
-
-    if let Some(plan_type) = snapshot.plan_type.as_deref() {
-        status.push_str(&format!(" · {plan_type}"));
-    }
-
-    if snapshot.busy {
-        status.push_str(" · syncing");
-    }
-
-    if let Some(sidecar_error) = sidecar_error {
-        status.push_str(&format!(" · {sidecar_error}"));
-    }
-
-    status
-}
-
 fn node(
     node_id: impl Into<String>,
     parent_id: Option<&str>,
@@ -653,6 +538,137 @@ fn node(
                 value: value.to_string(),
             })
             .collect(),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn demo_view_state() -> DemoViewState {
+        DemoViewState {
+            contribution_id: "demo.panel".to_string(),
+            revision: 1,
+            snapshot: SidecarSnapshot {
+                auth_status: "authenticated".to_string(),
+                plan_type: Some("pro".to_string()),
+                primary_used_percent: 6,
+                secondary_used_percent: 71,
+                usage_limits: vec![
+                    UsageLimitCard {
+                        id: "codex-primary".to_string(),
+                        title: "5 hour usage limit".to_string(),
+                        remaining_percent: 94,
+                        resets_at_label: Some("1:12 PM".to_string()),
+                    },
+                    UsageLimitCard {
+                        id: "codex-secondary".to_string(),
+                        title: "Weekly usage limit".to_string(),
+                        remaining_percent: 29,
+                        resets_at_label: Some("5:25 PM".to_string()),
+                    },
+                    UsageLimitCard {
+                        id: "spark-primary".to_string(),
+                        title: "GPT-5.3-Codex-Spark 5 hour usage limit".to_string(),
+                        remaining_percent: 100,
+                        resets_at_label: None,
+                    },
+                    UsageLimitCard {
+                        id: "spark-secondary".to_string(),
+                        title: "GPT-5.3-Codex-Spark Weekly usage limit".to_string(),
+                        remaining_percent: 100,
+                        resets_at_label: None,
+                    },
+                    UsageLimitCard {
+                        id: "code-review-primary".to_string(),
+                        title: "Code review".to_string(),
+                        remaining_percent: 100,
+                        resets_at_label: None,
+                    },
+                ],
+                credits_summary: CreditsSummary {
+                    balance_label: "0".to_string(),
+                    detail: "Use credits to send messages beyond your plan limit.".to_string(),
+                },
+            },
+            sidecar_error: None,
+        }
+    }
+
+    #[test]
+    fn parse_sidecar_snapshot_reads_expected_usage_fields() {
+        let snapshot = parse_sidecar_snapshot(zed::serde_json::json!({
+            "auth_status": "authenticated",
+            "plan_type": "pro",
+            "primary_used_percent": 106,
+            "secondary_used_percent": 71,
+            "usage_limits": [
+                {
+                    "id": "codex-primary",
+                    "title": "5 hour usage limit",
+                    "used_percent": 6,
+                    "remaining_percent": 94,
+                    "resets_at_label": "1:12 PM"
+                },
+                {
+                    "id": "codex-secondary",
+                    "title": "Weekly usage limit",
+                    "used_percent": 71,
+                    "remaining_percent": 29,
+                    "resets_at_label": "5:25 PM"
+                }
+            ],
+            "credits_summary": {
+                "balance_label": "0",
+                "detail": "Use credits to send messages beyond your plan limit."
+            }
+        }))
+        .expect("snapshot should parse");
+
+        assert_eq!(snapshot.auth_status, "authenticated");
+        assert_eq!(snapshot.plan_type.as_deref(), Some("pro"));
+        assert_eq!(snapshot.primary_used_percent, 100);
+        assert_eq!(snapshot.secondary_used_percent, 71);
+        assert_eq!(snapshot.usage_limits.len(), 2);
+        assert_eq!(snapshot.usage_limits[0].remaining_percent, 94);
+        assert_eq!(snapshot.credits_summary.balance_label, "0");
+    }
+
+    #[test]
+    fn titlebar_view_stays_compact() {
+        let view = demo_view_state();
+
+        let tree = render_titlebar_view(&view);
+        let node_ids = tree
+            .nodes
+            .iter()
+            .map(|node| node.node_id.as_str())
+            .collect::<Vec<_>>();
+
+        assert_eq!(tree.root_id, "titlebar.root");
+        assert_eq!(node_ids, vec!["titlebar.root", "titlebar.icon", "titlebar.badge"]);
+    }
+
+    #[test]
+    fn panel_view_renders_usage_cards_and_compact_credits_card() {
+        let mut view = demo_view_state();
+        view.sidecar_error = Some("usage request failed with HTTP 401".to_string());
+
+        let tree = render_panel_view(&view);
+        let node_ids = tree
+            .nodes
+            .iter()
+            .map(|node| node.node_id.as_str())
+            .collect::<Vec<_>>();
+
+        assert!(node_ids.contains(&"panel.limit.codex-primary"));
+        assert!(node_ids.contains(&"panel.limit.codex-secondary"));
+        assert!(node_ids.contains(&"panel.limit.spark-primary"));
+        assert!(node_ids.contains(&"panel.limit.spark-secondary"));
+        assert!(node_ids.contains(&"panel.limit.code-review-primary"));
+        assert!(node_ids.contains(&"panel.credits"));
+        assert!(node_ids.contains(&"panel.credits.balance"));
+        assert!(node_ids.contains(&"panel.error"));
     }
 }
 

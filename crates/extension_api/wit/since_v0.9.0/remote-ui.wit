@@ -103,6 +103,7 @@ interface remote-ui {
     variant host-mutation {
         show-toast(string),
         open-panel(string),
+        toggle-panel(string),
         close-panel(string),
         copy-to-clipboard(string),
         open-external-url(string),

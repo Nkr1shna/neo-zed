@@ -117,6 +117,7 @@ pub enum EventOutcome {
 pub enum HostMutation {
     ShowToast(String),
     OpenPanel(String),
+    TogglePanel(String),
     ClosePanel(String),
     CopyToClipboard(String),
     OpenExternalUrl(String),

@@ -15,9 +15,9 @@ args = ["sidecar.js"]
 command = "node"
 args = ["sidecar.js"]
 
-[commands.demo-open-panel]
-title = "Codex Usage: Open Panel"
-description = "Open the Codex usage panel"
+[commands.demo-toggle-panel]
+title = "Codex Usage: Toggle Panel"
+description = "Toggle the Codex usage panel"
 palette = true
 
 [commands.demo-refresh]
@@ -46,7 +46,7 @@ icon = "zed_assistant"
 default_dock = "right"
 default_size = 360
 root_view = "demo.panel"
-toggle_command = "demo-open-panel"
+toggle_command = "demo-toggle-panel"
 
 [[titlebar_widgets]]
 id = "demo-titlebar"
@@ -65,13 +65,6 @@ priority = 100
 refresh_interval_seconds = 60
 
 [[menus]]
-id = "demo-palette-menu"
-location = "command-palette"
-title = "Codex Usage: Refresh"
-command = "demo-refresh"
-priority = 10
-
-[[menus]]
 id = "demo-editor-menu"
 location = "editor-context"
 title = "Codex Usage: Sign In"
@@ -88,42 +81,38 @@ priority = 20
 [[menus]]
 id = "demo-panel-overflow-menu"
 location = "panel-overflow"
-title = "Codex Usage: Sign Out"
-command = "demo-logout"
+title = "Codex Usage: Refresh"
+command = "demo-refresh"
+panel = "demo"
+priority = 10
+
+[[menus]]
+id = "demo-panel-overflow-menu-login"
+location = "panel-overflow"
+title = "Codex Usage: Sign In"
+command = "demo-begin-login"
 panel = "demo"
 priority = 20
 
 [[menus]]
+id = "demo-panel-overflow-menu-chatgpt"
+location = "panel-overflow"
+title = "Codex Usage: Open ChatGPT"
+command = "demo-open-url"
+panel = "demo"
+priority = 30
+
+[[menus]]
+id = "demo-panel-overflow-menu-logout"
+location = "panel-overflow"
+title = "Codex Usage: Sign Out"
+command = "demo-logout"
+panel = "demo"
+priority = 40
+
+[[menus]]
 id = "demo-item-tab-menu"
 location = "item-tab-context"
-title = "Codex Usage: Open Panel"
-command = "demo-open-panel"
+title = "Codex Usage: Toggle Panel"
+command = "demo-toggle-panel"
 priority = 20
-
-[[context_actions]]
-id = "demo-editor-action"
-target = "editor"
-title = "Codex Usage: Sign In"
-command = "demo-begin-login"
-priority = 10
-
-[[context_actions]]
-id = "demo-project-panel-action"
-target = "project-panel"
-title = "Codex Usage: Refresh"
-command = "demo-refresh"
-priority = 10
-
-[[context_actions]]
-id = "demo-panel-action"
-target = "panel"
-title = "Codex Usage: Refresh Panel"
-command = "demo-refresh"
-priority = 10
-
-[[context_actions]]
-id = "demo-item-tab-action"
-target = "item-tab"
-title = "Codex Usage: Open Panel"
-command = "demo-open-panel"
-priority = 10

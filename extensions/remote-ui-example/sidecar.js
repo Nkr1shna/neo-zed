@@ -435,19 +435,51 @@ async function fetchUsage(accessToken) {
 
 function normalizeUsageSnapshot(json) {
   const rateLimit = asObject(json.rate_limit);
+  const codeReviewRateLimit = asObject(json.code_review_rate_limit);
+  const additionalRateLimits = Array.isArray(json.additional_rate_limits)
+    ? json.additional_rate_limits
+    : [];
+  const planType = typeof json.plan_type === "string" ? json.plan_type : null;
+  const credits = asObject(json.credits);
   const primaryWindow = asObject(rateLimit.primary_window);
   const secondaryWindow = asObject(rateLimit.secondary_window);
-  const planType = typeof json.plan_type === "string" ? json.plan_type : null;
   const primaryUsedPercent = readPercent(primaryWindow.used_percent);
   const secondaryUsedPercent = readPercent(secondaryWindow.used_percent);
-  const credits = asObject(json.credits);
 
+  const usageLimits = [
+    ...normalizeLimitWindows(rateLimit, {
+      cardIdPrefix: "codex",
+      fallbackPrimaryTitle: "5 hour usage limit",
+      fallbackSecondaryTitle: "Weekly usage limit",
+      category: "codex",
+    }),
+    ...normalizeLimitWindows(codeReviewRateLimit, {
+      cardIdPrefix: "code-review",
+      fallbackPrimaryTitle: "Code review",
+      fallbackSecondaryTitle: "Code review weekly usage limit",
+      category: "code-review",
+    }),
+    ...additionalRateLimits.flatMap((entry, index) => {
+      const limitName = typeof entry?.limit_name === "string" ? entry.limit_name : `Additional limit ${index + 1}`;
+      return normalizeLimitWindows(asObject(entry?.rate_limit), {
+        cardIdPrefix: `additional-${index}`,
+        fallbackPrimaryTitle: `${limitName} 5 hour usage limit`,
+        fallbackSecondaryTitle: `${limitName} Weekly usage limit`,
+        category: "additional",
+        meteredFeature:
+          typeof entry?.metered_feature === "string" ? entry.metered_feature : null,
+        limitName,
+      });
+    }),
+  ].sort(compareUsageLimits);
+
+  const creditsSummary = normalizeCreditsSummary(credits);
   let detail = `${primaryUsedPercent}% used in the 5 hour Codex window`;
-  if (typeof secondaryUsedPercent === "number") {
+  if (secondaryWindow.reset_at != null) {
     detail += `, ${secondaryUsedPercent}% used in the 7 day window`;
   }
-  if (credits.has_credits === true && credits.unlimited !== true && typeof credits.balance === "number") {
-    detail += `, $${credits.balance.toFixed(2)} credits left`;
+  if (creditsSummary.has_credits && creditsSummary.unlimited !== true) {
+    detail += `, $${creditsSummary.balance.toFixed(2)} credits left`;
   }
 
   return {
@@ -458,12 +490,117 @@ function normalizeUsageSnapshot(json) {
     account_label: runtime.tokens?.accountId
       ? `Account ${runtime.tokens.accountId.slice(-8)}`
       : null,
-    primary_window_label: "5h Codex window",
-    secondary_window_label: "7d Codex window",
+    primary_window_label: usageLimits[0]?.title || "5h Codex window",
+    secondary_window_label: usageLimits[1]?.title || "7d Codex window",
     primary_used_percent: primaryUsedPercent,
     secondary_used_percent: secondaryUsedPercent,
     busy: false,
+    usage_limits: usageLimits,
+    credits_summary: creditsSummary,
   };
+}
+
+function normalizeLimitWindows(rateLimit, options) {
+  const normalizedRateLimit = asObject(rateLimit);
+  const windows = [];
+  const primaryWindow = normalizeUsageWindow(normalizedRateLimit.primary_window, {
+    id: `${options.cardIdPrefix}-primary`,
+    title: options.fallbackPrimaryTitle,
+    windowKind: "primary",
+    category: options.category,
+    allowed: normalizedRateLimit.allowed,
+    limitReached: normalizedRateLimit.limit_reached,
+    limitName: options.limitName || null,
+    meteredFeature: options.meteredFeature || null,
+  });
+  if (primaryWindow) {
+    windows.push(primaryWindow);
+  }
+
+  const secondaryWindow = normalizeUsageWindow(normalizedRateLimit.secondary_window, {
+    id: `${options.cardIdPrefix}-secondary`,
+    title: options.fallbackSecondaryTitle,
+    windowKind: "secondary",
+    category: options.category,
+    allowed: normalizedRateLimit.allowed,
+    limitReached: normalizedRateLimit.limit_reached,
+    limitName: options.limitName || null,
+    meteredFeature: options.meteredFeature || null,
+  });
+  if (secondaryWindow) {
+    windows.push(secondaryWindow);
+  }
+
+  return windows;
+}
+
+function normalizeUsageWindow(window, options) {
+  const normalizedWindow = asObject(window);
+  const limitWindowSeconds = readInteger(normalizedWindow.limit_window_seconds);
+  const resetAtSeconds = readInteger(normalizedWindow.reset_at);
+  const resetAfterSeconds = readInteger(normalizedWindow.reset_after_seconds);
+  if (limitWindowSeconds === null && resetAtSeconds === null && resetAfterSeconds === null) {
+    return null;
+  }
+
+  const usedPercent = readPercent(normalizedWindow.used_percent);
+  const remainingPercent = Math.max(0, 100 - usedPercent);
+
+  return {
+    id: options.id,
+    title: options.title,
+    category: options.category,
+    window_kind: options.windowKind,
+    limit_name: options.limitName,
+    metered_feature: options.meteredFeature,
+    used_percent: usedPercent,
+    remaining_percent: remainingPercent,
+    allowed: options.allowed !== false,
+    limit_reached: options.limitReached === true,
+    limit_window_seconds: limitWindowSeconds,
+    reset_after_seconds: resetAfterSeconds,
+    reset_at: resetAtSeconds,
+    resets_at_label: formatResetAtLabel(resetAtSeconds),
+  };
+}
+
+function normalizeCreditsSummary(credits) {
+  const balance = readNumber(credits.balance) || 0;
+  const approxLocalMessages = normalizeMessageAllowance(credits.approx_local_messages);
+  const approxCloudMessages = normalizeMessageAllowance(credits.approx_cloud_messages);
+
+  return {
+    has_credits: credits.has_credits === true,
+    unlimited: credits.unlimited === true,
+    balance,
+    balance_label: credits.unlimited === true ? "Unlimited" : balance.toString(),
+    local_messages_used: approxLocalMessages.used,
+    local_messages_limit: approxLocalMessages.limit,
+    cloud_messages_used: approxCloudMessages.used,
+    cloud_messages_limit: approxCloudMessages.limit,
+    detail:
+      credits.unlimited === true
+        ? "Credits are unlimited."
+        : "Use credits to send messages beyond your plan limit.",
+  };
+}
+
+function compareUsageLimits(left, right) {
+  return usageLimitSortKey(left) - usageLimitSortKey(right);
+}
+
+function usageLimitSortKey(limit) {
+  const windowOffset = limit.window_kind === "secondary" ? 1 : 0;
+  if (limit.category === "codex") {
+    return windowOffset;
+  }
+  if (limit.category === "additional") {
+    return 2 + windowOffset;
+  }
+  if (limit.category === "code-review") {
+    return 4 + windowOffset;
+  }
+  return 100 + windowOffset;
 }
 
 function signedOutSnapshot() {
@@ -478,6 +615,8 @@ function signedOutSnapshot() {
     primary_used_percent: 0,
     secondary_used_percent: 0,
     busy: false,
+    usage_limits: [],
+    credits_summary: normalizeCreditsSummary({}),
   };
 }
 
@@ -493,6 +632,8 @@ function pendingSnapshot(detail) {
     primary_used_percent: 0,
     secondary_used_percent: 0,
     busy: true,
+    usage_limits: [],
+    credits_summary: normalizeCreditsSummary({}),
   };
 }
 
@@ -508,6 +649,8 @@ function errorSnapshot(errorMessage) {
     primary_used_percent: 0,
     secondary_used_percent: 0,
     busy: false,
+    usage_limits: [],
+    credits_summary: normalizeCreditsSummary({}),
   };
 }
 
@@ -533,6 +676,52 @@ function readPercent(value) {
     return 0;
   }
   return Math.max(0, Math.min(100, Math.round(value)));
+}
+
+function readInteger(value) {
+  if (typeof value !== "number" || Number.isNaN(value)) {
+    return null;
+  }
+  return Math.round(value);
+}
+
+function readNumber(value) {
+  if (typeof value === "number" && !Number.isNaN(value)) {
+    return value;
+  }
+  if (typeof value === "string" && value.trim() !== "") {
+    const parsed = Number.parseFloat(value);
+    if (!Number.isNaN(parsed)) {
+      return parsed;
+    }
+  }
+  return null;
+}
+
+function normalizeMessageAllowance(value) {
+  if (!Array.isArray(value)) {
+    return { used: null, limit: null };
+  }
+  return {
+    used: typeof value[0] === "number" && !Number.isNaN(value[0]) ? value[0] : null,
+    limit: typeof value[1] === "number" && !Number.isNaN(value[1]) ? value[1] : null,
+  };
+}
+
+function formatResetAtLabel(resetAtSeconds) {
+  if (typeof resetAtSeconds !== "number") {
+    return null;
+  }
+
+  const date = new Date(resetAtSeconds * 1000);
+  if (Number.isNaN(date.getTime())) {
+    return null;
+  }
+
+  return new Intl.DateTimeFormat(undefined, {
+    hour: "numeric",
+    minute: "2-digit",
+  }).format(date);
 }
 
 function asObject(value) {

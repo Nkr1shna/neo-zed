@@ -1055,6 +1055,7 @@ impl From<remote_ui::HostMutation> for ExtensionHostMutation {
         match value {
             remote_ui::HostMutation::ShowToast(message) => Self::ShowToast(message),
             remote_ui::HostMutation::OpenPanel(panel_id) => Self::OpenPanel(panel_id),
+            remote_ui::HostMutation::TogglePanel(panel_id) => Self::TogglePanel(panel_id),
             remote_ui::HostMutation::ClosePanel(panel_id) => Self::ClosePanel(panel_id),
             remote_ui::HostMutation::CopyToClipboard(value) => Self::CopyToClipboard(value),
             remote_ui::HostMutation::OpenExternalUrl(url) => Self::OpenExternalUrl(url),
@@ -1067,6 +1068,7 @@ impl From<ExtensionHostMutation> for remote_ui::HostMutation {
         match value {
             ExtensionHostMutation::ShowToast(message) => Self::ShowToast(message),
             ExtensionHostMutation::OpenPanel(panel_id) => Self::OpenPanel(panel_id),
+            ExtensionHostMutation::TogglePanel(panel_id) => Self::TogglePanel(panel_id),
             ExtensionHostMutation::ClosePanel(panel_id) => Self::ClosePanel(panel_id),
             ExtensionHostMutation::CopyToClipboard(value) => Self::CopyToClipboard(value),
             ExtensionHostMutation::OpenExternalUrl(url) => Self::OpenExternalUrl(url),
