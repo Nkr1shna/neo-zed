@@ -8,10 +8,7 @@ use std::{
 };
 
 use client::parse_zed_link;
-use command_palette_hooks::{
-    CommandInterceptItem, CommandInterceptResult, CommandPaletteFilter,
-    GlobalCommandPaletteInterceptor,
-};
+use command_palette_hooks::CommandPaletteFilter;
 
 use fuzzy::{StringMatch, StringMatchCandidate};
 use gpui::{
@@ -27,6 +24,10 @@ use ui::{HighlightedLabel, KeyBinding, ListItem, ListItemSpacing, prelude::*};
 use util::ResultExt;
 use workspace::{ModalView, Workspace, WorkspaceSettings};
 use zed_actions::{OpenZedUrl, command_palette::Toggle};
+
+pub use command_palette_hooks::{
+    CommandInterceptItem, CommandInterceptResult, GlobalCommandPaletteInterceptor,
+};
 
 pub fn init(cx: &mut App) {
     command_palette_hooks::init(cx);

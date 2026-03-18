@@ -31,6 +31,7 @@ trait StatusItemViewHandle: Send {
 
 pub struct StatusBar {
     left_items: Vec<Box<dyn StatusItemViewHandle>>,
+    center_items: Vec<Box<dyn StatusItemViewHandle>>,
     right_items: Vec<Box<dyn StatusItemViewHandle>>,
     active_pane: Entity<Pane>,
     _observe_active_pane: Subscription,
@@ -61,8 +62,26 @@ impl Render for StatusBar {
                     .border_b(px(1.0))
                     .border_color(cx.theme().colors().status_bar_background),
             })
-            .child(self.render_left_tools())
-            .child(self.render_right_tools())
+            .child(
+                h_flex()
+                    .flex_1()
+                    .min_w_0()
+                    .child(self.render_left_tools()),
+            )
+            .child(
+                h_flex()
+                    .flex_1()
+                    .justify_center()
+                    .min_w_0()
+                    .child(self.render_center_tools()),
+            )
+            .child(
+                h_flex()
+                    .flex_1()
+                    .justify_end()
+                    .min_w_0()
+                    .child(self.render_right_tools()),
+            )
     }
 }
 
@@ -82,12 +101,21 @@ impl StatusBar {
             .overflow_x_hidden()
             .children(self.right_items.iter().rev().map(|item| item.to_any()))
     }
+
+    fn render_center_tools(&self) -> impl IntoElement {
+        h_flex()
+            .gap_1()
+            .min_w_0()
+            .overflow_x_hidden()
+            .children(self.center_items.iter().map(|item| item.to_any()))
+    }
 }
 
 impl StatusBar {
     pub fn new(active_pane: &Entity<Pane>, window: &mut Window, cx: &mut Context<Self>) -> Self {
         let mut this = Self {
             left_items: Default::default(),
+            center_items: Default::default(),
             right_items: Default::default(),
             active_pane: active_pane.clone(),
             _observe_active_pane: cx.observe_in(active_pane, window, |this, _, window, cx| {
@@ -118,6 +146,7 @@ impl StatusBar {
     pub fn item_of_type<T: StatusItemView>(&self) -> Option<Entity<T>> {
         self.left_items
             .iter()
+            .chain(self.center_items.iter())
             .chain(self.right_items.iter())
             .find_map(|item| item.to_any().downcast().log_err())
     }
@@ -131,9 +160,14 @@ impl StatusBar {
                 return Some(index);
             }
         }
-        for (index, item) in self.right_items.iter().enumerate() {
+        for (index, item) in self.center_items.iter().enumerate() {
             if item.item_type() == TypeId::of::<T>() {
                 return Some(index + self.left_items.len());
+            }
+        }
+        for (index, item) in self.right_items.iter().enumerate() {
+            if item.item_type() == TypeId::of::<T>() {
+                return Some(index + self.left_items.len() + self.center_items.len());
             }
         }
         None
@@ -153,9 +187,15 @@ impl StatusBar {
 
         if position < self.left_items.len() {
             self.left_items.insert(position + 1, Box::new(item))
+        } else if position < self.left_items.len() + self.center_items.len() {
+            self.center_items
+                .insert(position + 1 - self.left_items.len(), Box::new(item))
         } else {
             self.right_items
-                .insert(position + 1 - self.left_items.len(), Box::new(item))
+                .insert(
+                    position + 1 - self.left_items.len() - self.center_items.len(),
+                    Box::new(item),
+                )
         }
         cx.notify()
     }
@@ -163,9 +203,27 @@ impl StatusBar {
     pub fn remove_item_at(&mut self, position: usize, cx: &mut Context<Self>) {
         if position < self.left_items.len() {
             self.left_items.remove(position);
+        } else if position < self.left_items.len() + self.center_items.len() {
+            self.center_items.remove(position - self.left_items.len());
         } else {
-            self.right_items.remove(position - self.left_items.len());
+            self.right_items
+                .remove(position - self.left_items.len() - self.center_items.len());
         }
+        cx.notify();
+    }
+
+    pub fn add_center_item<T>(
+        &mut self,
+        item: Entity<T>,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) where
+        T: 'static + StatusItemView,
+    {
+        let active_pane_item = self.active_pane.read(cx).active_item();
+        item.set_active_pane_item(active_pane_item.as_deref(), window, cx);
+
+        self.center_items.push(Box::new(item));
         cx.notify();
     }
 
@@ -199,7 +257,12 @@ impl StatusBar {
 
     fn update_active_pane_item(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         let active_pane_item = self.active_pane.read(cx).active_item();
-        for item in self.left_items.iter().chain(&self.right_items) {
+        for item in self
+            .left_items
+            .iter()
+            .chain(&self.center_items)
+            .chain(&self.right_items)
+        {
             item.set_active_pane_item(active_pane_item.as_deref(), window, cx);
         }
     }

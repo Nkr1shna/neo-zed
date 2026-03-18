@@ -1,6 +1,7 @@
 mod context_server;
 mod dap;
 mod lsp;
+mod remote_ui;
 mod slash_command;
 
 use std::{ops::Range, path::PathBuf};
@@ -10,6 +11,7 @@ use util::redact::should_redact;
 pub use context_server::*;
 pub use dap::*;
 pub use lsp::*;
+pub use remote_ui::*;
 pub use slash_command::*;
 
 /// A list of environment variables.

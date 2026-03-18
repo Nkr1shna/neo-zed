@@ -2,6 +2,7 @@ use crate::{
     CloseWindow, NewFile, NewTerminal, OpenInTerminal, OpenOptions, OpenTerminal, OpenVisible,
     SplitDirection, ToggleFileFinder, ToggleProjectSymbols, ToggleZoom, Workspace,
     WorkspaceItemBuilder, ZoomIn, ZoomOut,
+    context_menu_hooks::ItemTabContextMenuHooks,
     invalid_item_view::InvalidItemView,
     item::{
         ActivateOnClose, ClosePosition, Item, ItemBufferKind, ItemHandle, ItemSettings,
@@ -3004,6 +3005,7 @@ impl Pane {
         let is_pinned = self.is_tab_pinned(ix);
 
         let pane = cx.entity().downgrade();
+        let workspace = self.workspace.clone();
         let menu_context = item.item_focus_handle(cx);
         let item_handle = item.boxed_clone();
 
@@ -3012,6 +3014,8 @@ impl Pane {
             .menu(move |window, cx| {
                 let pane = pane.clone();
                 let menu_context = menu_context.clone();
+                let workspace = workspace.clone();
+                let item_handle = item_handle.boxed_clone();
                 let extra_actions = item_handle.tab_extra_context_menu_actions(window, cx);
                 ContextMenu::build(window, cx, move |mut menu, window, cx| {
                     let close_active_item_action = CloseActiveItem {
@@ -3279,7 +3283,14 @@ impl Pane {
                         }
                     }
 
-                    menu.context(menu_context)
+                    ItemTabContextMenuHooks::apply(
+                        menu,
+                        workspace.clone(),
+                        item_handle.as_ref(),
+                        window,
+                        cx,
+                    )
+                    .context(menu_context)
                 })
             })
     }

@@ -113,13 +113,22 @@ pub struct CommandInterceptResult {
     pub exclusive: bool,
 }
 
-/// An interceptor for the command palette.
-#[derive(Clone)]
-pub struct GlobalCommandPaletteInterceptor(
-    Rc<dyn Fn(&str, WeakEntity<Workspace>, &mut App) -> Task<CommandInterceptResult>>,
-);
+type CommandPaletteInterceptorFn =
+    Rc<dyn Fn(&str, WeakEntity<Workspace>, &mut App) -> Task<CommandInterceptResult>>;
 
-impl Global for GlobalCommandPaletteInterceptor {}
+#[derive(Clone)]
+struct RegisteredCommandPaletteInterceptor {
+    id: &'static str,
+    handler: CommandPaletteInterceptorFn,
+}
+
+#[derive(Default)]
+struct GlobalCommandPaletteInterceptors(Vec<RegisteredCommandPaletteInterceptor>);
+
+impl Global for GlobalCommandPaletteInterceptors {}
+
+/// An interceptor registry for the command palette.
+pub struct GlobalCommandPaletteInterceptor;
 
 impl GlobalCommandPaletteInterceptor {
     /// Sets the global interceptor.
@@ -130,14 +139,44 @@ impl GlobalCommandPaletteInterceptor {
         interceptor: impl Fn(&str, WeakEntity<Workspace>, &mut App) -> Task<CommandInterceptResult>
         + 'static,
     ) {
-        cx.set_global(Self(Rc::new(interceptor)));
+        Self::set_named(cx, "default", interceptor);
     }
 
     /// Clears the global interceptor.
     pub fn clear(cx: &mut App) {
-        if cx.has_global::<Self>() {
-            cx.remove_global::<Self>();
+        Self::clear_named(cx, "default");
+    }
+
+    /// Sets a named interceptor.
+    ///
+    /// Interceptors are evaluated in registration order. Later exclusive
+    /// interceptors replace earlier results, which lets feature-specific
+    /// handlers override more general ones.
+    pub fn set_named(
+        cx: &mut App,
+        id: &'static str,
+        interceptor: impl Fn(&str, WeakEntity<Workspace>, &mut App) -> Task<CommandInterceptResult>
+        + 'static,
+    ) {
+        let interceptor = RegisteredCommandPaletteInterceptor {
+            id,
+            handler: Rc::new(interceptor),
+        };
+        cx.update_default_global(|interceptors: &mut GlobalCommandPaletteInterceptors, _cx| {
+            interceptors.0.retain(|existing| existing.id != id);
+            interceptors.0.push(interceptor);
+        });
+    }
+
+    /// Clears a named interceptor.
+    pub fn clear_named(cx: &mut App, id: &str) {
+        if !cx.has_global::<GlobalCommandPaletteInterceptors>() {
+            return;
         }
+
+        cx.update_global(|interceptors: &mut GlobalCommandPaletteInterceptors, _cx| {
+            interceptors.0.retain(|existing| existing.id != id);
+        });
     }
 
     /// Intercepts the given query from the command palette.
@@ -146,8 +185,32 @@ impl GlobalCommandPaletteInterceptor {
         workspace: WeakEntity<Workspace>,
         cx: &mut App,
     ) -> Option<Task<CommandInterceptResult>> {
-        let interceptor = cx.try_global::<Self>()?;
-        let handler = interceptor.0.clone();
-        Some(handler(query, workspace, cx))
+        let interceptors = cx
+            .try_global::<GlobalCommandPaletteInterceptors>()?
+            .0
+            .clone();
+        if interceptors.is_empty() {
+            return None;
+        }
+
+        let query = query.to_string();
+        let tasks = interceptors
+            .into_iter()
+            .map(|interceptor| (interceptor.handler)(&query, workspace.clone(), cx))
+            .collect::<Vec<_>>();
+        Some(cx.spawn(async move |_cx| {
+            let mut combined = CommandInterceptResult::default();
+
+            for task in tasks {
+                let result = task.await;
+                if result.exclusive {
+                    combined = result;
+                } else if !combined.exclusive {
+                    combined.results.extend(result.results);
+                }
+            }
+
+            combined
+        }))
     }
 }

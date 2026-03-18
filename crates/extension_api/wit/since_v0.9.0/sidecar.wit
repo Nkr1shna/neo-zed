@@ -1,0 +1,7 @@
+interface sidecar {
+    call:
+        func(method: string, params-json: option<string>, timeout-ms: option<u32>)
+            -> result<string, string>;
+
+    close: func() -> result<_, string>;
+}

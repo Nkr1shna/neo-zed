@@ -1,3 +1,4 @@
+pub mod context_menu_hooks;
 pub mod dock;
 pub mod history_manager;
 pub mod invalid_item_view;
@@ -25,6 +26,7 @@ pub mod welcome;
 mod workspace_settings;
 
 pub use crate::notifications::NotificationFrame;
+pub use context_menu_hooks::{ItemTabContextMenuHooks, PanelOverflowContextMenuHooks};
 pub use dock::Panel;
 pub use multi_workspace::{
     DraggedSidebar, FocusWorkspaceSidebar, MultiWorkspace, MultiWorkspaceEvent,
@@ -624,6 +626,10 @@ pub struct WorkspaceId(i64);
 impl WorkspaceId {
     pub fn from_i64(value: i64) -> Self {
         Self(value)
+    }
+
+    pub fn to_u64(self) -> Option<u64> {
+        self.0.try_into().ok()
     }
 }
 

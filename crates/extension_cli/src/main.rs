@@ -8,7 +8,10 @@ use ::fs::{CopyOptions, Fs, RealFs, copy_recursive};
 use anyhow::{Context as _, Result, anyhow, bail};
 use clap::Parser;
 use extension::extension_builder::{CompileExtensionOptions, ExtensionBuilder};
-use extension::{ExtensionManifest, ExtensionSnippets};
+use extension::{
+    ExtensionManifest, ExtensionSnippets, RemoteUiManifest,
+    serialize_extension_manifest_with_remote_ui,
+};
 use language::LanguageConfig;
 use reqwest_client::ReqwestClient;
 use settings_content::SemanticTokenRules;
@@ -79,10 +82,18 @@ async fn main() -> Result<()> {
         .await
         .context("failed to compile extension")?;
 
+    let remote_ui_manifest = RemoteUiManifest::load(fs.clone(), &extension_path).await?;
     let extension_provides = manifest.provides();
 
     if extension_provides.is_empty() {
-        bail!("extension does not provide any features");
+        if remote_ui_manifest.is_empty() {
+            bail!("extension does not provide any features");
+        }
+
+        bail!(
+            "extension only declares remote UI contributions; publishing UI-only extensions \
+             requires adding a remote UI `provides` capability to the catalog metadata path"
+        );
     }
 
     let grammars = test_grammars(&manifest, &extension_path, &mut wasm_store)?;
@@ -92,9 +103,15 @@ async fn main() -> Result<()> {
 
     let archive_dir = output_dir.join("archive");
     fs::remove_dir_all(&archive_dir).ok();
-    copy_extension_resources(&manifest, &extension_path, &archive_dir, fs.clone())
-        .await
-        .context("failed to copy extension resources")?;
+    copy_extension_resources(
+        &manifest,
+        &remote_ui_manifest,
+        &extension_path,
+        &archive_dir,
+        fs.clone(),
+    )
+    .await
+    .context("failed to copy extension resources")?;
 
     let tar_output = Command::new("tar")
         .current_dir(&output_dir)
@@ -129,13 +146,15 @@ async fn main() -> Result<()> {
 
 async fn copy_extension_resources(
     manifest: &ExtensionManifest,
+    remote_ui_manifest: &RemoteUiManifest,
     extension_path: &Path,
     output_dir: &Path,
     fs: Arc<dyn Fs>,
 ) -> Result<()> {
     fs::create_dir_all(output_dir).context("failed to create output dir")?;
 
-    let manifest_toml = toml::to_string(&manifest).context("failed to serialize manifest")?;
+    let manifest_toml = serialize_extension_manifest_with_remote_ui(manifest, remote_ui_manifest)
+        .context("failed to serialize manifest")?;
     fs::write(output_dir.join("extension.toml"), &manifest_toml)
         .context("failed to write extension.toml")?;
 
@@ -204,6 +223,22 @@ async fn copy_extension_resources(
         )
         .await
         .with_context(|| "failed to copy icons")?;
+    }
+
+    if extension_path.join("icons").is_dir() {
+        let output_icons_dir = output_dir.join("icons");
+        fs::create_dir_all(&output_icons_dir)?;
+        copy_recursive(
+            fs.as_ref(),
+            &extension_path.join("icons"),
+            &output_icons_dir,
+            CopyOptions {
+                overwrite: true,
+                ignore_if_exists: false,
+            },
+        )
+        .await
+        .with_context(|| "failed to copy extension icons")?;
     }
 
     for (_, agent_entry) in &manifest.agent_servers {
@@ -291,6 +326,63 @@ async fn copy_extension_resources(
             .with_context(|| {
                 format!("failed to copy snippets from '{}'", snippets_path.display())
             })?;
+        }
+    }
+
+    for schema_path in remote_ui_manifest.input_schema_paths() {
+        let parent = schema_path.parent();
+        if let Some(parent) = parent.filter(|path| path.components().next().is_some()) {
+            fs::create_dir_all(output_dir.join(parent))?;
+        }
+        copy_recursive(
+            fs.as_ref(),
+            &extension_path.join(schema_path),
+            &output_dir.join(schema_path),
+            CopyOptions {
+                overwrite: true,
+                ignore_if_exists: false,
+            },
+        )
+        .await
+        .with_context(|| {
+            format!(
+                "failed to copy command input schema '{}'",
+                schema_path.display()
+            )
+        })?;
+    }
+
+    if let Some(sidecar) = &manifest.sidecar {
+        for bundle_path in sidecar.bundle_paths() {
+            let source_path = extension_path.join(&bundle_path);
+            if !source_path.exists() {
+                continue;
+            }
+
+            let output_path = output_dir.join(&bundle_path);
+            if let Some(parent) = output_path.parent() {
+                fs::create_dir_all(parent)?;
+            }
+
+            if source_path.is_dir() {
+                copy_recursive(
+                    fs.as_ref(),
+                    &source_path,
+                    &output_path,
+                    CopyOptions {
+                        overwrite: true,
+                        ignore_if_exists: false,
+                    },
+                )
+                .await
+                .with_context(|| {
+                    format!("failed to copy sidecar asset '{}'", bundle_path.display())
+                })?;
+            } else {
+                fs::copy(&source_path, &output_path).with_context(|| {
+                    format!("failed to copy sidecar asset '{}'", bundle_path.display())
+                })?;
+            }
         }
     }
 

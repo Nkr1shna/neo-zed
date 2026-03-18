@@ -1,3 +1,4 @@
+mod context_menu_hooks;
 pub mod project_panel_settings;
 mod utils;
 
@@ -80,6 +81,8 @@ use zed_actions::{
     project_panel::{Toggle, ToggleFocus},
     workspace::OpenWithSystem,
 };
+
+pub use context_menu_hooks::{ProjectPanelContextMenuHooks, ProjectPanelContextMenuTarget};
 
 const PROJECT_PANEL_KEY: &str = "ProjectPanel";
 const NEW_ENTRY_ID: ProjectEntryId = ProjectEntryId::MAX;
@@ -1165,6 +1168,17 @@ impl ProjectPanel {
             let is_remote = project.is_remote();
             let is_collab = project.is_via_collab();
             let is_local = project.is_local() || project.is_via_wsl_with_host_interop(cx);
+            let context_target = ProjectPanelContextMenuTarget {
+                selected_entry: SelectedEntry {
+                    worktree_id,
+                    entry_id: entry.id,
+                },
+                marked_entries: Arc::<[SelectedEntry]>::from(self.marked_entries.clone()),
+                is_dir,
+                is_root,
+                is_local,
+                is_remote,
+            };
 
             let settings = ProjectPanelSettings::get_global(cx);
             let visible_worktrees_count = project.visible_worktrees(cx).count();
@@ -1186,8 +1200,9 @@ impl ProjectPanel {
             };
 
             let entity = cx.entity();
-            let context_menu = ContextMenu::build(window, cx, |menu, _, _| {
-                menu.context(self.focus_handle.clone()).map(|menu| {
+            let workspace = self.workspace.clone();
+            let context_menu = ContextMenu::build(window, cx, |menu, window, cx| {
+                let menu = menu.context(self.focus_handle.clone()).map(|menu| {
                     if is_read_only {
                         menu.when(is_dir, |menu| {
                             menu.action("Search Inside", Box::new(NewSearchInDirectory))
@@ -1292,7 +1307,15 @@ impl ProjectPanel {
                                 )
                             })
                     }
-                })
+                });
+
+                ProjectPanelContextMenuHooks::apply(
+                    menu,
+                    workspace.clone(),
+                    &context_target,
+                    window,
+                    cx,
+                )
             });
 
             window.focus(&context_menu.focus_handle(cx), cx);

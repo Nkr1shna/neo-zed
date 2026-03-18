@@ -1,0 +1,118 @@
+interface remote-ui {
+    enum mount-kind {
+        titlebar-widget,
+        footer-widget,
+        panel,
+    }
+
+    record command-context {
+        workspace-id: u64,
+        trusted: bool,
+        active-item-kind: option<string>,
+    }
+
+    record mount-context {
+        workspace-id: u64,
+        mount-kind: mount-kind,
+        trusted: bool,
+        active-item-kind: option<string>,
+        appearance: option<string>,
+    }
+
+    enum render-reason {
+        initial,
+        event,
+        host-context-changed,
+        virtual-range-changed,
+        explicit-refresh,
+    }
+
+    record remote-view-property {
+        name: string,
+        value: string,
+    }
+
+    record virtual-list-props {
+        item-count: u32,
+        estimated-row-height: u32,
+        selection-mode: option<string>,
+    }
+
+    record progress-bar-props {
+        value: u32,
+        max-value: u32,
+    }
+
+    variant remote-view-node-kind {
+        row,
+        column,
+        stack,
+        text(string),
+        icon(string),
+        button(string),
+        toggle(bool),
+        checkbox(bool),
+        text-input(string),
+        badge(string),
+        progress-bar(progress-bar-props),
+        divider,
+        spacer,
+        scroll-view,
+        virtual-list(virtual-list-props),
+    }
+
+    record remote-view-node {
+        node-id: string,
+        parent-id: option<string>,
+        kind: remote-view-node-kind,
+        properties: list<remote-view-property>,
+    }
+
+    record remote-view-tree {
+        revision: u64,
+        root-id: string,
+        nodes: list<remote-view-node>,
+    }
+
+    enum remote-view-event-kind {
+        click,
+        change,
+        submit,
+        list-item-activated,
+        list-selection-changed,
+    }
+
+    record remote-view-event {
+        node-id: string,
+        kind: remote-view-event-kind,
+        payload-json: option<string>,
+    }
+
+    record virtual-list-range {
+        start: u32,
+        end: u32,
+    }
+
+    variant event-outcome {
+        noop,
+        rerender,
+        rerender-virtual-range(string),
+        show-error(string),
+    }
+
+    variant host-mutation {
+        show-toast(string),
+        open-panel(string),
+        close-panel(string),
+        copy-to-clipboard(string),
+        open-external-url(string),
+    }
+
+    dispatch-workspace-action:
+        func(workspace-id: u64, action-id: string, payload-json: option<string>)
+            -> result<_, string>;
+
+    request-host-mutation:
+        func(workspace-id: u64, mutation: host-mutation)
+            -> result<_, string>;
+}

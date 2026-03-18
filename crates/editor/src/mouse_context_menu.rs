@@ -1,8 +1,8 @@
 use crate::{
     Copy, CopyAndTrim, CopyPermalinkToLine, Cut, DisplayPoint, DisplaySnapshot, Editor,
-    EvaluateSelectedText, FindAllReferences, GoToDeclaration, GoToDefinition, GoToImplementation,
-    GoToTypeDefinition, Paste, Rename, RevealInFileManager, RunToCursor, SelectMode,
-    SelectionEffects, SelectionExt, ToDisplayPoint, ToggleCodeActions,
+    EditorContextMenuHooks, EvaluateSelectedText, FindAllReferences, GoToDeclaration,
+    GoToDefinition, GoToImplementation, GoToTypeDefinition, Paste, Rename, RevealInFileManager,
+    RunToCursor, SelectMode, SelectionEffects, SelectionExt, ToDisplayPoint, ToggleCodeActions,
     actions::{Format, FormatSelections},
     selections_collection::SelectionsCollection,
 };
@@ -222,6 +222,8 @@ pub fn deploy_context_menu(
             editor.buffer.read(cx).as_singleton().as_ref(),
             cx,
         );
+        let workspace = editor.workspace().map(|workspace| workspace.downgrade());
+        let editor_entity = cx.entity().downgrade();
 
         let is_markdown = editor
             .buffer()
@@ -241,8 +243,8 @@ pub fn deploy_context_menu(
                     .is_some_and(|ext| ext.eq_ignore_ascii_case("svg"))
             });
 
-        ui::ContextMenu::build(window, cx, |menu, _window, _cx| {
-            let builder = menu
+        ui::ContextMenu::build(window, cx, move |menu, window, cx| {
+            let mut builder = menu
                 .on_blur_subscription(Subscription::new(|| {}))
                 .when(run_to_cursor, |builder| {
                     builder.action("Run to Cursor", Box::new(RunToCursor))
@@ -316,6 +318,16 @@ pub fn deploy_context_menu(
                     "View File History",
                     Box::new(git::FileHistory),
                 );
+            if let Some(workspace) = workspace.clone() {
+                builder = EditorContextMenuHooks::apply(
+                    builder,
+                    workspace,
+                    editor_entity.clone(),
+                    point,
+                    window,
+                    cx,
+                );
+            }
             match focus {
                 Some(focus) => builder.context(focus),
                 None => builder,
@@ -353,8 +365,12 @@ pub fn deploy_context_menu(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::{editor_tests::init_test, test::editor_lsp_test_context::EditorLspTestContext};
+    use crate::{
+        EditorContextMenuHooks, editor_tests::init_test,
+        test::editor_lsp_test_context::EditorLspTestContext,
+    };
     use indoc::indoc;
+    use std::{cell::Cell, rc::Rc};
 
     #[gpui::test]
     async fn test_mouse_context_menu(cx: &mut gpui::TestAppContext) {
@@ -400,5 +416,53 @@ mod tests {
             }
         "});
         cx.editor(|editor, _window, _app| assert!(editor.mouse_context_menu.is_some()));
+    }
+
+    #[gpui::test]
+    async fn test_editor_context_menu_hook_runs_for_default_menu(cx: &mut gpui::TestAppContext) {
+        init_test(cx, |_| {});
+
+        let invoked = Rc::new(Cell::new(false));
+        cx.update(|cx| {
+            let invoked = invoked.clone();
+            EditorContextMenuHooks::set_named(
+                cx,
+                "test-editor-context-hook",
+                move |menu, _workspace, _editor, _point, _window, _cx| {
+                    invoked.set(true);
+                    menu
+                },
+            );
+        });
+
+        let mut cx = EditorLspTestContext::new_rust(
+            lsp::ServerCapabilities {
+                hover_provider: Some(lsp::HoverProviderCapability::Simple(true)),
+                ..Default::default()
+            },
+            cx,
+        )
+        .await;
+
+        cx.set_state(indoc! {"
+            fn teˇst() {
+                do_work();
+            }
+        "});
+        let point = cx.display_point(indoc! {"
+            fn test() {
+                do_wˇork();
+            }
+        "});
+
+        cx.update_editor(|editor, window, cx| {
+            deploy_context_menu(editor, Some(Default::default()), point, window, cx);
+        });
+
+        assert!(invoked.get());
+
+        cx.update(|_, cx| {
+            EditorContextMenuHooks::clear_named(cx, "test-editor-context-hook");
+        });
     }
 }

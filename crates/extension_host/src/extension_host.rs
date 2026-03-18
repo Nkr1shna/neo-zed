@@ -17,10 +17,11 @@ use extension::extension_builder::{CompileExtensionOptions, ExtensionBuilder};
 use extension::{
     ExtensionContextServerProxy, ExtensionDebugAdapterProviderProxy, ExtensionEvents,
     ExtensionGrammarProxy, ExtensionHostProxy, ExtensionLanguageProxy,
-    ExtensionLanguageServerProxy, ExtensionSlashCommandProxy, ExtensionSnippetProxy,
-    ExtensionThemeProxy,
+    ExtensionLanguageServerProxy, ExtensionRemoteUiProxy, ExtensionSlashCommandProxy,
+    ExtensionSnippetProxy, ExtensionThemeProxy, RemoteUiManifest,
+    serialize_extension_manifest_with_remote_ui,
 };
-use fs::{Fs, RemoveOptions};
+use fs::{Fs, RemoveOptions, copy_recursive};
 use futures::future::join_all;
 use futures::{
     AsyncReadExt as _, Future, FutureExt as _, StreamExt as _,
@@ -72,7 +73,7 @@ pub const RELOAD_DEBOUNCE_DURATION: Duration = Duration::from_millis(200);
 const FS_WATCH_LATENCY: Duration = Duration::from_millis(100);
 
 /// The current extension [`SchemaVersion`] supported by Zed.
-const CURRENT_SCHEMA_VERSION: SchemaVersion = SchemaVersion(1);
+const CURRENT_SCHEMA_VERSION: SchemaVersion = SchemaVersion(2);
 
 /// Extensions that should no longer be loaded or downloaded.
 ///
@@ -162,6 +163,8 @@ pub struct ExtensionIndex {
 #[derive(Clone, PartialEq, Eq, Debug, Deserialize, Serialize)]
 pub struct ExtensionIndexEntry {
     pub manifest: Arc<ExtensionManifest>,
+    #[serde(default)]
+    pub remote_ui: RemoteUiManifest,
     pub dev: bool,
 }
 
@@ -248,6 +251,8 @@ impl ExtensionStore {
         let build_dir = build_dir.unwrap_or_else(|| extensions_dir.join("build"));
         let installed_dir = extensions_dir.join("installed");
         let index_path = extensions_dir.join("index.json");
+        let initial_installed_dir = installed_dir.clone();
+        let initial_fs = fs.clone();
 
         let (reload_tx, mut reload_rx) = unbounded();
         let (connection_registered_tx, mut connection_registered_rx) = unbounded();
@@ -306,7 +311,13 @@ impl ExtensionStore {
                     .mtime
                     .bad_is_greater_than(extensions_metadata.mtime)
             {
-                extension_index_needs_rebuild = false;
+                extension_index_needs_rebuild =
+                    cx.foreground_executor()
+                        .block_on(cached_index_is_missing_remote_ui(
+                            initial_fs,
+                            initial_installed_dir,
+                            &extension_index,
+                        ));
             }
         }
 
@@ -1212,6 +1223,10 @@ impl ExtensionStore {
             for command_name in extension.manifest.slash_commands.keys() {
                 self.proxy.unregister_slash_command(command_name.clone());
             }
+            if !extension.remote_ui.is_empty() {
+                self.proxy
+                    .unregister_remote_ui_extension(extension_id.clone(), cx);
+            }
         }
 
         self.wasm_extensions
@@ -1340,6 +1355,15 @@ impl ExtensionStore {
             .filter_map(|name| new_index.extensions.get(name).cloned())
             .collect::<Vec<_>>();
         self.extension_index = new_index;
+        for extension_entry in &extension_entries {
+            if !extension_entry.remote_ui.is_empty() {
+                self.proxy.register_remote_ui_extension(
+                    extension_entry.manifest.id.clone(),
+                    extension_entry.remote_ui.clone(),
+                    cx,
+                );
+            }
+        }
         cx.notify();
         cx.emit(Event::ExtensionsUpdated);
 
@@ -1397,9 +1421,7 @@ impl ExtensionStore {
                 .with_context(|| format!("Loading extension from {extension_path:?}"));
 
                 match wasm_extension {
-                    Ok(wasm_extension) => {
-                        wasm_extensions.push((extension.manifest.clone(), wasm_extension))
-                    }
+                    Ok(wasm_extension) => wasm_extensions.push((extension, wasm_extension)),
                     Err(e) => {
                         log::error!(
                             "Failed to load extension: {}, {:#}",
@@ -1417,7 +1439,8 @@ impl ExtensionStore {
             this.update(cx, |this, cx| {
                 this.reload_complete_senders.clear();
 
-                for (manifest, wasm_extension) in &wasm_extensions {
+                for (extension_entry, wasm_extension) in &wasm_extensions {
+                    let manifest = &extension_entry.manifest;
                     let extension = Arc::new(wasm_extension.clone());
 
                     for (language_server_id, language_server_config) in &manifest.language_servers {
@@ -1471,9 +1494,20 @@ impl ExtensionStore {
                         this.proxy
                             .register_debug_locator(extension.clone(), debug_adapter.clone());
                     }
+
+                    if !extension_entry.remote_ui.is_empty() {
+                        this.proxy.register_remote_ui_extension(
+                            manifest.id.clone(),
+                            extension_entry.remote_ui.clone(),
+                            cx,
+                        );
+                    }
+
                 }
 
-                this.wasm_extensions.extend(wasm_extensions);
+                this.wasm_extensions.extend(wasm_extensions.into_iter().map(
+                    |(extension_entry, wasm_extension)| (extension_entry.manifest, wasm_extension),
+                ));
                 this.proxy.set_extensions_loaded();
                 this.proxy.reload_current_theme(cx);
                 this.proxy.reload_current_icon_theme(cx);
@@ -1674,6 +1708,7 @@ impl ExtensionStore {
             ExtensionIndexEntry {
                 dev: is_dev,
                 manifest: Arc::new(extension_manifest),
+                remote_ui: RemoteUiManifest::load(fs.clone(), &extension_dir).await?,
             },
         );
 
@@ -1699,7 +1734,10 @@ impl ExtensionStore {
             const CONFIG_TOML: &str = LanguageConfig::FILE_NAME;
 
             if is_dev {
-                let manifest_toml = toml::to_string(&loaded_extension.manifest)?;
+                let manifest_toml = serialize_extension_manifest_with_remote_ui(
+                    &loaded_extension.manifest,
+                    &loaded_extension.remote_ui,
+                )?;
                 fs.save(
                     &tmp_dir.join(EXTENSION_TOML),
                     &Rope::from(manifest_toml),
@@ -1722,6 +1760,16 @@ impl ExtensionStore {
                     fs::CopyOptions::default(),
                 )
                 .await?
+            }
+
+            if fs.is_dir(&src_dir.join("icons")).await {
+                copy_recursive(
+                    fs.as_ref(),
+                    &src_dir.join("icons"),
+                    &tmp_dir.join("icons"),
+                    fs::CopyOptions::default(),
+                )
+                .await?;
             }
 
             for language_path in loaded_extension.manifest.languages.iter() {
@@ -1752,6 +1800,52 @@ impl ExtensionStore {
                         fs::CopyOptions::default(),
                     )
                     .await?
+                }
+            }
+
+            for schema_path in loaded_extension.remote_ui.input_schema_paths() {
+                if !fs.is_file(&src_dir.join(schema_path)).await {
+                    continue;
+                }
+
+                if let Some(parent) = schema_path.parent() {
+                    fs.create_dir(&tmp_dir.join(parent)).await?;
+                }
+                fs.copy_file(
+                    &src_dir.join(schema_path),
+                    &tmp_dir.join(schema_path),
+                    fs::CopyOptions::default(),
+                )
+                .await?;
+            }
+
+            if let Some(sidecar) = &loaded_extension.manifest.sidecar {
+                for bundle_path in sidecar.bundle_paths() {
+                    let source_path = src_dir.join(&bundle_path);
+                    if !fs.is_file(&source_path).await && !fs.is_dir(&source_path).await {
+                        continue;
+                    }
+
+                    let target_path = tmp_dir.join(&bundle_path);
+                    if let Some(parent) = bundle_path
+                        .parent()
+                        .filter(|path| path.components().next().is_some())
+                    {
+                        fs.create_dir(&tmp_dir.join(parent)).await?;
+                    }
+
+                    if fs.is_dir(&source_path).await {
+                        copy_recursive(
+                            fs.as_ref(),
+                            &source_path,
+                            &target_path,
+                            fs::CopyOptions::default(),
+                        )
+                        .await?;
+                    } else {
+                        fs.copy_file(&source_path, &target_path, fs::CopyOptions::default())
+                            .await?;
+                    }
                 }
             }
 
@@ -1873,6 +1967,39 @@ impl ExtensionStore {
         self.remote_clients.push(client.downgrade());
         self.ssh_registered_tx.unbounded_send(()).ok();
     }
+}
+
+async fn cached_index_is_missing_remote_ui(
+    fs: Arc<dyn Fs>,
+    installed_dir: PathBuf,
+    extension_index: &ExtensionIndex,
+) -> bool {
+    for (extension_id, extension) in &extension_index.extensions {
+        if extension.manifest.schema_version.0 < 2 || !extension.remote_ui.is_empty() {
+            continue;
+        }
+
+        let extension_dir = installed_dir.join(extension_id.as_ref());
+        match RemoteUiManifest::load(fs.clone(), &extension_dir).await {
+            Ok(remote_ui) if !remote_ui.is_empty() => {
+                log::info!(
+                    "forcing extension index rebuild because cached remote_ui is missing for {}",
+                    extension_id
+                );
+                return true;
+            }
+            Ok(_) => {}
+            Err(error) => {
+                log::warn!(
+                    "forcing extension index rebuild after failing to verify remote_ui for {}: {error:#}",
+                    extension_id
+                );
+                return true;
+            }
+        }
+    }
+
+    false
 }
 
 fn load_plugin_queries(root_path: &Path) -> LanguageQueries {

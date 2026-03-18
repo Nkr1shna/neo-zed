@@ -23,7 +23,7 @@ need to set your `crate-type` accordingly:
 
 ```toml
 [dependencies]
-zed_extension_api = "0.6.0"
+zed_extension_api = "0.9.0"
 
 [lib]
 crate-type = ["cdylib"]

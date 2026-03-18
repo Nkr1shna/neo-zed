@@ -7,6 +7,7 @@ mod open_listener;
 mod open_url_modal;
 mod quick_action_bar;
 pub mod remote_debug;
+mod remote_ui_extension;
 pub mod telemetry_log;
 #[cfg(all(target_os = "macos", any(test, feature = "test-support")))]
 pub mod visual_tests;
@@ -289,6 +290,8 @@ pub fn init(cx: &mut App) {
             about(workspace, window, cx);
         });
     });
+
+    remote_ui_extension::init(cx);
 }
 
 fn bind_on_window_closed(cx: &mut App) -> Option<gpui::Subscription> {

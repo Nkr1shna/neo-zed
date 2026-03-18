@@ -1,6 +1,8 @@
 use crate::persistence::model::DockData;
 use crate::{DraggedDock, Event, ModalLayer, Pane};
-use crate::{Workspace, status_bar::StatusItemView};
+use crate::{
+    Workspace, context_menu_hooks::PanelOverflowContextMenuHooks, status_bar::StatusItemView,
+};
 use anyhow::Context as _;
 use client::proto;
 
@@ -905,6 +907,7 @@ impl Render for PanelButtons {
         let active_index = dock.active_panel_index;
         let is_open = dock.is_open;
         let dock_position = dock.position;
+        let workspace = dock.workspace.clone();
 
         let (menu_anchor, menu_attach) = match dock.position {
             DockPosition::Left => (Corner::BottomLeft, Corner::TopLeft),
@@ -926,6 +929,7 @@ impl Render for PanelButtons {
                     .log_err()?;
                 let name = entry.panel.persistent_name();
                 let panel = entry.panel.clone();
+                let workspace = workspace.clone();
 
                 let is_active_button = Some(i) == active_index && is_open;
                 let (action, tooltip) = if is_active_button {
@@ -953,7 +957,9 @@ impl Render for PanelButtons {
                                 DockPosition::Bottom,
                             ];
 
-                            ContextMenu::build(window, cx, |mut menu, _, cx| {
+                            let workspace = workspace.clone();
+                            let panel = panel.clone();
+                            ContextMenu::build(window, cx, move |mut menu, window, cx| {
                                 for position in POSITIONS {
                                     if position != dock_position
                                         && panel.position_is_valid(position, cx)
@@ -968,7 +974,13 @@ impl Render for PanelButtons {
                                         )
                                     }
                                 }
-                                menu
+                                PanelOverflowContextMenuHooks::apply(
+                                    menu,
+                                    workspace.clone(),
+                                    panel.as_ref(),
+                                    window,
+                                    cx,
+                                )
                             })
                         })
                         .anchor(menu_anchor)

@@ -1,0 +1,28 @@
+#!/usr/bin/env bash
+
+set -euo pipefail
+
+repo_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+extension_id="remote-ui-example"
+install_root="${HOME}/Library/Application Support/Zed/extensions/installed/${extension_id}"
+icon_root="${install_root}/icons"
+
+cd "${repo_root}"
+
+pkill -f '/Applications/Zed.app/Contents/MacOS/zed' || true
+pkill -f 'target/debug/zed' || true
+
+cargo build -p zed
+cargo build --manifest-path "${repo_root}/extensions/remote-ui-example/Cargo.toml" --target wasm32-wasip2
+
+mkdir -p "${icon_root}"
+
+cp "${repo_root}/extensions/remote-ui-example/extension.toml" "${install_root}/extension.toml"
+cp "${repo_root}/target/wasm32-wasip2/debug/remote_ui_example.wasm" "${install_root}/extension.wasm"
+cp "${repo_root}/extensions/remote-ui-example/sidecar.js" "${install_root}/sidecar.js"
+cp "${repo_root}/extensions/remote-ui-example/icons/ai_open_ai.svg" "${icon_root}/ai_open_ai.svg"
+
+rm -f "${HOME}/Library/Application Support/Zed/extensions/index.json"
+
+RUST_LOG="${RUST_LOG:-extension_host=info,zed::zed::remote_ui_extension=info}" \
+    "${repo_root}/target/debug/zed" "${repo_root}"

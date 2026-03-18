@@ -152,6 +152,57 @@ pub trait Extension: Send + Sync + 'static {
         kv_store: Arc<dyn KeyValueStoreDelegate>,
     ) -> Result<()>;
 
+    async fn run_command(
+        &self,
+        command_id: Arc<str>,
+        context: CommandContext,
+        payload_json: Option<String>,
+    ) -> Result<()> {
+        let _ = (command_id, context, payload_json);
+        bail!("`run_command` not implemented")
+    }
+
+    async fn open_view(&self, contribution_id: Arc<str>, context: MountContext) -> Result<u64> {
+        let _ = (contribution_id, context);
+        bail!("`open_view` not implemented")
+    }
+
+    async fn render_view(
+        &self,
+        instance_id: u64,
+        context: MountContext,
+        reason: RenderReason,
+    ) -> Result<RemoteViewTree> {
+        let _ = (instance_id, context, reason);
+        bail!("`render_view` not implemented")
+    }
+
+    async fn handle_view_event(
+        &self,
+        instance_id: u64,
+        context: MountContext,
+        event: RemoteViewEvent,
+    ) -> Result<EventOutcome> {
+        let _ = (instance_id, context, event);
+        Ok(EventOutcome::Noop)
+    }
+
+    async fn render_virtual_list_range(
+        &self,
+        instance_id: u64,
+        node_id: String,
+        range: VirtualListRange,
+        context: MountContext,
+    ) -> Result<Vec<RemoteViewNode>> {
+        let _ = (instance_id, node_id, range, context);
+        Ok(Vec::new())
+    }
+
+    async fn close_view(&self, instance_id: u64) -> Result<()> {
+        let _ = instance_id;
+        Ok(())
+    }
+
     async fn get_dap_binary(
         &self,
         dap_name: Arc<str>,

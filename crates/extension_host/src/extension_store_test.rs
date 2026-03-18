@@ -5,7 +5,7 @@ use crate::{
 };
 use async_compression::futures::bufread::GzipEncoder;
 use collections::{BTreeMap, HashSet};
-use extension::ExtensionHostProxy;
+use extension::{ExtensionHostProxy, RemoteUiManifest};
 use fs::{FakeFs, Fs, RealFs};
 use futures::{AsyncReadExt, FutureExt, StreamExt, io::BufReader};
 use gpui::{AppContext as _, BackgroundExecutor, TestAppContext};
@@ -162,11 +162,13 @@ async fn test_extension_store(cx: &mut TestAppContext) {
                         agent_servers: BTreeMap::default(),
                         slash_commands: BTreeMap::default(),
                         snippets: None,
+                        sidecar: None,
                         capabilities: Vec::new(),
                         debug_adapters: Default::default(),
                         debug_locators: Default::default(),
                         language_model_providers: BTreeMap::default(),
                     }),
+                    remote_ui: RemoteUiManifest::default(),
                     dev: false,
                 },
             ),
@@ -194,11 +196,13 @@ async fn test_extension_store(cx: &mut TestAppContext) {
                         agent_servers: BTreeMap::default(),
                         slash_commands: BTreeMap::default(),
                         snippets: None,
+                        sidecar: None,
                         capabilities: Vec::new(),
                         debug_adapters: Default::default(),
                         debug_locators: Default::default(),
                         language_model_providers: BTreeMap::default(),
                     }),
+                    remote_ui: RemoteUiManifest::default(),
                     dev: false,
                 },
             ),
@@ -375,11 +379,13 @@ async fn test_extension_store(cx: &mut TestAppContext) {
                 agent_servers: BTreeMap::default(),
                 slash_commands: BTreeMap::default(),
                 snippets: None,
+                sidecar: None,
                 capabilities: Vec::new(),
                 debug_adapters: Default::default(),
                 debug_locators: Default::default(),
                 language_model_providers: BTreeMap::default(),
             }),
+            remote_ui: RemoteUiManifest::default(),
             dev: false,
         },
     );
@@ -529,6 +535,256 @@ async fn test_extension_store(cx: &mut TestAppContext) {
             [LanguageName::new_static("Plain Text")]
         );
         assert_eq!(language_registry.grammar_names(), []);
+    });
+}
+
+#[gpui::test]
+async fn test_extension_store_reloads_remote_ui_manifest_changes(cx: &mut TestAppContext) {
+    init_test(cx);
+
+    let fs = FakeFs::new(cx.executor());
+    let http_client = FakeHttpClient::with_200_response();
+
+    fs.insert_tree(
+        "/the-extension-dir",
+        json!({
+            "installed": {
+                "remote-ui": {
+                    "extension.toml": r#"
+id = "remote-ui"
+name = "Remote UI"
+version = "1.0.0"
+schema_version = 2
+
+[commands.sample-open]
+title = "Open Sample"
+description = "Open the sample panel"
+palette = true
+
+[panels.sample]
+title = "Sample"
+root_view = "sample.panel"
+toggle_command = "sample-open"
+
+[[titlebar_widgets]]
+id = "sample-titlebar"
+root_view = "sample.titlebar"
+side = "right"
+priority = 100
+"#
+                }
+            }
+        }),
+    )
+    .await;
+
+    let node_runtime = NodeRuntime::unavailable();
+    let proxy = Arc::new(ExtensionHostProxy::new());
+    let store = cx.new(|cx| {
+        ExtensionStore::new(
+            PathBuf::from("/the-extension-dir"),
+            None,
+            proxy.clone(),
+            fs.clone(),
+            http_client.clone(),
+            http_client.clone(),
+            None,
+            node_runtime.clone(),
+            cx,
+        )
+    });
+
+    cx.executor().advance_clock(RELOAD_DEBOUNCE_DURATION);
+    cx.executor().run_until_parked();
+    store.read_with(cx, |store, _| {
+        let entry = store
+            .extension_index
+            .extensions
+            .get("remote-ui")
+            .expect("remote-ui extension should be indexed");
+        assert!(
+            entry.manifest.provides().is_empty(),
+            "local remote UI loading should not depend on published catalog `provides` metadata",
+        );
+        assert_eq!(
+            entry
+                .remote_ui
+                .commands
+                .get("sample-open")
+                .map(|command| command.title.as_str()),
+            Some("Open Sample")
+        );
+    });
+
+    fs.insert_tree(
+        "/the-extension-dir/installed/remote-ui",
+        json!({
+            "extension.toml": r#"
+id = "remote-ui"
+name = "Remote UI"
+version = "1.0.0"
+schema_version = 2
+
+[commands.sample-open]
+title = "Open Sample Updated"
+description = "Open the sample panel"
+palette = true
+
+[panels.sample]
+title = "Sample"
+root_view = "sample.panel"
+toggle_command = "sample-open"
+
+[[titlebar_widgets]]
+id = "sample-titlebar"
+root_view = "sample.titlebar"
+side = "right"
+priority = 100
+"#
+        }),
+    )
+    .await;
+
+    #[allow(clippy::let_underscore_future)]
+    let _ = store.update(cx, |store, cx| store.reload(Some("remote-ui".into()), cx));
+    cx.executor().advance_clock(RELOAD_DEBOUNCE_DURATION);
+    cx.executor().run_until_parked();
+
+    store.read_with(cx, |store, _| {
+        let entry = store
+            .extension_index
+            .extensions
+            .get("remote-ui")
+            .expect("remote-ui extension should still be indexed");
+        assert_eq!(
+            entry
+                .remote_ui
+                .commands
+                .get("sample-open")
+                .map(|command| command.title.as_str()),
+            Some("Open Sample Updated")
+        );
+    });
+}
+
+#[gpui::test]
+async fn test_extension_store_rebuilds_stale_cached_index_missing_remote_ui(
+    cx: &mut TestAppContext,
+) {
+    init_test(cx);
+
+    let fs = FakeFs::new(cx.executor());
+    let http_client = FakeHttpClient::with_200_response();
+
+    fs.insert_tree(
+        "/the-extension-dir",
+        json!({
+            "installed": {
+                "remote-ui": {
+                    "extension.toml": r#"
+id = "remote-ui"
+name = "Remote UI"
+version = "1.0.0"
+schema_version = 2
+
+[commands.sample-open]
+title = "Open Sample"
+description = "Open the sample panel"
+palette = true
+
+[panels.sample]
+title = "Sample"
+root_view = "sample.panel"
+toggle_command = "sample-open"
+
+[[titlebar_widgets]]
+id = "sample-titlebar"
+root_view = "sample.titlebar"
+side = "right"
+priority = 100
+"#
+                }
+            }
+        }),
+    )
+    .await;
+
+    fs.save(
+        Path::new("/the-extension-dir/index.json"),
+        &json!({
+            "extensions": {
+                "remote-ui": {
+                    "manifest": {
+                        "id": "remote-ui",
+                        "name": "Remote UI",
+                        "version": "1.0.0",
+                        "schema_version": 2,
+                        "description": null,
+                        "repository": null,
+                        "authors": [],
+                        "lib": {
+                            "kind": "Rust",
+                            "version": null
+                        },
+                        "themes": [],
+                        "icon_themes": [],
+                        "languages": [],
+                        "grammars": {},
+                        "language_servers": {},
+                        "context_servers": {},
+                        "agent_servers": {},
+                        "slash_commands": {},
+                        "snippets": null,
+                        "capabilities": []
+                    },
+                    "dev": false
+                }
+            },
+            "themes": {},
+            "icon_themes": {},
+            "languages": {}
+        })
+        .to_string()
+        .into(),
+        Default::default(),
+    )
+    .await
+    .expect("stale index should save");
+
+    let node_runtime = NodeRuntime::unavailable();
+    let proxy = Arc::new(ExtensionHostProxy::new());
+    let store = cx.new(|cx| {
+        ExtensionStore::new(
+            PathBuf::from("/the-extension-dir"),
+            None,
+            proxy.clone(),
+            fs.clone(),
+            http_client.clone(),
+            http_client.clone(),
+            None,
+            node_runtime.clone(),
+            cx,
+        )
+    });
+
+    cx.executor().advance_clock(RELOAD_DEBOUNCE_DURATION);
+    cx.executor().run_until_parked();
+
+    store.read_with(cx, |store, _| {
+        let entry = store
+            .extension_index
+            .extensions
+            .get("remote-ui")
+            .expect("remote-ui extension should be indexed");
+        assert_eq!(
+            entry
+                .remote_ui
+                .commands
+                .get("sample-open")
+                .map(|command| command.title.as_str()),
+            Some("Open Sample")
+        );
+        assert_eq!(entry.remote_ui.titlebar_widgets.len(), 1);
     });
 }
 

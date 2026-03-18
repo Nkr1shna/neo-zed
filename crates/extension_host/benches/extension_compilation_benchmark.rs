@@ -140,6 +140,7 @@ fn manifest() -> ExtensionManifest {
         agent_servers: BTreeMap::default(),
         slash_commands: BTreeMap::default(),
         snippets: None,
+        sidecar: None,
         capabilities: vec![ExtensionCapability::ProcessExec(
             extension::ProcessExecCapability {
                 command: "echo".into(),

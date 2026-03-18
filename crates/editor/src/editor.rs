@@ -16,6 +16,7 @@ pub mod blink_manager;
 mod bracket_colorization;
 mod clangd_ext;
 pub mod code_context_menus;
+mod context_menu_hooks;
 pub mod display_map;
 mod document_colors;
 mod document_symbols;
@@ -54,6 +55,7 @@ mod signature_help;
 pub mod test;
 
 pub(crate) use actions::*;
+pub use context_menu_hooks::EditorContextMenuHooks;
 pub use display_map::{
     ChunkRenderer, ChunkRendererContext, DisplayPoint, FoldPlaceholder, HighlightKey,
     SemanticTokenHighlight,

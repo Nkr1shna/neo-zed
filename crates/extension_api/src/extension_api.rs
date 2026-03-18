@@ -3,6 +3,7 @@
 pub mod http_client;
 pub mod process;
 pub mod settings;
+pub mod sidecar;
 
 use core::fmt;
 
@@ -34,6 +35,11 @@ pub use wit::{
         npm_package_latest_version,
     },
     zed::extension::platform::{Architecture, Os, current_platform},
+    zed::extension::remote_ui::{
+        CommandContext, EventOutcome, HostMutation, MountContext, MountKind, ProgressBarProps,
+        RemoteViewEvent, RemoteViewEventKind, RemoteViewNode, RemoteViewNodeKind,
+        RemoteViewProperty, RemoteViewTree, RenderReason, VirtualListProps, VirtualListRange,
+    },
     zed::extension::slash_command::{
         SlashCommand, SlashCommandArgumentCompletion, SlashCommandOutput, SlashCommandOutputSection,
     },
@@ -63,6 +69,18 @@ pub fn set_language_server_installation_status(
     status: &LanguageServerInstallationStatus,
 ) {
     wit::set_language_server_installation_status(&language_server_id.0, status)
+}
+
+pub fn dispatch_workspace_action(
+    workspace_id: u64,
+    action_id: &str,
+    payload_json: Option<&str>,
+) -> Result<()> {
+    wit::zed::extension::remote_ui::dispatch_workspace_action(workspace_id, action_id, payload_json)
+}
+
+pub fn request_host_mutation(workspace_id: u64, mutation: &HostMutation) -> Result<()> {
+    wit::zed::extension::remote_ui::request_host_mutation(workspace_id, mutation)
 }
 
 /// A Zed extension.
@@ -216,6 +234,49 @@ pub trait Extension: Send + Sync {
         Err("`index_docs` not implemented".to_string())
     }
 
+    fn run_command(
+        &mut self,
+        _command_id: String,
+        _context: CommandContext,
+        _payload_json: Option<String>,
+    ) -> Result<(), String> {
+        Err("`run_command` not implemented".to_string())
+    }
+
+    fn open_view(&mut self, _contribution_id: String, _context: MountContext) -> Result<u64> {
+        Err("`open_view` not implemented".to_string())
+    }
+
+    fn render_view(
+        &mut self,
+        _instance_id: u64,
+        _context: MountContext,
+        _reason: RenderReason,
+    ) -> Result<RemoteViewTree, String> {
+        Err("`render_view` not implemented".to_string())
+    }
+
+    fn handle_view_event(
+        &mut self,
+        _instance_id: u64,
+        _context: MountContext,
+        _event: RemoteViewEvent,
+    ) -> Result<EventOutcome, String> {
+        Ok(EventOutcome::Noop)
+    }
+
+    fn render_virtual_list_range(
+        &mut self,
+        _instance_id: u64,
+        _node_id: String,
+        _range: VirtualListRange,
+        _context: MountContext,
+    ) -> Result<Vec<RemoteViewNode>, String> {
+        Ok(Vec::new())
+    }
+
+    fn close_view(&mut self, _instance_id: u64) {}
+
     /// Returns the debug adapter binary for the specified adapter name and configuration.
     fn get_dap_binary(
         &mut self,
@@ -355,7 +416,7 @@ pub static ZED_API_VERSION: [u8; 6] = *include_bytes!(concat!(env!("OUT_DIR"), "
 mod wit {
     wit_bindgen::generate!({
         skip: ["init-extension"],
-        path: "./wit/since_v0.8.0",
+        path: "./wit/since_v0.9.0",
     });
 }
 
@@ -517,6 +578,47 @@ impl wit::Guest for Component {
         database: &KeyValueStore,
     ) -> Result<(), String> {
         extension().index_docs(provider, package, database)
+    }
+
+    fn run_command(
+        command_id: String,
+        context: CommandContext,
+        payload_json: Option<String>,
+    ) -> Result<(), String> {
+        extension().run_command(command_id, context, payload_json)
+    }
+
+    fn open_view(contribution_id: String, context: MountContext) -> Result<u64, String> {
+        extension().open_view(contribution_id, context)
+    }
+
+    fn render_view(
+        instance_id: u64,
+        context: MountContext,
+        reason: RenderReason,
+    ) -> Result<RemoteViewTree, String> {
+        extension().render_view(instance_id, context, reason)
+    }
+
+    fn handle_view_event(
+        instance_id: u64,
+        context: MountContext,
+        event: RemoteViewEvent,
+    ) -> Result<EventOutcome, String> {
+        extension().handle_view_event(instance_id, context, event)
+    }
+
+    fn render_virtual_list_range(
+        instance_id: u64,
+        node_id: String,
+        range: VirtualListRange,
+        context: MountContext,
+    ) -> Result<Vec<RemoteViewNode>, String> {
+        extension().render_virtual_list_range(instance_id, node_id, range, context)
+    }
+
+    fn close_view(instance_id: u64) {
+        extension().close_view(instance_id)
     }
 
     fn get_dap_binary(

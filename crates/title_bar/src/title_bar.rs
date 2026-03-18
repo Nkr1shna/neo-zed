@@ -26,7 +26,7 @@ use client::{Client, UserStore, zed_urls};
 use cloud_api_types::Plan;
 use feature_flags::{AgentV2FeatureFlag, FeatureFlagAppExt};
 use gpui::{
-    Action, AnyElement, App, Context, Corner, Element, Empty, Entity, Focusable,
+    Action, AnyElement, AnyView, App, Context, Corner, Element, Empty, Entity, Focusable,
     InteractiveElement, IntoElement, MouseButton, ParentElement, Render,
     StatefulInteractiveElement, Styled, Subscription, WeakEntity, Window, actions, div,
 };
@@ -156,6 +156,8 @@ pub struct TitleBar {
     _subscriptions: Vec<Subscription>,
     banner: Entity<OnboardingBanner>,
     update_version: Entity<UpdateVersion>,
+    extension_left_item: Option<AnyView>,
+    extension_right_item: Option<AnyView>,
     screen_share_popover_handle: PopoverMenuHandle<ContextMenu>,
 }
 
@@ -206,6 +208,10 @@ impl Render for TitleBar {
             children.push(self.banner.clone().into_any_element())
         }
 
+        if let Some(item) = self.extension_left_item.clone() {
+            children.push(item.into_any_element());
+        }
+
         let status = self.client.status();
         let status = &*status.borrow();
         let user = self.user_store.read(cx).current_user();
@@ -230,6 +236,9 @@ impl Render for TitleBar {
                     user.is_none() && TitleBarSettings::get_global(cx).show_sign_in,
                     |this| this.child(self.render_sign_in_button(cx)),
                 )
+                .when_some(self.extension_right_item.clone(), |this, item| {
+                    this.child(item)
+                })
                 .child(self.render_organization_menu_button(cx))
                 .when(TitleBarSettings::get_global(cx).show_user_menu, |this| {
                     this.child(self.render_user_menu_button(cx))
@@ -409,8 +418,21 @@ impl TitleBar {
             _subscriptions: subscriptions,
             banner,
             update_version,
+            extension_left_item: None,
+            extension_right_item: None,
             screen_share_popover_handle: PopoverMenuHandle::default(),
         }
+    }
+
+    pub fn set_extension_items(
+        &mut self,
+        left_item: Option<AnyView>,
+        right_item: Option<AnyView>,
+        cx: &mut Context<Self>,
+    ) {
+        self.extension_left_item = left_item;
+        self.extension_right_item = right_item;
+        cx.notify();
     }
 
     fn worktree_count(&self, cx: &App) -> usize {

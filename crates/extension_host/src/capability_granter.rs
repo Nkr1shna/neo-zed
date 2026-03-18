@@ -110,6 +110,7 @@ mod tests {
             agent_servers: BTreeMap::default(),
             slash_commands: BTreeMap::default(),
             snippets: None,
+            sidecar: None,
             capabilities: vec![],
             debug_adapters: Default::default(),
             debug_locators: Default::default(),

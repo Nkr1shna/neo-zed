@@ -163,6 +163,7 @@
 - [Icon Theme Extensions](./extensions/icon-themes.md)
 - [Snippets Extensions](./extensions/snippets.md)
 - [Slash Command Extensions](./extensions/slash-commands.md)
+- [Remote View UI Extensions (Proposed)](./extensions/remote-view-ui.md)
 - [Agent Server Extensions](./extensions/agent-servers.md)
 - [MCP Server Extensions](./extensions/mcp-extensions.md)
 

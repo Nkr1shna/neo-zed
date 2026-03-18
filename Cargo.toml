@@ -233,6 +233,7 @@ members = [
     "extensions/glsl",
     "extensions/html",
     "extensions/proto",
+    "extensions/remote-ui-example",
     "extensions/slash-commands-example",
     "extensions/test-extension",
 

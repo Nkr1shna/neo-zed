@@ -1,0 +1,129 @@
+id = "remote-ui-example"
+name = "Remote UI Example"
+description = "An example extension that shows ChatGPT Codex usage in host-rendered widgets through a managed sidecar."
+version = "0.1.0"
+schema_version = 2
+authors = ["Zed Industries <hi@zed.dev>"]
+repository = "https://github.com/zed-industries/zed"
+
+[[capabilities]]
+kind = "process:exec"
+command = "node"
+args = ["sidecar.js"]
+
+[sidecar]
+command = "node"
+args = ["sidecar.js"]
+
+[commands.demo-open-panel]
+title = "Codex Usage: Open Panel"
+description = "Open the Codex usage panel"
+palette = true
+
+[commands.demo-refresh]
+title = "Codex Usage: Refresh"
+description = "Refresh ChatGPT Codex usage"
+palette = true
+
+[commands.demo-begin-login]
+title = "Codex Usage: Sign In"
+description = "Start the ChatGPT Codex sign-in flow"
+palette = true
+
+[commands.demo-logout]
+title = "Codex Usage: Sign Out"
+description = "Forget the saved ChatGPT Codex session"
+palette = false
+
+[commands.demo-open-url]
+title = "Codex Usage: Open ChatGPT"
+description = "Open ChatGPT in the browser"
+palette = false
+
+[panels.demo]
+title = "Codex Usage"
+icon = "zed_assistant"
+default_dock = "right"
+default_size = 360
+root_view = "demo.panel"
+toggle_command = "demo-open-panel"
+
+[[titlebar_widgets]]
+id = "demo-titlebar"
+root_view = "demo.titlebar"
+side = "right"
+size = "m"
+priority = 100
+refresh_interval_seconds = 60
+
+[[footer_widgets]]
+id = "demo-footer"
+root_view = "demo.footer"
+zone = "center"
+size = "l"
+priority = 100
+refresh_interval_seconds = 60
+
+[[menus]]
+id = "demo-palette-menu"
+location = "command-palette"
+title = "Codex Usage: Refresh"
+command = "demo-refresh"
+priority = 10
+
+[[menus]]
+id = "demo-editor-menu"
+location = "editor-context"
+title = "Codex Usage: Sign In"
+command = "demo-begin-login"
+priority = 20
+
+[[menus]]
+id = "demo-project-panel-menu"
+location = "project-panel-context"
+title = "Codex Usage: Refresh"
+command = "demo-refresh"
+priority = 20
+
+[[menus]]
+id = "demo-panel-overflow-menu"
+location = "panel-overflow"
+title = "Codex Usage: Sign Out"
+command = "demo-logout"
+panel = "demo"
+priority = 20
+
+[[menus]]
+id = "demo-item-tab-menu"
+location = "item-tab-context"
+title = "Codex Usage: Open Panel"
+command = "demo-open-panel"
+priority = 20
+
+[[context_actions]]
+id = "demo-editor-action"
+target = "editor"
+title = "Codex Usage: Sign In"
+command = "demo-begin-login"
+priority = 10
+
+[[context_actions]]
+id = "demo-project-panel-action"
+target = "project-panel"
+title = "Codex Usage: Refresh"
+command = "demo-refresh"
+priority = 10
+
+[[context_actions]]
+id = "demo-panel-action"
+target = "panel"
+title = "Codex Usage: Refresh Panel"
+command = "demo-refresh"
+priority = 10
+
+[[context_actions]]
+id = "demo-item-tab-action"
+target = "item-tab"
+title = "Codex Usage: Open Panel"
+command = "demo-open-panel"
+priority = 10

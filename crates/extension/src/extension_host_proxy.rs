@@ -8,7 +8,7 @@ use language::{BinaryStatus, LanguageMatcher, LanguageName, LoadedLanguage};
 use lsp::LanguageServerName;
 use parking_lot::RwLock;
 
-use crate::{Extension, SlashCommand};
+use crate::{Extension, HostMutation, RemoteUiManifest, SlashCommand};
 
 #[derive(Default)]
 struct GlobalExtensionHostProxy(Arc<ExtensionHostProxy>);
@@ -33,6 +33,7 @@ pub struct ExtensionHostProxy {
     context_server_proxy: RwLock<Option<Arc<dyn ExtensionContextServerProxy>>>,
     debug_adapter_provider_proxy: RwLock<Option<Arc<dyn ExtensionDebugAdapterProviderProxy>>>,
     language_model_provider_proxy: RwLock<Option<Arc<dyn ExtensionLanguageModelProviderProxy>>>,
+    remote_ui_proxy: RwLock<Option<Arc<dyn ExtensionRemoteUiProxy>>>,
 }
 
 impl ExtensionHostProxy {
@@ -59,6 +60,7 @@ impl ExtensionHostProxy {
             context_server_proxy: RwLock::default(),
             debug_adapter_provider_proxy: RwLock::default(),
             language_model_provider_proxy: RwLock::default(),
+            remote_ui_proxy: RwLock::default(),
         }
     }
 
@@ -103,6 +105,10 @@ impl ExtensionHostProxy {
         self.language_model_provider_proxy
             .write()
             .replace(Arc::new(proxy));
+    }
+
+    pub fn register_remote_ui_proxy(&self, proxy: impl ExtensionRemoteUiProxy) {
+        self.remote_ui_proxy.write().replace(Arc::new(proxy));
     }
 }
 
@@ -494,5 +500,105 @@ impl ExtensionLanguageModelProviderProxy for ExtensionHostProxy {
         };
 
         proxy.unregister_language_model_provider(provider_id, cx)
+    }
+}
+
+pub trait ExtensionRemoteUiProxy: Send + Sync + 'static {
+    fn register_remote_ui_extension(
+        &self,
+        extension_id: Arc<str>,
+        remote_ui: RemoteUiManifest,
+        cx: &mut App,
+    );
+
+    fn unregister_remote_ui_extension(&self, extension_id: Arc<str>, cx: &mut App);
+
+    fn dispatch_remote_ui_workspace_action(
+        &self,
+        workspace_id: u64,
+        action_id: &str,
+        payload_json: Option<&str>,
+        cx: &mut App,
+    ) -> Result<()>;
+
+    fn dispatch_remote_ui_command(
+        &self,
+        workspace_id: u64,
+        command_id: &str,
+        input_json: Option<&str>,
+        cx: &mut App,
+    ) -> Result<()>;
+
+    fn request_remote_ui_host_mutation(
+        &self,
+        extension_id: &str,
+        workspace_id: u64,
+        mutation: HostMutation,
+        cx: &mut App,
+    ) -> Result<()>;
+}
+
+impl ExtensionRemoteUiProxy for ExtensionHostProxy {
+    fn register_remote_ui_extension(
+        &self,
+        extension_id: Arc<str>,
+        remote_ui: RemoteUiManifest,
+        cx: &mut App,
+    ) {
+        let Some(proxy) = self.remote_ui_proxy.read().clone() else {
+            return;
+        };
+
+        proxy.register_remote_ui_extension(extension_id, remote_ui, cx)
+    }
+
+    fn unregister_remote_ui_extension(&self, extension_id: Arc<str>, cx: &mut App) {
+        let Some(proxy) = self.remote_ui_proxy.read().clone() else {
+            return;
+        };
+
+        proxy.unregister_remote_ui_extension(extension_id, cx)
+    }
+
+    fn dispatch_remote_ui_workspace_action(
+        &self,
+        workspace_id: u64,
+        action_id: &str,
+        payload_json: Option<&str>,
+        cx: &mut App,
+    ) -> Result<()> {
+        let Some(proxy) = self.remote_ui_proxy.read().clone() else {
+            return Ok(());
+        };
+
+        proxy.dispatch_remote_ui_workspace_action(workspace_id, action_id, payload_json, cx)
+    }
+
+    fn dispatch_remote_ui_command(
+        &self,
+        workspace_id: u64,
+        command_id: &str,
+        input_json: Option<&str>,
+        cx: &mut App,
+    ) -> Result<()> {
+        let Some(proxy) = self.remote_ui_proxy.read().clone() else {
+            return Ok(());
+        };
+
+        proxy.dispatch_remote_ui_command(workspace_id, command_id, input_json, cx)
+    }
+
+    fn request_remote_ui_host_mutation(
+        &self,
+        extension_id: &str,
+        workspace_id: u64,
+        mutation: HostMutation,
+        cx: &mut App,
+    ) -> Result<()> {
+        let Some(proxy) = self.remote_ui_proxy.read().clone() else {
+            return Ok(());
+        };
+
+        proxy.request_remote_ui_host_mutation(extension_id, workspace_id, mutation, cx)
     }
 }
