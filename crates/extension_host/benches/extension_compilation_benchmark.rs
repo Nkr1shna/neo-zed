@@ -24,6 +24,12 @@ fn extension_benchmarks(c: &mut Criterion) {
     let mut group = c.benchmark_group("load");
 
     let mut manifest = manifest();
+    let extension_dir = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+        .parent()
+        .unwrap()
+        .parent()
+        .unwrap()
+        .join("extensions/test-extension");
     let wasm_bytes = wasm_bytes(
         &cx,
         &mut manifest,
@@ -38,11 +44,16 @@ fn extension_benchmarks(c: &mut Criterion) {
 
     group.bench_function(BenchmarkId::from_parameter(1), |b| {
         b.iter_batched(
-            || wasm_bytes.clone(),
-            |wasm_bytes| {
+            || (extension_dir.clone(), wasm_bytes.clone()),
+            |(extension_dir, wasm_bytes)| {
                 let _extension = cx
                     .foreground_executor()
-                    .block_on(wasm_host.load_extension(wasm_bytes, &manifest, &cx.to_async()))
+                    .block_on(wasm_host.load_extension(
+                        extension_dir,
+                        wasm_bytes,
+                        &manifest,
+                        &cx.to_async(),
+                    ))
                     .unwrap();
             },
             BatchSize::SmallInput,
@@ -66,7 +77,7 @@ fn init() -> TestAppContext {
 
 fn wasm_bytes(cx: &TestAppContext, manifest: &mut ExtensionManifest, fs: Arc<dyn Fs>) -> Vec<u8> {
     let extension_builder = extension_builder();
-    let path = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+    let extension_dir = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
         .parent()
         .unwrap()
         .parent()
@@ -74,13 +85,13 @@ fn wasm_bytes(cx: &TestAppContext, manifest: &mut ExtensionManifest, fs: Arc<dyn
         .join("extensions/test-extension");
     cx.foreground_executor()
         .block_on(extension_builder.compile_extension(
-            &path,
+            &extension_dir,
             manifest,
             CompileExtensionOptions { release: true },
             fs,
         ))
         .unwrap();
-    std::fs::read(path.join("extension.wasm")).unwrap()
+    std::fs::read(extension_dir.join("extension.wasm")).unwrap()
 }
 
 fn extension_builder() -> ExtensionBuilder {
