@@ -9,7 +9,9 @@ use ui::{
     prelude::*,
 };
 
-use crate::{CycleModeSelector, ToggleProfileSelector, agent_documentation_side, ui::HoldForDefault};
+use crate::{
+    CycleModeSelector, ToggleProfileSelector, agent_documentation_side, ui::HoldForDefault,
+};
 
 pub struct ModeSelector {
     connection: Rc<dyn AgentSessionModes>,

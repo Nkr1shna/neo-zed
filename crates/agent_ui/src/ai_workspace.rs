@@ -26,33 +26,31 @@ use zed_actions::agent::{
     ResolveConflictedFilesWithAgent, ResolveConflictsWithAgent, ReviewBranchDiff,
 };
 
+#[cfg(test)]
+use crate::agent_workspace_surface::attach_workspace_controller;
 use crate::ui::{AcpOnboardingModal, ClaudeCodeOnboardingModal, HoldForDefault};
 use crate::{
     AddContextServer, ConversationView, CopyThreadToClipboard, CycleStartThreadIn, Follow,
-    InlineAssistant, LoadThreadFromClipboard, NewTextThread, NewThread,
-    OpenActiveThreadAsMarkdown, OpenAgentDiff, OpenHistory, ResetTrialEndUpsell, ResetTrialUpsell,
-    StartThreadIn, ToggleNavigationMenu, ToggleNewThreadMenu, ToggleOptionsMenu,
-    agent_documentation_side,
+    InlineAssistant, LoadThreadFromClipboard, NewTextThread, NewThread, OpenActiveThreadAsMarkdown,
+    OpenAgentDiff, OpenHistory, ResetTrialEndUpsell, ResetTrialUpsell, StartThreadIn,
+    ToggleNavigationMenu, ToggleNewThreadMenu, ToggleOptionsMenu,
     agent_configuration::{AgentConfiguration, AssistantConfigurationEvent},
+    agent_documentation_side,
     agent_workspace_surface::{
-        copy_thread_to_clipboard, cycle_start_thread_in,
-        deploy_active_panel_item_in_center, deploy_active_panel_item_in_center_from_panel,
-        expand_message_editor, focus_ai_surface, load_thread_from_clipboard,
-        new_external_agent_thread_in_center,
+        copy_thread_to_clipboard, cycle_start_thread_in, deploy_active_panel_item_in_center,
+        deploy_active_panel_item_in_center_from_panel, expand_message_editor, focus_ai_surface,
+        load_thread_from_clipboard, new_external_agent_thread_in_center,
         new_initial_content_thread_in_center, new_native_agent_thread_from_summary_in_center,
         new_text_thread_in_center, new_thread_in_center, open_agent_diff, open_history,
         open_rules_library_panel, open_saved_text_thread_in_center, open_settings,
-        reset_agent_zoom, workspace_controller,
-        set_start_thread_in, toggle_navigation_menu, toggle_new_thread_menu,
-        toggle_options_menu,
+        reset_agent_zoom, set_start_thread_in, toggle_navigation_menu, toggle_new_thread_menu,
+        toggle_options_menu, workspace_controller,
     },
     conversation_view::{AcpThreadViewEvent, ThreadView},
     slash_command::SlashCommandCompletionProvider,
     text_thread_editor::{AiWorkspaceDelegate, TextThreadEditor, make_lsp_adapter_delegate},
     ui::EndTrialUpsell,
 };
-#[cfg(test)]
-use crate::agent_workspace_surface::attach_workspace_controller;
 use crate::{
     Agent, AgentInitialContent, ExternalSourcePrompt, NewExternalAgentThread,
     NewNativeAgentThreadFromSummary,
@@ -640,7 +638,6 @@ pub struct AiWorkspace {
     agent_navigation_menu: Option<Entity<ContextMenu>>,
     _extension_subscription: Option<Subscription>,
     width: Option<Pixels>,
-    zoomed: bool,
     pending_serialization: Option<Task<Result<()>>>,
     onboarding: Entity<AiWorkspaceOnboarding>,
     selected_agent_type: AgentType,
@@ -976,7 +973,6 @@ impl AiWorkspace {
             agent_navigation_menu: None,
             _extension_subscription: extension_subscription,
             width: None,
-            zoomed: false,
             pending_serialization: None,
             onboarding,
             text_thread_history,
@@ -1086,9 +1082,29 @@ impl AiWorkspace {
         }
     }
 
+    fn selected_agent_label(&self, cx: &App) -> SharedString {
+        if let AgentType::Custom { id, .. } = &self.selected_agent_type {
+            self.project
+                .read(cx)
+                .agent_server_store()
+                .read(cx)
+                .agent_display_name(id)
+                .unwrap_or_else(|| self.selected_agent_type.label())
+        } else {
+            self.selected_agent_type.label()
+        }
+    }
+
     pub(crate) fn tab_title(&self, cx: &App) -> SharedString {
         match &self.active_view {
-            ActiveView::AgentThread { conversation_view } => conversation_view.read(cx).title(cx),
+            ActiveView::AgentThread { conversation_view } => {
+                let conversation_view = conversation_view.read(cx);
+                if conversation_view.as_connected().is_some() {
+                    self.selected_agent_label(cx)
+                } else {
+                    conversation_view.title(cx)
+                }
+            }
             ActiveView::TextThread {
                 text_thread_editor, ..
             } => match text_thread_editor.read(cx).text_thread().read(cx).summary() {
@@ -1242,10 +1258,7 @@ impl AiWorkspace {
                         serde_json::to_string(&LastUsedExternalAgent { agent }).log_err()
                     {
                         KEY_VALUE_STORE
-                            .write_kvp(
-                                LEGACY_LAST_USED_EXTERNAL_AGENT_KEY.to_string(),
-                                serialized,
-                            )
+                            .write_kvp(LEGACY_LAST_USED_EXTERNAL_AGENT_KEY.to_string(), serialized)
                             .await
                             .log_err();
                     }
@@ -1616,19 +1629,6 @@ impl AiWorkspace {
         theme::reset_agent_buffer_font_size(cx);
     }
 
-    pub fn toggle_zoom(&mut self, _: &ToggleZoom, window: &mut Window, cx: &mut Context<Self>) {
-        if self.zoomed {
-            self.zoomed = false;
-            cx.notify();
-        } else {
-            if !self.focus_handle(cx).contains_focused(window, cx) {
-                cx.focus_self(window);
-            }
-            self.zoomed = true;
-            cx.notify();
-        }
-    }
-
     pub(crate) fn open_configuration(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         let agent_server_store = self.project.read(cx).agent_server_store().clone();
         let context_server_store = self.project.read(cx).context_server_store();
@@ -1737,7 +1737,11 @@ impl AiWorkspace {
         });
     }
 
-    pub(crate) fn load_thread_from_clipboard(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+    pub(crate) fn load_thread_from_clipboard(
+        &mut self,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
         let Some(clipboard) = cx.read_from_clipboard() else {
             Self::show_deferred_toast(&self.workspace, "No clipboard content available", cx);
             return;
@@ -3188,11 +3192,7 @@ impl AiWorkspace {
     ) -> impl IntoElement {
         let focus_handle = self.focus_handle(cx);
 
-        let full_screen_label = if self.zoomed {
-            "Disable Full Screen"
-        } else {
-            "Enable Full Screen"
-        };
+        let full_screen_label = "Toggle Full Screen";
 
         let text_thread_view = match &self.active_view {
             ActiveView::TextThread {
@@ -3511,18 +3511,17 @@ impl AiWorkspace {
         let agent_server_store = self.project.read(cx).agent_server_store().clone();
         let focus_handle = self.focus_handle(cx);
 
-        let (selected_agent_custom_icon, selected_agent_label) =
+        let selected_agent_custom_icon =
             if let AgentType::Custom { id, .. } = &self.selected_agent_type {
-                let store = agent_server_store.read(cx);
-                let icon = store.agent_icon(&id);
-
-                let label = store
-                    .agent_display_name(&id)
-                    .unwrap_or_else(|| self.selected_agent_type.label());
-                (icon, label)
+                self.project
+                    .read(cx)
+                    .agent_server_store()
+                    .read(cx)
+                    .agent_icon(&id)
             } else {
-                (None, self.selected_agent_type.label())
+                None
             };
+        let selected_agent_label = self.selected_agent_label(cx);
 
         let active_thread = match &self.active_view {
             ActiveView::AgentThread { conversation_view } => {
@@ -3596,7 +3595,9 @@ impl AiWorkspace {
                                     move |window, cx| {
                                         if let Some(workspace) = workspace.upgrade() {
                                             workspace.update(cx, |workspace, cx| {
-                                                if let Some(panel) = workspace_controller(workspace, cx) {
+                                                if let Some(panel) =
+                                                    workspace_controller(workspace, cx)
+                                                {
                                                     panel.update(cx, |panel, cx| {
                                                         panel.new_agent_thread(
                                                             AgentType::NativeAgent,
@@ -3620,7 +3621,9 @@ impl AiWorkspace {
                                     move |window, cx| {
                                         if let Some(workspace) = workspace.upgrade() {
                                             workspace.update(cx, |workspace, cx| {
-                                                if let Some(panel) = workspace_controller(workspace, cx) {
+                                                if let Some(panel) =
+                                                    workspace_controller(workspace, cx)
+                                                {
                                                     panel.update(cx, |panel, cx| {
                                                         panel.new_agent_thread(
                                                             AgentType::TextThread,
@@ -3702,7 +3705,9 @@ impl AiWorkspace {
                                         move |window, cx| {
                                             if let Some(workspace) = workspace.upgrade() {
                                                 workspace.update(cx, |workspace, cx| {
-                                                    if let Some(panel) = workspace_controller(workspace, cx) {
+                                                    if let Some(panel) =
+                                                        workspace_controller(workspace, cx)
+                                                    {
                                                         panel.update(cx, |panel, cx| {
                                                             panel.new_agent_thread(
                                                                 AgentType::Custom {
@@ -3872,7 +3877,7 @@ impl AiWorkspace {
                         .gap_1()
                         .pl_1()
                         .pr_1()
-                        .when(show_history_menu && !has_v2_flag, |this| {
+                        .when(show_history_menu, |this| {
                             this.child(self.render_recent_entries_menu(
                                 IconName::MenuAltTemp,
                                 Corner::TopRight,
@@ -3924,7 +3929,7 @@ impl AiWorkspace {
                         .pl_1()
                         .pr_1()
                         .child(new_thread_menu)
-                        .when(show_history_menu && !has_v2_flag, |this| {
+                        .when(show_history_menu, |this| {
                             this.child(self.render_recent_entries_menu(
                                 IconName::MenuAltTemp,
                                 Corner::TopRight,
@@ -4410,7 +4415,6 @@ impl Render for AiWorkspace {
             .on_action(cx.listener(Self::increase_font_size))
             .on_action(cx.listener(Self::decrease_font_size))
             .on_action(cx.listener(Self::reset_font_size))
-            .on_action(cx.listener(Self::toggle_zoom))
             .on_action(cx.listener(|this, _: &ReauthenticateAgent, window, cx| {
                 if let Some(conversation_view) = this.active_conversation() {
                     conversation_view.update(cx, |conversation_view, cx| {
@@ -4776,6 +4780,7 @@ mod tests {
     use project::Project;
     use serde_json::json;
     use workspace::MultiWorkspace;
+    use workspace::item::Item;
 
     #[gpui::test]
     async fn test_active_thread_serialize_and_load_round_trip(cx: &mut TestAppContext) {
@@ -5068,9 +5073,7 @@ mod tests {
     }
 
     #[gpui::test]
-    async fn test_toggle_preserves_workspace_controller_after_attach(
-        cx: &mut TestAppContext,
-    ) {
+    async fn test_toggle_preserves_workspace_controller_after_attach(cx: &mut TestAppContext) {
         init_test(cx);
 
         let fs = FakeFs::new(cx.executor());
@@ -5120,6 +5123,69 @@ mod tests {
     }
 
     #[gpui::test]
+    async fn test_center_item_title_uses_selected_agent_label(cx: &mut TestAppContext) {
+        init_test(cx);
+
+        let fs = FakeFs::new(cx.executor());
+
+        cx.update(|cx| {
+            cx.update_flags(true, vec!["agent-v2".to_string()]);
+            agent::ThreadStore::init_global(cx);
+            language_model::LanguageModelRegistry::test(cx);
+        });
+
+        let project = Project::test(fs.clone(), [], cx).await;
+
+        let multi_workspace =
+            cx.add_window(|window, cx| MultiWorkspace::test_new(project.clone(), window, cx));
+
+        let workspace = multi_workspace
+            .read_with(cx, |multi_workspace, _cx| {
+                multi_workspace.workspace().clone()
+            })
+            .unwrap();
+
+        let cx = &mut VisualTestContext::from_window(multi_workspace.into(), cx);
+
+        let panel = workspace.update_in(cx, |workspace, window, cx| {
+            let text_thread_store = cx.new(|cx| TextThreadStore::fake(project.clone(), cx));
+            let panel =
+                cx.new(|cx| AiWorkspace::new(workspace, text_thread_store, None, window, cx));
+            attach_workspace_controller(workspace, panel.clone(), window, cx);
+            panel
+        });
+
+        panel.update_in(cx, |panel, window, cx| {
+            panel.open_external_thread_with_server(
+                Rc::new(StubAgentServer::default_response()),
+                window,
+                cx,
+            );
+        });
+
+        cx.run_until_parked();
+
+        workspace.update_in(cx, |workspace, window, cx| {
+            deploy_active_panel_item_in_center(&panel, workspace, window, cx);
+        });
+
+        let title = workspace.read_with(cx, |workspace, cx| {
+            workspace
+                .items_of_type::<crate::AgentWorkspaceItem>(cx)
+                .next()
+                .expect("expected a center AI workspace item")
+                .read(cx)
+                .tab_content_text(0, cx)
+        });
+
+        assert_eq!(
+            title.as_ref(),
+            "Codex CLI",
+            "center AI tabs should show the selected agent label"
+        );
+    }
+
+    #[gpui::test]
     async fn test_redeploy_existing_center_item_does_not_reenter_ai_workspace(
         cx: &mut TestAppContext,
     ) {
@@ -5159,7 +5225,9 @@ mod tests {
         });
 
         panel.update_in(cx, |panel, window, cx| {
-            assert!(deploy_active_panel_item_in_center_from_panel(panel, window, cx));
+            assert!(deploy_active_panel_item_in_center_from_panel(
+                panel, window, cx
+            ));
         });
 
         let item_count = workspace.read_with(cx, |workspace, cx| {
@@ -5168,7 +5236,75 @@ mod tests {
                 .count()
         });
 
-        assert_eq!(item_count, 1, "re-deploy should reuse the existing AI workspace tab");
+        assert_eq!(
+            item_count, 1,
+            "re-deploy should reuse the existing AI workspace tab"
+        );
+    }
+
+    #[gpui::test]
+    async fn test_toggle_zoom_from_message_editor_uses_workspace_zoom(cx: &mut TestAppContext) {
+        init_test(cx);
+
+        let fs = FakeFs::new(cx.executor());
+
+        cx.update(|cx| {
+            cx.update_flags(true, vec!["agent-v2".to_string()]);
+            agent::ThreadStore::init_global(cx);
+            language_model::LanguageModelRegistry::test(cx);
+        });
+
+        let project = Project::test(fs.clone(), [], cx).await;
+
+        let multi_workspace =
+            cx.add_window(|window, cx| MultiWorkspace::test_new(project.clone(), window, cx));
+
+        let workspace = multi_workspace
+            .read_with(cx, |multi_workspace, _cx| {
+                multi_workspace.workspace().clone()
+            })
+            .unwrap();
+
+        let cx = &mut VisualTestContext::from_window(multi_workspace.into(), cx);
+
+        let panel = workspace.update_in(cx, |workspace, window, cx| {
+            let text_thread_store = cx.new(|cx| TextThreadStore::fake(project.clone(), cx));
+            let panel =
+                cx.new(|cx| AiWorkspace::new(workspace, text_thread_store, None, window, cx));
+            attach_workspace_controller(workspace, panel.clone(), window, cx);
+            panel
+        });
+
+        panel.update_in(cx, |panel, window, cx| {
+            panel.open_external_thread_with_server(
+                Rc::new(StubAgentServer::default_response()),
+                window,
+                cx,
+            );
+        });
+
+        cx.run_until_parked();
+
+        workspace.update_in(cx, |workspace, window, cx| {
+            deploy_active_panel_item_in_center(&panel, workspace, window, cx);
+            panel.update(cx, |panel, cx| {
+                let active_thread = panel
+                    .active_conversation()
+                    .and_then(|conversation_view| {
+                        conversation_view.read(cx).active_thread().cloned()
+                    })
+                    .expect("ai workspace should have an active thread");
+                active_thread.focus_handle(cx).focus(window, cx);
+            });
+            window.dispatch_action(ToggleZoom.boxed_clone(), cx);
+        });
+
+        let zoomed = workspace.read_with(cx, |workspace, _cx| workspace.zoomed_item().is_some());
+
+        assert!(
+            zoomed,
+            "toggle zoom should zoom the center pane when the AI message editor is focused"
+        );
     }
 
     /// Extracts the text from a Text content block, panicking if it's not Text.

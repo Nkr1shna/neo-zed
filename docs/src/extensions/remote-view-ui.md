@@ -331,7 +331,6 @@ Extensions can declare dockable panels:
 - `title`
 - `icon`
 - `default_dock`
-- `default_size`
 - `root_view`
 - `toggle_command`
 
@@ -457,7 +456,6 @@ when = "workspace.trusted"
 title = "Sample"
 icon = "bolt"
 default_dock = "right"
-default_size = 320
 root_view = "sample.panel"
 toggle_command = "sample.open-panel"
 

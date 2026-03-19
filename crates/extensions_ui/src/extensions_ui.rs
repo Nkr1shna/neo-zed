@@ -11,7 +11,7 @@ use client::zed_urls;
 use cloud_api_types::{ExtensionMetadata, ExtensionProvides};
 use collections::{BTreeMap, BTreeSet};
 use editor::{Editor, EditorElement, EditorStyle};
-use extension_host::{ExtensionManifest, ExtensionOperation, ExtensionStore};
+use extension_host::{ExtensionIndexEntry, ExtensionOperation, ExtensionStore};
 use fuzzy::{StringMatchCandidate, match_strings};
 use gpui::{
     Action, App, ClipboardItem, Context, Corner, Entity, EventEmitter, Focusable,
@@ -69,6 +69,7 @@ pub fn init(cx: &mut App) {
                             ExtensionProvides::ContextServers
                         }
                         ExtensionCategoryFilter::AgentServers => ExtensionProvides::AgentServers,
+                        ExtensionCategoryFilter::RemoteUi => ExtensionProvides::RemoteUi,
                         ExtensionCategoryFilter::SlashCommands => ExtensionProvides::SlashCommands,
                         ExtensionCategoryFilter::IndexedDocsProviders => {
                             ExtensionProvides::IndexedDocsProviders
@@ -190,6 +191,7 @@ fn extension_provides_label(provides: ExtensionProvides) -> &'static str {
         ExtensionProvides::LanguageServers => "Language Servers",
         ExtensionProvides::ContextServers => "MCP Servers",
         ExtensionProvides::AgentServers => "Agent Servers",
+        ExtensionProvides::RemoteUi => "Remote UI",
         ExtensionProvides::SlashCommands => "Slash Commands",
         ExtensionProvides::IndexedDocsProviders => "Indexed Docs Providers",
         ExtensionProvides::Snippets => "Snippets",
@@ -321,7 +323,7 @@ pub struct ExtensionsPage {
     fetch_failed: bool,
     filter: ExtensionFilter,
     remote_extension_entries: Vec<ExtensionMetadata>,
-    dev_extension_entries: Vec<Arc<ExtensionManifest>>,
+    dev_extension_entries: Vec<ExtensionIndexEntry>,
     filtered_remote_extension_indices: Vec<usize>,
     filtered_dev_extension_indices: Vec<usize>,
     query_editor: Entity<Editor>,
@@ -457,7 +459,7 @@ impl ExtensionsPage {
 
         extension_store
             .dev_extensions()
-            .any(|dev_extension| dev_extension.id.as_ref() == extension_id)
+            .any(|dev_extension| dev_extension.manifest.id.as_ref() == extension_id)
     }
 
     fn extension_status(extension_id: &str, cx: &mut Context<Self>) -> ExtensionStatus {
@@ -504,8 +506,8 @@ impl ExtensionsPage {
             self.dev_extension_entries
                 .iter()
                 .enumerate()
-                .filter(|(_, manifest)| match self.provides_filter {
-                    Some(provides) => manifest.provides().contains(&provides),
+                .filter(|(_, extension)| match self.provides_filter {
+                    Some(provides) => extension.provides().contains(&provides),
                     None => true,
                 })
                 .map(|(ix, _)| ix),
@@ -561,7 +563,7 @@ impl ExtensionsPage {
                 let match_candidates = dev_extensions
                     .iter()
                     .enumerate()
-                    .map(|(ix, manifest)| StringMatchCandidate::new(ix, &manifest.name))
+                    .map(|(ix, extension)| StringMatchCandidate::new(ix, &extension.manifest.name))
                     .collect::<Vec<_>>();
 
                 let matches = match_strings(
@@ -641,14 +643,15 @@ impl ExtensionsPage {
 
     fn render_dev_extension(
         &self,
-        extension: &ExtensionManifest,
+        extension: &ExtensionIndexEntry,
         cx: &mut Context<Self>,
     ) -> ExtensionCard {
-        let status = Self::extension_status(&extension.id, cx);
+        let manifest = &extension.manifest;
+        let status = Self::extension_status(&manifest.id, cx);
 
-        let repository_url = extension.repository.clone();
+        let repository_url = manifest.repository.clone();
 
-        let can_configure = !extension.context_servers.is_empty();
+        let can_configure = !manifest.context_servers.is_empty();
 
         ExtensionCard::new()
             .child(
@@ -658,9 +661,9 @@ impl ExtensionsPage {
                         h_flex()
                             .gap_2()
                             .items_end()
-                            .child(Headline::new(extension.name.clone()).size(HeadlineSize::Medium))
+                            .child(Headline::new(manifest.name.clone()).size(HeadlineSize::Medium))
                             .child(
-                                Headline::new(format!("v{}", extension.version))
+                                Headline::new(format!("v{}", manifest.version))
                                     .size(HeadlineSize::XSmall),
                             ),
                     )
@@ -670,13 +673,13 @@ impl ExtensionsPage {
                             .justify_between()
                             .child(
                                 Button::new(
-                                    SharedString::from(format!("rebuild-{}", extension.id)),
+                                    SharedString::from(format!("rebuild-{}", manifest.id)),
                                     "Rebuild",
                                 )
                                 .color(Color::Accent)
                                 .disabled(matches!(status, ExtensionStatus::Upgrading))
                                 .on_click({
-                                    let extension_id = extension.id.clone();
+                                    let extension_id = manifest.id.clone();
                                     move |_, _, cx| {
                                         ExtensionStore::global(cx).update(cx, |store, cx| {
                                             store.rebuild_dev_extension(extension_id.clone(), cx)
@@ -685,11 +688,11 @@ impl ExtensionsPage {
                                 }),
                             )
                             .child(
-                                Button::new(extension_button_id(&extension.id, ExtensionOperation::Remove), "Uninstall")
+                                Button::new(extension_button_id(&manifest.id, ExtensionOperation::Remove), "Uninstall")
                                     .color(Color::Accent)
                                     .disabled(matches!(status, ExtensionStatus::Removing))
                                     .on_click({
-                                        let extension_id = extension.id.clone();
+                                        let extension_id = manifest.id.clone();
                                         move |_, _, cx| {
                                             ExtensionStore::global(cx).update(cx, |store, cx| {
                                                 store.uninstall_extension(extension_id.clone(), cx).detach_and_log_err(cx);
@@ -700,13 +703,13 @@ impl ExtensionsPage {
                             .when(can_configure, |this| {
                                 this.child(
                                     Button::new(
-                                        SharedString::from(format!("configure-{}", extension.id)),
+                                        SharedString::from(format!("configure-{}", manifest.id)),
                                         "Configure",
                                     )
                                     .color(Color::Accent)
                                     .disabled(matches!(status, ExtensionStatus::Installing))
                                     .on_click({
-                                        let manifest = Arc::new(extension.clone());
+                                        let manifest = manifest.clone();
                                         move |_, _, cx| {
                                             if let Some(events) =
                                                 extension::ExtensionEvents::try_global(cx)
@@ -733,12 +736,12 @@ impl ExtensionsPage {
                     .child(
                         Label::new(format!(
                             "{}: {}",
-                            if extension.authors.len() > 1 {
+                            if manifest.authors.len() > 1 {
                                 "Authors"
                             } else {
                                 "Author"
                             },
-                            extension.authors.join(", ")
+                            manifest.authors.join(", ")
                         ))
                         .size(LabelSize::Small)
                         .color(Color::Muted)
@@ -750,7 +753,7 @@ impl ExtensionsPage {
                 h_flex()
                     .gap_2()
                     .justify_between()
-                    .children(extension.description.as_ref().map(|description| {
+                    .children(manifest.description.as_ref().map(|description| {
                         Label::new(description.clone())
                             .size(LabelSize::Small)
                             .color(Color::Default)
@@ -758,7 +761,7 @@ impl ExtensionsPage {
                     }))
                     .children(repository_url.map(|repository_url| {
                         IconButton::new(
-                            SharedString::from(format!("repository-{}", extension.id)),
+                            SharedString::from(format!("repository-{}", manifest.id)),
                             IconName::Github,
                         )
                         .icon_color(Color::Accent)

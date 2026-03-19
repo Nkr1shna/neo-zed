@@ -4,6 +4,7 @@ use crate::{
     RELOAD_DEBOUNCE_DURATION, SchemaVersion,
 };
 use async_compression::futures::bufread::GzipEncoder;
+use cloud_api_types::ExtensionProvides;
 use collections::{BTreeMap, HashSet};
 use extension::{ExtensionHostProxy, RemoteUiManifest};
 use fs::{FakeFs, Fs, RealFs};
@@ -20,6 +21,7 @@ use release_channel::AppVersion;
 use reqwest_client::ReqwestClient;
 use serde_json::json;
 use settings::SettingsStore;
+use std::collections::BTreeSet;
 use std::{
     ffi::OsString,
     path::{Path, PathBuf},
@@ -602,9 +604,10 @@ priority = 100
             .extensions
             .get("remote-ui")
             .expect("remote-ui extension should be indexed");
-        assert!(
-            entry.manifest.provides().is_empty(),
-            "local remote UI loading should not depend on published catalog `provides` metadata",
+        assert_eq!(
+            entry.provides(),
+            BTreeSet::from([ExtensionProvides::RemoteUi]),
+            "local remote UI loading should index remote UI extensions under their published category",
         );
         assert_eq!(
             entry

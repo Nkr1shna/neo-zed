@@ -168,6 +168,16 @@ pub struct ExtensionIndexEntry {
     pub dev: bool,
 }
 
+impl ExtensionIndexEntry {
+    pub fn provides(&self) -> BTreeSet<ExtensionProvides> {
+        let mut provides = self.manifest.provides();
+        if !self.remote_ui.is_empty() {
+            provides.insert(ExtensionProvides::RemoteUi);
+        }
+        provides
+    }
+}
+
 #[derive(Clone, PartialEq, Eq, PartialOrd, Ord, Debug, Deserialize, Serialize)]
 pub struct ExtensionIndexThemeEntry {
     pub extension: Arc<str>,
@@ -441,11 +451,11 @@ impl ExtensionStore {
         &self.extension_index.extensions
     }
 
-    pub fn dev_extensions(&self) -> impl Iterator<Item = &Arc<ExtensionManifest>> {
+    pub fn dev_extensions(&self) -> impl Iterator<Item = &ExtensionIndexEntry> {
         self.extension_index
             .extensions
             .values()
-            .filter_map(|extension| extension.dev.then_some(&extension.manifest))
+            .filter(|extension| extension.dev)
     }
 
     pub fn extension_manifest_for_id(&self, extension_id: &str) -> Option<&Arc<ExtensionManifest>> {

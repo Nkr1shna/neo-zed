@@ -61,15 +61,15 @@ impl SidecarSnapshot {
         format!("{}%", self.primary_used_percent)
     }
 
-    fn footer_state_label(&self, sidecar_error: Option<&str>) -> &'static str {
+    fn footer_tooltip(&self, sidecar_error: Option<&str>) -> &'static str {
         if sidecar_error.is_some() {
-            "Retry"
+            "Retry ChatGPT Codex usage refresh"
         } else if self.is_pending() {
-            "Waiting"
+            "Waiting for ChatGPT sign-in to complete"
         } else if self.is_authenticated() {
-            "Weekly"
+            "Open the Codex usage panel"
         } else {
-            "Log in"
+            "Sign in to view Codex usage"
         }
     }
 
@@ -79,6 +79,38 @@ impl SidecarSnapshot {
 
     fn is_pending(&self) -> bool {
         self.auth_status == "pending"
+    }
+
+    fn primary_remaining_percent(&self) -> u32 {
+        self.usage_limits
+            .first()
+            .map(|usage_limit| usage_limit.remaining_percent)
+            .unwrap_or_else(|| 100_u32.saturating_sub(self.primary_used_percent.min(100)))
+    }
+
+    fn footer_summary(&self) -> String {
+        format!("{}% left", self.primary_remaining_percent())
+    }
+
+    fn panel_plan_label(&self) -> Option<String> {
+        let plan_type = self.plan_type.as_deref()?;
+        let normalized_plan_type = plan_type.replace(['-', '_'], " ");
+        let formatted_plan_type = normalized_plan_type
+            .split_whitespace()
+            .map(capitalize_plan_word)
+            .collect::<Vec<_>>()
+            .join(" ");
+
+        let label = if formatted_plan_type
+            .to_ascii_lowercase()
+            .contains("codex")
+        {
+            formatted_plan_type
+        } else {
+            format!("Codex {formatted_plan_type}")
+        };
+
+        Some(format!("Plan: {label}"))
     }
 }
 
@@ -184,7 +216,7 @@ impl zed::Extension for RemoteUiExampleExtension {
                 sync_sidecar_snapshot(view, true);
                 Ok(EventOutcome::Rerender)
             }
-            ("footer.status", RemoteViewEventKind::Click) => {
+            ("footer.root", RemoteViewEventKind::Click) => {
                 if view.snapshot.is_authenticated() {
                     toggle_panel(context.workspace_id)?;
                     Ok(EventOutcome::Noop)
@@ -256,38 +288,42 @@ fn render_titlebar_view(view: &DemoViewState) -> RemoteViewTree {
 }
 
 fn render_footer_view(view: &DemoViewState) -> RemoteViewTree {
+    let primary_remaining_percent = view.snapshot.primary_remaining_percent();
+
     RemoteViewTree {
         revision: view.revision,
         root_id: "footer.root".to_string(),
         nodes: vec![
-            node("footer.root", None, RemoteViewNodeKind::Row, [("gap", "4")]),
+            node(
+                "footer.root",
+                None,
+                RemoteViewNodeKind::Row,
+                [
+                    ("clickable", "true"),
+                    ("gap", "4"),
+                    (
+                        "tooltip",
+                        view.snapshot.footer_tooltip(view.sidecar_error.as_deref()),
+                    ),
+                ],
+            ),
             node(
                 "footer.icon",
                 Some("footer.root"),
                 RemoteViewNodeKind::Icon("icons/ai_open_ai.svg".to_string()),
-                [("tooltip", "ChatGPT Codex usage")],
+                [],
             ),
             node(
-                "footer.status",
+                "footer.summary",
                 Some("footer.root"),
-                RemoteViewNodeKind::Button(
-                    view.snapshot
-                        .footer_state_label(view.sidecar_error.as_deref())
-                        .to_string(),
-                ),
-                [("tooltip", "Authenticate or open the Codex usage panel")],
-            ),
-            node(
-                "footer.badge",
-                Some("footer.root"),
-                RemoteViewNodeKind::Badge(format!("7d {}", view.snapshot.secondary_used_percent)),
-                [("tooltip", "Seven day Codex usage")],
+                RemoteViewNodeKind::Text(view.snapshot.footer_summary()),
+                [],
             ),
             node(
                 "footer.progress",
                 Some("footer.root"),
                 RemoteViewNodeKind::ProgressBar(ProgressBarProps {
-                    value: view.snapshot.secondary_used_percent,
+                    value: primary_remaining_percent,
                     max_value: 100,
                 }),
                 [],
@@ -303,6 +339,15 @@ fn render_panel_view(view: &DemoViewState) -> RemoteViewTree {
         RemoteViewNodeKind::Column,
         [("gap", "8")],
     )];
+
+    if let Some(plan_label) = view.snapshot.panel_plan_label() {
+        nodes.push(node(
+            "panel.plan",
+            Some("panel.root"),
+            RemoteViewNodeKind::Text(plan_label),
+            [],
+        ));
+    }
 
     for usage_limit in view.snapshot.usage_limits.iter().take(5) {
         let section_id = format!("panel.limit.{}", usage_limit.id);
@@ -371,15 +416,6 @@ fn render_panel_view(view: &DemoViewState) -> RemoteViewTree {
         RemoteViewNodeKind::Text(view.snapshot.credits_summary.detail.clone()),
         [],
     ));
-
-    if let Some(plan_type) = &view.snapshot.plan_type {
-        nodes.push(node(
-            "panel.plan",
-            Some("panel.credits"),
-            RemoteViewNodeKind::Badge(plan_type.clone()),
-            [],
-        ));
-    }
 
     if let Some(sidecar_error) = view.sidecar_error.as_deref() {
         nodes.push(node(
@@ -519,6 +555,18 @@ fn optional_u32(
         .get(field_name)
         .and_then(zed::serde_json::Value::as_u64)
         .map(|value| value.min(u32::MAX as u64) as u32)
+}
+
+fn capitalize_plan_word(word: &str) -> String {
+    let mut characters = word.chars();
+    let Some(first_character) = characters.next() else {
+        return String::new();
+    };
+
+    first_character
+        .to_uppercase()
+        .chain(characters.flat_map(|character| character.to_lowercase()))
+        .collect()
 }
 
 fn node(
@@ -669,9 +717,56 @@ mod tests {
         assert!(node_ids.contains(&"panel.limit.spark-primary"));
         assert!(node_ids.contains(&"panel.limit.spark-secondary"));
         assert!(node_ids.contains(&"panel.limit.code-review-primary"));
+        assert!(node_ids.contains(&"panel.plan"));
         assert!(node_ids.contains(&"panel.credits"));
         assert!(node_ids.contains(&"panel.credits.balance"));
         assert!(node_ids.contains(&"panel.error"));
+    }
+
+    #[test]
+    fn footer_view_shows_primary_usage_progress() {
+        let view = demo_view_state();
+
+        let tree = render_footer_view(&view);
+        let node_ids = tree
+            .nodes
+            .iter()
+            .map(|node| node.node_id.as_str())
+            .collect::<Vec<_>>();
+
+        assert_eq!(tree.root_id, "footer.root");
+        assert_eq!(
+            node_ids,
+            vec![
+                "footer.root",
+                "footer.icon",
+                "footer.summary",
+                "footer.progress",
+            ]
+        );
+
+        let progress = tree
+            .nodes
+            .iter()
+            .find(|node| node.node_id == "footer.progress")
+            .expect("footer progress node should exist");
+        let summary = tree
+            .nodes
+            .iter()
+            .find(|node| node.node_id == "footer.summary")
+            .expect("footer summary node should exist");
+
+        assert!(matches!(
+            progress.kind,
+            RemoteViewNodeKind::ProgressBar(ProgressBarProps {
+                value: 94,
+                max_value: 100,
+            })
+        ));
+        assert!(matches!(
+            summary.kind,
+            RemoteViewNodeKind::Text(ref label) if label == "94% left"
+        ));
     }
 }
 

@@ -282,6 +282,9 @@ impl Database {
                         provides_agent_servers: ActiveValue::Set(
                             version.provides.contains(&ExtensionProvides::AgentServers),
                         ),
+                        provides_remote_ui: ActiveValue::Set(
+                            version.provides.contains(&ExtensionProvides::RemoteUi),
+                        ),
                         provides_slash_commands: ActiveValue::Set(
                             version.provides.contains(&ExtensionProvides::SlashCommands),
                         ),

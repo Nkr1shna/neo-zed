@@ -5,7 +5,10 @@ use action_log::DiffStats;
 use agent::{ContextServerRegistry, Thread};
 use agent_client_protocol as acp;
 use anyhow::{Result, anyhow};
-use gpui::{App, AsyncWindowContext, BorrowAppContext, Context, Entity, EntityId, Global, SharedString, Task, WeakEntity, Window};
+use gpui::{
+    App, AsyncWindowContext, BorrowAppContext, Context, Entity, EntityId, Global, SharedString,
+    Task, WeakEntity, Window,
+};
 use prompt_store::PromptStore;
 use ui::{AgentThreadStatus, IconName};
 use util::path_list::PathList;
@@ -14,10 +17,10 @@ use zed_actions::assistant::OpenRulesLibrary;
 use zed_actions::assistant::{Toggle, ToggleFocus};
 
 use crate::{
-    Agent, AgentDiffPane, AgentInitialContent, AiWorkspace, AiWorkspaceEvent, AgentWorkspaceItem,
+    Agent, AgentDiffPane, AgentInitialContent, AgentWorkspaceItem, AiWorkspace, AiWorkspaceEvent,
     ExternalSourcePrompt, NewNativeAgentThreadFromSummary, NewThread, StartThreadIn,
-    TextThreadEditor, ThreadHistory, ToggleNavigationMenu, ToggleNewThreadMenu,
-    ToggleOptionsMenu, agent_connection_store::AgentConnectionStore,
+    TextThreadEditor, ThreadHistory, ToggleNavigationMenu, ToggleNewThreadMenu, ToggleOptionsMenu,
+    agent_connection_store::AgentConnectionStore,
 };
 
 #[derive(Default)]
@@ -53,11 +56,7 @@ pub fn initialize(
     })
 }
 
-fn register_workspace_controller(
-    workspace: &Workspace,
-    panel: Entity<AiWorkspace>,
-    cx: &mut App,
-) {
+fn register_workspace_controller(workspace: &Workspace, panel: Entity<AiWorkspace>, cx: &mut App) {
     let workspace_id = workspace.weak_handle().entity_id();
     cx.update_default_global(|controllers: &mut AgentWorkspaceControllers, _cx| {
         controllers.by_workspace.insert(workspace_id, panel);
@@ -88,12 +87,13 @@ pub fn attach_workspace_controller(
     .detach();
 }
 
-pub fn workspace_controller(
-    workspace: &Workspace,
-    cx: &App,
-) -> Option<Entity<AiWorkspace>> {
+pub fn workspace_controller(workspace: &Workspace, cx: &App) -> Option<Entity<AiWorkspace>> {
     cx.try_global::<AgentWorkspaceControllers>()
-        .and_then(|controllers| controllers.by_workspace.get(&workspace.weak_handle().entity_id()))
+        .and_then(|controllers| {
+            controllers
+                .by_workspace
+                .get(&workspace.weak_handle().entity_id())
+        })
         .cloned()
 }
 
@@ -357,7 +357,9 @@ pub(crate) fn open_rules_library_panel(
     };
 
     deploy_panel_in_center(panel.clone(), workspace, window, cx);
-    panel.update(cx, |panel, cx| panel.deploy_rules_library(action, window, cx));
+    panel.update(cx, |panel, cx| {
+        panel.deploy_rules_library(action, window, cx)
+    });
     true
 }
 
@@ -571,10 +573,7 @@ pub(crate) fn active_agent_thread(
     workspace_controller(workspace, cx).and_then(|panel| panel.read(cx).active_agent_thread(cx))
 }
 
-pub fn focused_thread_id(
-    workspace: &Workspace,
-    cx: &gpui::App,
-) -> Option<acp::SessionId> {
+pub fn focused_thread_id(workspace: &Workspace, cx: &gpui::App) -> Option<acp::SessionId> {
     workspace_controller(workspace, cx).and_then(|panel| {
         panel
             .read(cx)
@@ -605,10 +604,7 @@ pub fn active_workspace_focused_thread_id(
         .and_then(|workspace| focused_thread_id(&workspace.read(cx), cx))
 }
 
-pub fn thread_summaries(
-    workspace: &Workspace,
-    cx: &gpui::App,
-) -> Vec<AgentThreadSummary> {
+pub fn thread_summaries(workspace: &Workspace, cx: &gpui::App) -> Vec<AgentThreadSummary> {
     let Some(ai_workspace) = workspace_controller(workspace, cx) else {
         return Vec::new();
     };
@@ -660,13 +656,11 @@ pub(crate) fn active_native_agent_thread(
     workspace: &Workspace,
     cx: &gpui::App,
 ) -> Option<Entity<Thread>> {
-    workspace_controller(workspace, cx).and_then(|panel| panel.read(cx).active_native_agent_thread(cx))
+    workspace_controller(workspace, cx)
+        .and_then(|panel| panel.read(cx).active_native_agent_thread(cx))
 }
 
-pub(crate) fn prompt_store(
-    workspace: &Workspace,
-    cx: &gpui::App,
-) -> Option<Entity<PromptStore>> {
+pub(crate) fn prompt_store(workspace: &Workspace, cx: &gpui::App) -> Option<Entity<PromptStore>> {
     workspace_controller(workspace, cx).and_then(|panel| panel.read(cx).prompt_store().clone())
 }
 
@@ -692,10 +686,7 @@ pub(crate) fn context_server_registry(
         .map(|panel| panel.read(cx).context_server_registry().clone())
 }
 
-pub fn thread_store(
-    workspace: &Workspace,
-    cx: &gpui::App,
-) -> Option<Entity<agent::ThreadStore>> {
+pub fn thread_store(workspace: &Workspace, cx: &gpui::App) -> Option<Entity<agent::ThreadStore>> {
     workspace_controller(workspace, cx).map(|panel| panel.read(cx).thread_store().clone())
 }
 
@@ -719,7 +710,13 @@ pub(crate) fn ai_surface_visible(workspace: &Workspace, cx: &gpui::App) -> bool 
             return false;
         };
 
-        active_item.to_any_view().downcast::<AgentWorkspaceItem>().is_ok()
-            || active_item.to_any_view().downcast::<TextThreadEditor>().is_ok()
+        active_item
+            .to_any_view()
+            .downcast::<AgentWorkspaceItem>()
+            .is_ok()
+            || active_item
+                .to_any_view()
+                .downcast::<TextThreadEditor>()
+                .is_ok()
     })
 }

@@ -68,23 +68,23 @@ use super::entry_view_state::EntryViewState;
 use super::thread_history::ThreadHistory;
 use crate::ModeSelector;
 use crate::ModelSelectorPopover;
-use crate::agent_workspace_surface::ai_surface_visible;
 use crate::agent_connection_store::{
     AgentConnectedState, AgentConnectionEntryEvent, AgentConnectionStore,
 };
 use crate::agent_diff::AgentDiff;
+use crate::agent_workspace_surface::ai_surface_visible;
 use crate::entry_view_state::{EntryViewEvent, ViewEvent};
 use crate::message_editor::{MessageEditor, MessageEditorEvent};
 use crate::profile_selector::{ProfileProvider, ProfileSelector};
 use crate::thread_metadata_store::ThreadMetadataStore;
 use crate::ui::{AgentNotification, AgentNotificationEvent};
 use crate::{
-    Agent, AgentDiffPane, AgentInitialContent, AllowAlways, AllowOnce,
-    AuthorizeToolCall, ClearMessageQueue, CycleFavoriteModels, CycleModeSelector,
-    CycleThinkingEffort, EditFirstQueuedMessage, ExpandMessageEditor, Follow, KeepAll, NewThread,
-    OpenAddContextMenu, OpenAgentDiff, OpenHistory, RejectAll, RejectOnce,
-    RemoveFirstQueuedMessage, SendImmediately, SendNextQueuedMessage, ToggleFastMode,
-    ToggleProfileSelector, ToggleThinkingEffortMenu, ToggleThinkingMode, UndoLastReject,
+    Agent, AgentDiffPane, AgentInitialContent, AllowAlways, AllowOnce, AuthorizeToolCall,
+    ClearMessageQueue, CycleFavoriteModels, CycleModeSelector, CycleThinkingEffort,
+    EditFirstQueuedMessage, ExpandMessageEditor, Follow, KeepAll, NewThread, OpenAddContextMenu,
+    OpenAgentDiff, OpenHistory, RejectAll, RejectOnce, RemoveFirstQueuedMessage, SendImmediately,
+    SendNextQueuedMessage, ToggleFastMode, ToggleProfileSelector, ToggleThinkingEffortMenu,
+    ToggleThinkingMode, UndoLastReject,
 };
 
 const STOPWATCH_THRESHOLD: Duration = Duration::from_secs(30);
@@ -2334,7 +2334,8 @@ impl ConversationView {
             return false;
         };
 
-        multi_workspace.read(cx).workspace() == &workspace && ai_surface_visible(&workspace.read(cx), cx)
+        multi_workspace.read(cx).workspace() == &workspace
+            && ai_surface_visible(&workspace.read(cx), cx)
     }
 
     fn agent_status_visible(&self, window: &Window, cx: &App) -> bool {
@@ -3327,8 +3328,8 @@ pub(crate) mod tests {
         workspace1.update_in(cx, |workspace, window, cx| {
             let text_thread_store =
                 cx.new(|cx| TextThreadStore::fake(workspace.project().clone(), cx));
-            let panel =
-                cx.new(|cx| crate::AiWorkspace::new(workspace, text_thread_store, None, window, cx));
+            let panel = cx
+                .new(|cx| crate::AiWorkspace::new(workspace, text_thread_store, None, window, cx));
             crate::attach_workspace_controller(workspace, panel, window, cx);
             crate::focus_ai_surface(workspace, window, cx);
         });
@@ -3408,7 +3409,7 @@ pub(crate) mod tests {
             "Expected notification when workspace is in background within MultiWorkspace"
         );
 
-        // Also verify: clicking "View Panel" should switch to workspace1.
+        // Also verify: clicking "View Chat" should switch to workspace1.
         cx.windows()
             .iter()
             .find_map(|window| window.downcast::<AgentNotification>())

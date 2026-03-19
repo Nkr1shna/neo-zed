@@ -2,10 +2,10 @@ mod agent_configuration;
 pub(crate) mod agent_connection_store;
 mod agent_diff;
 mod agent_model_selector;
-mod ai_workspace;
 mod agent_registry_ui;
 mod agent_workspace_item;
 mod agent_workspace_surface;
+mod ai_workspace;
 mod branch_names;
 mod buffer_codegen;
 mod completion_provider;
@@ -42,6 +42,7 @@ mod ui;
 use std::rc::Rc;
 use std::sync::Arc;
 
+use ::ui::DocumentationSide;
 use agent_client_protocol as acp;
 use agent_settings::{AgentProfileId, AgentSettings};
 use assistant_slash_command::SlashCommandRegistry;
@@ -63,24 +64,21 @@ use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 use settings::{LanguageModelSelection, Settings as _, SettingsStore};
 use std::any::TypeId;
-use ::ui::DocumentationSide;
 use workspace::Workspace;
 
 use crate::agent_configuration::{ConfigureContextServerModal, ManageProfilesModal};
-pub use crate::ai_workspace::{
-    AiWorkspace, AiWorkspaceEvent, ConcreteAiWorkspaceDelegate, WorktreeCreationStatus,
-};
 use crate::agent_registry_ui::AgentRegistryPage;
 pub use crate::agent_workspace_item::AgentWorkspaceItem;
 pub use crate::agent_workspace_surface::{
     AgentThreadSummary, active_workspace_focused_thread_id, agent_connection_store,
-    attach_workspace_controller,
-    focus_ai_surface,
-    focused_thread_id, focused_thread_id_for_panel, load_agent_thread_in_center,
-    initialize,
-    new_agent_thread_with_external_source_prompt_in_center,
-    open_saved_text_thread_in_center, open_thread_in_center, thread_store, thread_summaries,
-    toggle, toggle_focus, workspace_controller,
+    attach_workspace_controller, focus_ai_surface, focused_thread_id, focused_thread_id_for_panel,
+    initialize, load_agent_thread_in_center,
+    new_agent_thread_with_external_source_prompt_in_center, open_saved_text_thread_in_center,
+    open_thread_in_center, thread_store, thread_summaries, toggle, toggle_focus,
+    workspace_controller,
+};
+pub use crate::ai_workspace::{
+    AiWorkspace, AiWorkspaceEvent, ConcreteAiWorkspaceDelegate, WorktreeCreationStatus,
 };
 pub use crate::inline_assistant::InlineAssistant;
 pub use agent_diff::{AgentDiffPane, AgentDiffToolbar};

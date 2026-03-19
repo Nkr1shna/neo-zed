@@ -43,6 +43,7 @@ pub enum ExtensionProvides {
     LanguageServers,
     ContextServers,
     AgentServers,
+    RemoteUi,
     SlashCommands,
     IndexedDocsProviders,
     Snippets,

@@ -90,9 +90,9 @@ use workspace::notifications::{
 };
 
 use workspace::{
-    AppState, MultiWorkspace, NewFile, NewWindow, OpenLog, Toast, Workspace,
-    WorkspaceSettings, create_and_open_local_file,
-    notifications::simple_message_notification::MessageNotification, open_new,
+    AppState, MultiWorkspace, NewFile, NewWindow, OpenLog, Toast, Workspace, WorkspaceSettings,
+    create_and_open_local_file, notifications::simple_message_notification::MessageNotification,
+    open_new,
 };
 use workspace::{
     CloseIntent, CloseProject, CloseWindow, NotificationFrame, RestoreBanner,
@@ -681,13 +681,11 @@ async fn initialize_ai_surface(
     mut cx: AsyncWindowContext,
 ) -> anyhow::Result<()> {
     if !cfg!(test) {
-        let disable_ai = workspace_handle
-            .read_with(&cx, |_, cx| {
-                SettingsStore::global(cx)
-                    .get::<DisableAiSettings>(None)
-                    .disable_ai
-            })?
-            || cfg!(test);
+        let disable_ai = workspace_handle.read_with(&cx, |_, cx| {
+            SettingsStore::global(cx)
+                .get::<DisableAiSettings>(None)
+                .disable_ai
+        })? || cfg!(test);
         if !disable_ai {
             agent_ui::initialize(workspace_handle.clone(), prompt_builder.clone(), cx.clone())
                 .await?;

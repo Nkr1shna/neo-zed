@@ -259,11 +259,8 @@ impl InlineAssistant {
             return;
         }
 
-        let Some(inline_assist_target) = Self::resolve_inline_assist_target(
-            workspace,
-            window,
-            cx,
-        ) else {
+        let Some(inline_assist_target) = Self::resolve_inline_assist_target(workspace, window, cx)
+        else {
             return;
         };
 
@@ -1579,15 +1576,14 @@ impl InlineAssistant {
             return Some(InlineAssistTarget::Terminal(terminal_view));
         }
 
-        let text_thread_editor = active_text_thread_editor(workspace, cx)
-            .and_then(|editor| {
-                let editor = &editor.read(cx).editor().clone();
-                if editor.read(cx).is_focused(window) {
-                    Some(editor.clone())
-                } else {
-                    None
-                }
-            });
+        let text_thread_editor = active_text_thread_editor(workspace, cx).and_then(|editor| {
+            let editor = &editor.read(cx).editor().clone();
+            if editor.read(cx).is_focused(window) {
+                Some(editor.clone())
+            } else {
+                None
+            }
+        });
 
         if let Some(text_thread_editor) = text_thread_editor {
             Some(InlineAssistTarget::Editor(text_thread_editor))
@@ -1960,8 +1956,7 @@ impl CodeActionProvider for AssistantCodeActionProvider {
             let (thread_store, history) = cx.update(|_window, cx| {
                 let workspace = workspace.read(cx);
 
-                let history = native_agent_history(&workspace, cx)
-                    .map(|h| h.downgrade());
+                let history = native_agent_history(&workspace, cx).map(|h| h.downgrade());
 
                 anyhow::Ok((ThreadStore::global(cx), history))
             })??;

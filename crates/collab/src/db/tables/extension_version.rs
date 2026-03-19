@@ -25,6 +25,7 @@ pub struct Model {
     pub provides_language_servers: bool,
     pub provides_context_servers: bool,
     pub provides_agent_servers: bool,
+    pub provides_remote_ui: bool,
     pub provides_slash_commands: bool,
     pub provides_indexed_docs_providers: bool,
     pub provides_snippets: bool,
@@ -60,6 +61,10 @@ impl Model {
 
         if self.provides_agent_servers {
             provides.insert(ExtensionProvides::AgentServers);
+        }
+
+        if self.provides_remote_ui {
+            provides.insert(ExtensionProvides::RemoteUi);
         }
 
         if self.provides_slash_commands {

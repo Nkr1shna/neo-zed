@@ -17,11 +17,11 @@ use ui::{
 };
 use workspace::{ModalView, Workspace};
 
+use crate::ManageProfiles;
 use crate::agent_configuration::manage_profiles_modal::profile_modal_header::ProfileModalHeader;
 use crate::agent_configuration::tool_picker::{ToolPicker, ToolPickerDelegate};
 use crate::agent_workspace_surface::{active_native_agent_thread, context_server_registry};
 use crate::language_model_selector::{LanguageModelSelector, language_model_selector};
-use crate::ManageProfiles;
 
 enum Mode {
     ChooseProfile(ChooseProfileMode),

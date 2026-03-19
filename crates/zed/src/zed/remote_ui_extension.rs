@@ -28,7 +28,7 @@ use theme::ActiveTheme;
 use title_bar::TitleBar;
 use ui::{
     Button, ButtonCommon, Clickable, ContextMenu, ContextMenuEntry, ContextMenuItem, Divider, Icon,
-    IconButton, IconName, IconSize, PopoverMenu, ProgressBar, Tooltip,
+    IconButton, IconName, IconSize, PopoverMenu, ProgressBar, StyledTypography, Tab, Tooltip,
     utils::platform_title_bar_height, v_flex,
 };
 use util::ResultExt as _;
@@ -877,13 +877,11 @@ impl RemoteUiPanel {
         let body = if let Some(error_message) = &self.error_message {
             v_flex()
                 .gap_2()
-                .p_2()
                 .child(error_message.clone())
                 .into_any_element()
         } else if self.loading && self.tree.is_none() {
             v_flex()
                 .gap_2()
-                .p_2()
                 .child("Loading extension panel...")
                 .into_any_element()
         } else {
@@ -934,12 +932,16 @@ impl RemoteUiPanel {
 
         v_flex()
             .size_full()
+            .text_ui(cx)
             .child(
                 ui::h_flex()
+                    .h(Tab::container_height(cx))
                     .justify_between()
                     .items_center()
                     .px_2()
-                    .py_1()
+                    .bg(cx.theme().colors().tab_bar_background)
+                    .border_b_1()
+                    .border_color(cx.theme().colors().border)
                     .child(self.descriptor.title.clone())
                     .children(menu.into_iter().map(|_| {
                         let workspace = self.workspace.clone();
@@ -962,8 +964,7 @@ impl RemoteUiPanel {
                             )
                     })),
             )
-            .child(Divider::horizontal())
-            .child(body)
+            .child(v_flex().size_full().p_2().child(body))
             .into_any_element()
     }
 
@@ -1187,7 +1188,7 @@ impl Render for RemoteUiPanel {
         v_flex()
             .size_full()
             .track_focus(&self.focus_handle(cx))
-            .p_2()
+            .text_ui(cx)
             .child(self.render_content(window, cx))
     }
 }
@@ -1725,13 +1726,24 @@ impl RemoteUiWidget {
                         .into_any_element()
                 }
             }
-            RemoteViewNodeKind::ProgressBar(props) => ProgressBar::new(
-                node.node_id.clone(),
-                props.value as f32,
-                props.max_value.max(1) as f32,
-                cx,
-            )
-            .into_any_element(),
+            RemoteViewNodeKind::ProgressBar(props) => {
+                let progress_bar = ProgressBar::new(
+                    node.node_id.clone(),
+                    props.value as f32,
+                    props.max_value.max(1) as f32,
+                    cx,
+                );
+
+                if let Some(width) = widget_progress_bar_width(&self.descriptor) {
+                    gpui::div()
+                        .w(width)
+                        .flex_none()
+                        .child(progress_bar)
+                        .into_any_element()
+                } else {
+                    progress_bar.into_any_element()
+                }
+            }
             RemoteViewNodeKind::Divider => Divider::horizontal().into_any_element(),
             RemoteViewNodeKind::Spacer => gpui::div().flex_grow().into_any_element(),
             RemoteViewNodeKind::ScrollView => {
@@ -1890,6 +1902,15 @@ fn widget_width_bounds(widget: &RegisteredRemoteUiWidget) -> (Option<u32>, Optio
     };
 
     (min_width, max_width)
+}
+
+fn widget_progress_bar_width(widget: &RegisteredRemoteUiWidget) -> Option<Pixels> {
+    match (widget.surface, widget.side, widget.size) {
+        (WidgetSurface::Footer, StripSide::Center, WidgetSize::Small) => Some(px(24.)),
+        (WidgetSurface::Footer, StripSide::Center, WidgetSize::Medium) => Some(px(48.)),
+        (WidgetSurface::Footer, StripSide::Center, WidgetSize::Large) => Some(px(72.)),
+        _ => None,
+    }
 }
 
 fn validate_widget_tree(widget: &RegisteredRemoteUiWidget, tree: &RemoteViewTree) -> Result<()> {
@@ -3249,6 +3270,37 @@ mod tests {
         };
 
         validate_widget_tree(&widget, &tree).expect("footer center cluster should be valid");
+    }
+
+    #[test]
+    fn footer_center_progress_bars_get_inline_width() {
+        let large_widget = RegisteredRemoteUiWidget {
+            qualified_widget_id: "remote-ui::footer-center".into(),
+            extension_id: "remote-ui".into(),
+            root_view: "footer-center".into(),
+            surface: WidgetSurface::Footer,
+            side: StripSide::Center,
+            size: WidgetSize::Large,
+            priority: 10,
+            min_width: None,
+            max_width: None,
+            refresh_interval_seconds: None,
+        };
+        let titlebar_widget = RegisteredRemoteUiWidget {
+            qualified_widget_id: "remote-ui::titlebar".into(),
+            extension_id: "remote-ui".into(),
+            root_view: "titlebar".into(),
+            surface: WidgetSurface::Titlebar,
+            side: StripSide::Right,
+            size: WidgetSize::Large,
+            priority: 10,
+            min_width: None,
+            max_width: None,
+            refresh_interval_seconds: None,
+        };
+
+        assert_eq!(widget_progress_bar_width(&large_widget), Some(px(72.)));
+        assert_eq!(widget_progress_bar_width(&titlebar_widget), None);
     }
 
     fn test_remote_view_node(

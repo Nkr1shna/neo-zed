@@ -58,12 +58,7 @@ impl AgentWorkspaceItem {
             let item_focus_handle = ai_workspace.read(cx).item_focus_handle();
             let item_title = ai_workspace.read(cx).tab_title(cx);
             let item = cx.new(|cx| {
-                AgentWorkspaceItem::new(
-                    ai_workspace.clone(),
-                    item_focus_handle,
-                    item_title,
-                    cx,
-                )
+                AgentWorkspaceItem::new(ai_workspace.clone(), item_focus_handle, item_title, cx)
             });
             workspace.add_item_to_center(Box::new(item.clone()), window, cx);
             item
@@ -101,8 +96,6 @@ impl Item for AgentWorkspaceItem {
 
 impl gpui::Render for AgentWorkspaceItem {
     fn render(&mut self, _window: &mut Window, _cx: &mut Context<Self>) -> impl IntoElement {
-        v_flex()
-            .size_full()
-            .child(self.ai_workspace.clone())
+        v_flex().size_full().child(self.ai_workspace.clone())
     }
 }

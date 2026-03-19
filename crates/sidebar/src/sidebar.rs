@@ -1984,7 +1984,11 @@ impl Sidebar {
             return;
         };
         let fs = workspace_read.project().read(cx).fs().clone();
-        let agent_server_store = workspace_read.project().read(cx).agent_server_store().clone();
+        let agent_server_store = workspace_read
+            .project()
+            .read(cx)
+            .agent_server_store()
+            .clone();
 
         let archive_view = cx.new(|cx| {
             ThreadsArchiveView::new(
@@ -3159,7 +3163,8 @@ mod tests {
     ) -> Entity<AiWorkspace> {
         workspace.update_in(cx, |workspace, window, cx| {
             let text_thread_store = cx.new(|cx| TextThreadStore::fake(project.clone(), cx));
-            let panel = cx.new(|cx| AiWorkspace::test_new(workspace, text_thread_store, window, cx));
+            let panel =
+                cx.new(|cx| AiWorkspace::test_new(workspace, text_thread_store, window, cx));
             attach_workspace_controller(workspace, panel.clone(), window, cx);
             panel
         })

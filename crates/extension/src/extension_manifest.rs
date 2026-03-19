@@ -1124,7 +1124,6 @@ input_schema = "schemas/sample.json"
 title = "Sample"
 icon = "bolt"
 default_dock = "right"
-default_size = 320
 root_view = "sample.panel"
 toggle_command = "sample-open"
 
@@ -1207,7 +1206,7 @@ priority = 100
                     title: "Sample".to_string(),
                     icon: None,
                     default_dock: None,
-                    default_size: Some(320),
+                    default_size: None,
                     root_view: "sample.panel".to_string(),
                     toggle_command: Some("missing-command".to_string()),
                 },
@@ -1291,7 +1290,7 @@ toggle_command = "sample-open"
 
         assert!(
             manifest.provides().is_empty(),
-            "remote UI contributions should not be published as `provides` until catalog support lands"
+            "remote UI contributions are tracked separately from manifest-local `provides`"
         );
     }
 
