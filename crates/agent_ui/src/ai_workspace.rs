@@ -2010,6 +2010,21 @@ impl AiWorkspace {
                     },
                 ))
             }
+            ActiveView::TextThread {
+                text_thread_editor, ..
+            } => {
+                self._thread_view_subscription = None;
+                self._active_thread_focus_subscription = None;
+                Some(cx.observe_in(
+                    text_thread_editor,
+                    window,
+                    |this, _text_thread_editor, _window, cx| {
+                        cx.emit(AiWorkspaceEvent::ActiveViewChanged);
+                        this.serialize(cx);
+                        cx.notify();
+                    },
+                ))
+            }
             _ => {
                 self._thread_view_subscription = None;
                 self._active_thread_focus_subscription = None;

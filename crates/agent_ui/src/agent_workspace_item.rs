@@ -1,22 +1,43 @@
 use gpui::{
     App, AppContext, Context, Entity, EventEmitter, FocusHandle, Focusable, IntoElement,
-    ParentElement, SharedString, Styled, Window,
+    ParentElement, SharedString, Styled, Subscription, Window,
 };
 use ui::v_flex;
 use workspace::{Item, Workspace, item::ItemEvent};
 
-use crate::AiWorkspace;
+use crate::{AiWorkspace, AiWorkspaceEvent};
 
 pub struct AgentWorkspaceItem {
     ai_workspace: Entity<AiWorkspace>,
     focus_handle: FocusHandle,
+    title: SharedString,
+    _subscriptions: Vec<Subscription>,
 }
 
 impl AgentWorkspaceItem {
-    pub fn new(ai_workspace: Entity<AiWorkspace>, focus_handle: FocusHandle) -> Self {
+    pub fn new(
+        ai_workspace: Entity<AiWorkspace>,
+        focus_handle: FocusHandle,
+        title: SharedString,
+        cx: &mut Context<Self>,
+    ) -> Self {
+        let subscription = cx.subscribe(
+            &ai_workspace,
+            |this, ai_workspace, event: &AiWorkspaceEvent, cx| {
+                if matches!(event, AiWorkspaceEvent::ActiveViewChanged) {
+                    let next_title = ai_workspace.read(cx).tab_title(cx);
+                    if this.title != next_title {
+                        this.title = next_title;
+                        cx.emit(ItemEvent::UpdateTab);
+                    }
+                }
+            },
+        );
         Self {
             ai_workspace,
             focus_handle,
+            title,
+            _subscriptions: vec![subscription],
         }
     }
 
@@ -35,7 +56,15 @@ impl AgentWorkspaceItem {
             existing_item
         } else {
             let item_focus_handle = ai_workspace.read(cx).item_focus_handle();
-            let item = cx.new(|_| AgentWorkspaceItem::new(ai_workspace.clone(), item_focus_handle));
+            let item_title = ai_workspace.read(cx).tab_title(cx);
+            let item = cx.new(|cx| {
+                AgentWorkspaceItem::new(
+                    ai_workspace.clone(),
+                    item_focus_handle,
+                    item_title,
+                    cx,
+                )
+            });
             workspace.add_item_to_center(Box::new(item.clone()), window, cx);
             item
         }
@@ -57,12 +86,12 @@ impl Focusable for AgentWorkspaceItem {
 impl Item for AgentWorkspaceItem {
     type Event = ItemEvent;
 
-    fn tab_content_text(&self, _detail: usize, cx: &App) -> SharedString {
-        self.ai_workspace.read(cx).tab_title(cx)
+    fn tab_content_text(&self, _detail: usize, _cx: &App) -> SharedString {
+        self.title.clone()
     }
 
-    fn tab_tooltip_text(&self, cx: &App) -> Option<SharedString> {
-        Some(self.tab_content_text(0, cx))
+    fn tab_tooltip_text(&self, _cx: &App) -> Option<SharedString> {
+        Some(self.title.clone())
     }
 
     fn to_item_events(event: &Self::Event, emit: &mut dyn FnMut(ItemEvent)) {
