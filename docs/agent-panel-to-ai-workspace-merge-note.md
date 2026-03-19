@@ -1,6 +1,16 @@
-# AI Workspace And Dock Sizing Merge Notes
+# AgentPanel To AiWorkspace Merge Note
 
 This note documents the migration that removed the docked `AgentPanel` model, moved AI chat to a center-tab `AiWorkspace`, and shifted dock sizing ownership to the host workspace/dock system.
+
+## Upstream Merge Checklist
+
+Use this when pulling or rebasing from upstream:
+
+1. Preserve the `AgentPanel` -> `AiWorkspace` runtime rename.
+2. Preserve the center `Item` entry path through `AgentWorkspaceItem` and `agent_workspace_surface`.
+3. Preserve host-owned dock sizing and keep remote `default_size` ignored.
+4. Keep only the legacy persistence strings in `crates/agent_ui/src/ai_workspace.rs`.
+5. Re-run the sanity checks at the bottom of this note.
 
 ## Scope
 
