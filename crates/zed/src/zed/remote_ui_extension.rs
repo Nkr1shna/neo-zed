@@ -1,4 +1,8 @@
-use std::{fs, sync::Arc, time::Duration};
+use std::{
+    fs,
+    sync::Arc,
+    time::{Duration, Instant},
+};
 
 use anyhow::{Context as _, Result, anyhow, bail};
 use collections::HashMap;
@@ -1314,27 +1318,53 @@ impl RemoteUiWidget {
         cx.notify();
 
         cx.spawn(async move |this, cx| {
+            let total_start = Instant::now();
             let result = async {
+                let mut open_duration = None;
                 let instance_id = match existing_instance_id {
                     Some(instance_id) => instance_id,
                     None => {
-                        extension
+                        let open_start = Instant::now();
+                        let instance_id = extension
                             .open_view(descriptor.root_view.clone(), mount_context.clone())
-                            .await?
+                            .await?;
+                        open_duration = Some(open_start.elapsed());
+                        instance_id
                     }
                 };
+                let render_start = Instant::now();
                 let tree = extension
                     .render_view(instance_id, mount_context, reason)
                     .await?;
-                Ok::<_, anyhow::Error>((instance_id, tree))
+                Ok::<_, anyhow::Error>((
+                    instance_id,
+                    tree,
+                    open_duration,
+                    render_start.elapsed(),
+                    total_start.elapsed(),
+                ))
             }
             .await;
 
             this.update(cx, |widget, cx| {
                 widget.loading = false;
                 match result {
-                    Ok((instance_id, tree)) => {
+                    Ok((instance_id, tree, open_duration, render_duration, total_duration)) => {
                         widget.instance_id = Some(instance_id);
+                        if matches!(reason, RenderReason::Initial)
+                            || total_duration >= Duration::from_millis(100)
+                        {
+                            log::info!(
+                                "remote ui widget ready widget_id={} surface={:?} side={:?} reason={reason:?} total_ms={} open_ms={} render_ms={} reused_instance={}",
+                                widget.descriptor.qualified_widget_id,
+                                widget.descriptor.surface,
+                                widget.descriptor.side,
+                                total_duration.as_millis(),
+                                open_duration.map_or(0, |duration| duration.as_millis()),
+                                render_duration.as_millis(),
+                                existing_instance_id.is_some(),
+                            );
+                        }
                         match validate_widget_tree(&widget.descriptor, &tree) {
                             Ok(()) => {
                                 widget.tree = Some(tree);
@@ -2161,34 +2191,37 @@ fn mount_remote_ui_widget_strips_for_workspace(
             surface: WidgetSurface::Footer,
             side,
         };
-        let footer_strip = RemoteUiRegistry::read_global(cx)
+        let footer_strip = if let Some(strip) = RemoteUiRegistry::read_global(cx)
             .and_then(|registry| registry.mounted_widget_strip(footer_key))
             .and_then(|strip| strip.upgrade())
-            .unwrap_or_else(|| {
-                let strip = cx.new(|cx| {
-                    RemoteUiWidgetStrip::new(
-                        WidgetSurface::Footer,
-                        side,
-                        workspace_handle.clone(),
-                        workspace_id,
-                        cx,
-                    )
-                });
-                workspace
-                    .status_bar()
-                    .update(cx, |status_bar, cx| match side {
-                        StripSide::Left => status_bar.add_left_item(strip.clone(), window, cx),
-                        StripSide::Center => status_bar.add_center_item(strip.clone(), window, cx),
-                        StripSide::Right => status_bar.add_right_item(strip.clone(), window, cx),
-                    });
-                RemoteUiRegistry::update_global(cx, |registry| {
-                    registry.remember_widget_strip(footer_key, strip.downgrade());
-                });
-                strip
+        {
+            strip.update(cx, |strip, cx| strip.refresh(cx));
+            strip
+        } else {
+            let strip = cx.new(|cx| {
+                RemoteUiWidgetStrip::new(
+                    WidgetSurface::Footer,
+                    side,
+                    workspace_handle.clone(),
+                    workspace_id,
+                    cx,
+                )
             });
-        footer_strip.update(cx, |strip, cx| strip.refresh(cx));
+            workspace
+                .status_bar()
+                .update(cx, |status_bar, cx| match side {
+                    StripSide::Left => status_bar.add_left_item(strip.clone(), window, cx),
+                    StripSide::Center => status_bar.add_center_item(strip.clone(), window, cx),
+                    StripSide::Right => status_bar.add_right_item(strip.clone(), window, cx),
+                });
+            RemoteUiRegistry::update_global(cx, |registry| {
+                registry.remember_widget_strip(footer_key, strip.downgrade());
+            });
+            strip
+        };
 
         if side == StripSide::Center {
+            let _ = footer_strip;
             continue;
         }
 
@@ -2197,25 +2230,25 @@ fn mount_remote_ui_widget_strips_for_workspace(
             surface: WidgetSurface::Titlebar,
             side,
         };
-        let titlebar_strip = RemoteUiRegistry::read_global(cx)
+        if let Some(strip) = RemoteUiRegistry::read_global(cx)
             .and_then(|registry| registry.mounted_widget_strip(titlebar_key))
             .and_then(|strip| strip.upgrade())
-            .unwrap_or_else(|| {
-                let strip = cx.new(|cx| {
-                    RemoteUiWidgetStrip::new(
-                        WidgetSurface::Titlebar,
-                        side,
-                        workspace_handle.clone(),
-                        workspace_id,
-                        cx,
-                    )
-                });
-                RemoteUiRegistry::update_global(cx, |registry| {
-                    registry.remember_widget_strip(titlebar_key, strip.downgrade());
-                });
-                strip
+        {
+            strip.update(cx, |strip, cx| strip.refresh(cx));
+        } else {
+            let strip = cx.new(|cx| {
+                RemoteUiWidgetStrip::new(
+                    WidgetSurface::Titlebar,
+                    side,
+                    workspace_handle.clone(),
+                    workspace_id,
+                    cx,
+                )
             });
-        titlebar_strip.update(cx, |strip, cx| strip.refresh(cx));
+            RemoteUiRegistry::update_global(cx, |registry| {
+                registry.remember_widget_strip(titlebar_key, strip.downgrade());
+            });
+        }
     }
 
     update_workspace_titlebar_widget_strips(workspace, cx);

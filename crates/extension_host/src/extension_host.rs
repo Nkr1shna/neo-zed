@@ -1365,15 +1365,6 @@ impl ExtensionStore {
             .filter_map(|name| new_index.extensions.get(name).cloned())
             .collect::<Vec<_>>();
         self.extension_index = new_index;
-        for extension_entry in &extension_entries {
-            if !extension_entry.remote_ui.is_empty() {
-                self.proxy.register_remote_ui_extension(
-                    extension_entry.manifest.id.clone(),
-                    extension_entry.remote_ui.clone(),
-                    cx,
-                );
-            }
-        }
         cx.notify();
         cx.emit(Event::ExtensionsUpdated);
 

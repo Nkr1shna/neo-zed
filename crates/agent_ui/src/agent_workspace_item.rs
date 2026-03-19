@@ -9,7 +9,6 @@ use crate::{AiWorkspace, AiWorkspaceEvent};
 
 pub struct AgentWorkspaceItem {
     ai_workspace: Entity<AiWorkspace>,
-    focus_handle: FocusHandle,
     title: SharedString,
     _subscriptions: Vec<Subscription>,
 }
@@ -17,7 +16,6 @@ pub struct AgentWorkspaceItem {
 impl AgentWorkspaceItem {
     pub fn new(
         ai_workspace: Entity<AiWorkspace>,
-        focus_handle: FocusHandle,
         title: SharedString,
         cx: &mut Context<Self>,
     ) -> Self {
@@ -35,7 +33,6 @@ impl AgentWorkspaceItem {
         );
         Self {
             ai_workspace,
-            focus_handle,
             title,
             _subscriptions: vec![subscription],
         }
@@ -55,11 +52,8 @@ impl AgentWorkspaceItem {
             workspace.activate_item(&existing_item, true, true, window, cx);
             existing_item
         } else {
-            let item_focus_handle = ai_workspace.read(cx).item_focus_handle();
             let item_title = ai_workspace.read(cx).tab_title(cx);
-            let item = cx.new(|cx| {
-                AgentWorkspaceItem::new(ai_workspace.clone(), item_focus_handle, item_title, cx)
-            });
+            let item = cx.new(|cx| AgentWorkspaceItem::new(ai_workspace.clone(), item_title, cx));
             workspace.add_item_to_center(Box::new(item.clone()), window, cx);
             item
         }
@@ -73,8 +67,8 @@ impl AgentWorkspaceItem {
 impl EventEmitter<ItemEvent> for AgentWorkspaceItem {}
 
 impl Focusable for AgentWorkspaceItem {
-    fn focus_handle(&self, _cx: &App) -> FocusHandle {
-        self.focus_handle.clone()
+    fn focus_handle(&self, cx: &App) -> FocusHandle {
+        self.ai_workspace.read(cx).focus_handle(cx)
     }
 }
 

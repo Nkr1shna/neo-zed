@@ -3028,12 +3028,6 @@ impl Focusable for AiWorkspace {
     }
 }
 
-impl AiWorkspace {
-    pub(crate) fn item_focus_handle(&self) -> FocusHandle {
-        self.focus_handle.clone()
-    }
-}
-
 pub enum AiWorkspaceEvent {
     ActiveViewChanged,
     ThreadFocused,
