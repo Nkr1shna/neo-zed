@@ -162,7 +162,7 @@ pub struct ProjectPanel {
     sticky_items_count: usize,
     last_reported_update: Instant,
     update_visible_entries_task: UpdateVisibleEntriesTask,
-    pending_serialization: Task<()>,
+    pending_serialization: Task<Option<()>>,
     undo_manager: UndoManager,
     state: State,
 }
@@ -901,7 +901,7 @@ impl ProjectPanel {
                     unfolded_dir_ids: Default::default(),
                 },
                 update_visible_entries_task: Default::default(),
-                pending_serialization: Task::ready(()),
+                pending_serialization: Task::ready(None),
                 undo_manager: UndoManager::new(workspace.weak_handle()),
             };
             this.update_visible_entries(None, false, false, window, cx);

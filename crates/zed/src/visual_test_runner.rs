@@ -42,7 +42,7 @@ fn main() {
     std::process::exit(1);
 }
 
-#[cfg(target_os = "macos")]
+#[cfg(all(target_os = "macos", feature = "visual-tests"))]
 fn main() {
     // Set ZED_STATELESS early to prevent file system access to real config directories
     // This must be done before any code accesses zed_env_vars::ZED_STATELESS
@@ -91,8 +91,14 @@ fn main() {
     }
 }
 
+#[cfg(all(target_os = "macos", not(feature = "visual-tests")))]
+fn main() {
+    eprintln!("Visual test runner requires the visual-tests feature");
+    std::process::exit(1);
+}
+
 // All macOS-specific imports grouped together
-#[cfg(target_os = "macos")]
+#[cfg(all(target_os = "macos", feature = "visual-tests"))]
 use {
     acp_thread::{AgentConnection, StubAgentConnection},
     agent_client_protocol as acp,
@@ -124,7 +130,7 @@ use {
 };
 
 // All macOS-specific constants grouped together
-#[cfg(target_os = "macos")]
+#[cfg(all(target_os = "macos", feature = "visual-tests"))]
 mod constants {
     use std::time::Duration;
 
@@ -142,10 +148,10 @@ mod constants {
     pub const TOOLTIP_SHOW_DELAY: Duration = Duration::from_millis(500);
 }
 
-#[cfg(target_os = "macos")]
+#[cfg(all(target_os = "macos", feature = "visual-tests"))]
 use constants::*;
 
-#[cfg(target_os = "macos")]
+#[cfg(all(target_os = "macos", feature = "visual-tests"))]
 fn run_visual_tests(project_path: PathBuf, update_baseline: bool) -> Result<()> {
     // Create the visual test context with deterministic task scheduling
     // Use real Assets so that SVG icons render properly
@@ -651,13 +657,13 @@ fn run_visual_tests(project_path: PathBuf, update_baseline: bool) -> Result<()> 
     }
 }
 
-#[cfg(target_os = "macos")]
+#[cfg(all(target_os = "macos", feature = "visual-tests"))]
 enum TestResult {
     Passed,
     BaselineUpdated(PathBuf),
 }
 
-#[cfg(target_os = "macos")]
+#[cfg(all(target_os = "macos", feature = "visual-tests"))]
 fn run_visual_test(
     test_name: &str,
     window: gpui::AnyWindowHandle,
@@ -733,7 +739,7 @@ fn run_visual_test(
     }
 }
 
-#[cfg(target_os = "macos")]
+#[cfg(all(target_os = "macos", feature = "visual-tests"))]
 fn get_baseline_path(test_name: &str) -> PathBuf {
     // Get the workspace root (where Cargo.toml is)
     let manifest_dir = std::env::var("CARGO_MANIFEST_DIR").unwrap_or_else(|_| ".".to_string());
@@ -748,7 +754,7 @@ fn get_baseline_path(test_name: &str) -> PathBuf {
         .join(format!("{}.png", test_name))
 }
 
-#[cfg(target_os = "macos")]
+#[cfg(all(target_os = "macos", feature = "visual-tests"))]
 struct ImageComparison {
     match_percentage: f64,
     diff_image: RgbaImage,
@@ -757,7 +763,7 @@ struct ImageComparison {
     total_pixels: u32,
 }
 
-#[cfg(target_os = "macos")]
+#[cfg(all(target_os = "macos", feature = "visual-tests"))]
 fn compare_images(actual: &RgbaImage, expected: &RgbaImage) -> ImageComparison {
     let width = actual.width().max(expected.width());
     let height = actual.height().max(expected.height());
@@ -802,7 +808,7 @@ fn compare_images(actual: &RgbaImage, expected: &RgbaImage) -> ImageComparison {
     }
 }
 
-#[cfg(target_os = "macos")]
+#[cfg(all(target_os = "macos", feature = "visual-tests"))]
 fn pixels_are_similar(a: &image::Rgba<u8>, b: &image::Rgba<u8>) -> bool {
     const TOLERANCE: i16 = 2;
     (a.0[0] as i16 - b.0[0] as i16).abs() <= TOLERANCE
@@ -811,7 +817,7 @@ fn pixels_are_similar(a: &image::Rgba<u8>, b: &image::Rgba<u8>) -> bool {
         && (a.0[3] as i16 - b.0[3] as i16).abs() <= TOLERANCE
 }
 
-#[cfg(target_os = "macos")]
+#[cfg(all(target_os = "macos", feature = "visual-tests"))]
 fn create_test_files(project_path: &Path) {
     // Create src directory
     let src_dir = project_path.join("src");
@@ -939,7 +945,7 @@ cargo run
     std::fs::write(project_path.join("README.md"), readme).expect("Failed to write README.md");
 }
 
-#[cfg(target_os = "macos")]
+#[cfg(all(target_os = "macos", feature = "visual-tests"))]
 fn init_app_state(cx: &mut App) -> Arc<AppState> {
     use fs::Fs;
     use node_runtime::NodeRuntime;
@@ -988,7 +994,7 @@ fn init_app_state(cx: &mut App) -> Arc<AppState> {
 /// 1. Gutter with line numbers, no breakpoint hover (baseline)
 /// 2. Gutter with breakpoint hover indicator (gray circle)
 /// 3. Gutter with breakpoint hover AND tooltip
-#[cfg(target_os = "macos")]
+#[cfg(all(target_os = "macos", feature = "visual-tests"))]
 fn run_breakpoint_hover_visual_tests(
     app_state: Arc<AppState>,
     cx: &mut VisualTestAppContext,
@@ -1279,7 +1285,7 @@ fn run_breakpoint_hover_visual_tests(
 /// This test captures two states:
 /// 1. Settings opened with a path that maps to multiple items (no auto-open)
 /// 2. Settings opened with a path that maps to a single SubPageLink (auto-opens sub-page)
-#[cfg(target_os = "macos")]
+#[cfg(all(target_os = "macos", feature = "visual-tests"))]
 fn run_settings_ui_subpage_visual_tests(
     app_state: Arc<AppState>,
     cx: &mut VisualTestAppContext,
@@ -1446,7 +1452,7 @@ fn run_settings_ui_subpage_visual_tests(
 /// 1. Diff view with feature flag enabled (button visible)
 /// 2. Diff view with feature flag disabled (no button)
 /// 3. Regular editor with feature flag enabled (no button - only shows in diff views)
-#[cfg(target_os = "macos")]
+#[cfg(all(target_os = "macos", feature = "visual-tests"))]
 fn run_diff_review_visual_tests(
     app_state: Arc<AppState>,
     cx: &mut VisualTestAppContext,
@@ -1941,19 +1947,19 @@ import { AiPaneTabContext } from 'context';
 
 /// A stub AgentServer for visual testing that returns a pre-programmed connection.
 #[derive(Clone)]
-#[cfg(target_os = "macos")]
+#[cfg(all(target_os = "macos", feature = "visual-tests"))]
 struct StubAgentServer {
     connection: StubAgentConnection,
 }
 
-#[cfg(target_os = "macos")]
+#[cfg(all(target_os = "macos", feature = "visual-tests"))]
 impl StubAgentServer {
     fn new(connection: StubAgentConnection) -> Self {
         Self { connection }
     }
 }
 
-#[cfg(target_os = "macos")]
+#[cfg(all(target_os = "macos", feature = "visual-tests"))]
 impl AgentServer for StubAgentServer {
     fn logo(&self) -> ui::IconName {
         ui::IconName::ZedAssistant
@@ -2288,7 +2294,7 @@ fn run_agent_thread_view_test(
 /// Visual test for the Tool Permissions Settings UI page
 ///
 /// Takes a screenshot showing the tool config page with matched patterns and verdict.
-#[cfg(target_os = "macos")]
+#[cfg(all(target_os = "macos", feature = "visual-tests"))]
 fn run_tool_permissions_visual_tests(
     app_state: Arc<AppState>,
     cx: &mut VisualTestAppContext,
@@ -2511,7 +2517,7 @@ fn run_tool_permissions_visual_tests(
     Ok(TestResult::Passed)
 }
 
-#[cfg(target_os = "macos")]
+#[cfg(all(target_os = "macos", feature = "visual-tests"))]
 fn run_multi_workspace_sidebar_visual_tests(
     app_state: Arc<AppState>,
     cx: &mut VisualTestAppContext,
@@ -2803,10 +2809,10 @@ fn run_multi_workspace_sidebar_visual_tests(
     Ok(test_result)
 }
 
-#[cfg(target_os = "macos")]
+#[cfg(all(target_os = "macos", feature = "visual-tests"))]
 struct ErrorWrappingTestView;
 
-#[cfg(target_os = "macos")]
+#[cfg(all(target_os = "macos", feature = "visual-tests"))]
 impl gpui::Render for ErrorWrappingTestView {
     fn render(
         &mut self,
@@ -2852,10 +2858,10 @@ impl gpui::Render for ErrorWrappingTestView {
     }
 }
 
-#[cfg(target_os = "macos")]
+#[cfg(all(target_os = "macos", feature = "visual-tests"))]
 struct ThreadItemIconDecorationsTestView;
 
-#[cfg(target_os = "macos")]
+#[cfg(all(target_os = "macos", feature = "visual-tests"))]
 impl gpui::Render for ThreadItemIconDecorationsTestView {
     fn render(
         &mut self,
@@ -2940,7 +2946,7 @@ impl gpui::Render for ThreadItemIconDecorationsTestView {
     }
 }
 
-#[cfg(target_os = "macos")]
+#[cfg(all(target_os = "macos", feature = "visual-tests"))]
 fn run_thread_item_icon_decorations_visual_tests(
     _app_state: Arc<AppState>,
     cx: &mut VisualTestAppContext,
@@ -2996,7 +3002,7 @@ fn run_thread_item_icon_decorations_visual_tests(
     Ok(test_result)
 }
 
-#[cfg(target_os = "macos")]
+#[cfg(all(target_os = "macos", feature = "visual-tests"))]
 fn run_error_wrapping_visual_tests(
     _app_state: Arc<AppState>,
     cx: &mut VisualTestAppContext,

@@ -817,7 +817,7 @@ impl Sidebar {
 
             if !query.is_empty() {
                 let workspace_highlight_positions =
-                    fuzzy_match_positions(&query, &label).unwrap_or_default();
+                    fuzzy_match_positions(&query, label.as_ref()).unwrap_or_default();
                 let workspace_matched = !workspace_highlight_positions.is_empty();
 
                 let mut matched_threads: Vec<ThreadEntry> = Vec::new();
@@ -832,7 +832,9 @@ impl Sidebar {
                         thread.highlight_positions = positions;
                     }
                     if let Some(worktree_name) = &thread.worktree_name {
-                        if let Some(positions) = fuzzy_match_positions(&query, worktree_name) {
+                        if let Some(positions) =
+                            fuzzy_match_positions(&query, worktree_name.as_ref())
+                        {
                             thread.worktree_highlight_positions = positions;
                         }
                     }

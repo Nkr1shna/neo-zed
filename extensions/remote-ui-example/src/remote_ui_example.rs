@@ -101,10 +101,7 @@ impl SidecarSnapshot {
             .collect::<Vec<_>>()
             .join(" ");
 
-        let label = if formatted_plan_type
-            .to_ascii_lowercase()
-            .contains("codex")
-        {
+        let label = if formatted_plan_type.to_ascii_lowercase().contains("codex") {
             formatted_plan_type
         } else {
             format!("Codex {formatted_plan_type}")

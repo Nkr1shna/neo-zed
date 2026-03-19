@@ -43,10 +43,10 @@ async fn install_script(cx: &AsyncApp) -> Result<PathBuf> {
         .args([
             "-e",
             &format!(
-                "do shell script \" \
-                    mkdir -p \'{}\' && \
-                    ln -sf \'{}\' \'{}\' \
-                \" with administrator privileges",
+                r#"do shell script "
+                    mkdir -p '{}' &&
+                    ln -sf '{}' '{}'
+                " with administrator privileges"#,
                 bin_dir_path.to_string_lossy(),
                 cli_path.to_string_lossy(),
                 link_path.to_string_lossy(),

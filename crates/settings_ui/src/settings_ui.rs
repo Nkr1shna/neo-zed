@@ -1361,6 +1361,9 @@ enum SubPageType {
     Other,
 }
 
+type SubPageRenderer =
+    fn(&SettingsWindow, &ScrollHandle, &mut Window, &mut Context<SettingsWindow>) -> AnyElement;
+
 #[derive(Clone)]
 struct SubPageLink {
     title: SharedString,
@@ -1372,8 +1375,7 @@ struct SubPageLink {
     /// Removes the "Edit in settings.json" button from the page.
     in_json: bool,
     files: FileMask,
-    render:
-        fn(&SettingsWindow, &ScrollHandle, &mut Window, &mut Context<SettingsWindow>) -> AnyElement,
+    render: SubPageRenderer,
 }
 
 impl PartialEq for SubPageLink {

@@ -17,10 +17,21 @@ cargo build --manifest-path "${repo_root}/extensions/remote-ui-example/Cargo.tom
 
 mkdir -p "${icon_root}"
 
-cp "${repo_root}/extensions/remote-ui-example/extension.toml" "${install_root}/extension.toml"
-cp "${repo_root}/target/wasm32-wasip2/debug/remote_ui_example.wasm" "${install_root}/extension.wasm"
-cp "${repo_root}/extensions/remote-ui-example/sidecar.js" "${install_root}/sidecar.js"
-cp "${repo_root}/extensions/remote-ui-example/icons/ai_open_ai.svg" "${icon_root}/ai_open_ai.svg"
+copy_if_distinct() {
+    local source="$1"
+    local destination="$2"
+
+    if [[ -e "${destination}" ]] && [[ "$(realpath "${source}")" == "$(realpath "${destination}")" ]]; then
+        return 0
+    fi
+
+    cp "${source}" "${destination}"
+}
+
+copy_if_distinct "${repo_root}/extensions/remote-ui-example/extension.toml" "${install_root}/extension.toml"
+copy_if_distinct "${repo_root}/target/wasm32-wasip2/debug/remote_ui_example.wasm" "${install_root}/extension.wasm"
+copy_if_distinct "${repo_root}/extensions/remote-ui-example/sidecar.js" "${install_root}/sidecar.js"
+copy_if_distinct "${repo_root}/extensions/remote-ui-example/icons/ai_open_ai.svg" "${icon_root}/ai_open_ai.svg"
 
 rm -f "${HOME}/Library/Application Support/Zed/extensions/index.json"
 
