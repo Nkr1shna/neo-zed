@@ -16,32 +16,32 @@ command = "node"
 args = ["sidecar.js"]
 
 [commands.demo-toggle-panel]
-title = "Codex Usage: Toggle Panel"
+title = "Codex usage: toggle panel"
 description = "Toggle the Codex usage panel"
 palette = true
 
 [commands.demo-refresh]
-title = "Codex Usage: Refresh"
+title = "Codex usage: refresh"
 description = "Refresh ChatGPT Codex usage"
 palette = true
 
 [commands.demo-begin-login]
-title = "Codex Usage: Sign In"
+title = "Codex usage: sign in"
 description = "Start the ChatGPT Codex sign-in flow"
 palette = true
 
 [commands.demo-logout]
-title = "Codex Usage: Sign Out"
+title = "Codex usage: sign out"
 description = "Forget the saved ChatGPT Codex session"
 palette = false
 
 [commands.demo-open-url]
-title = "Codex Usage: Open ChatGPT"
+title = "Codex usage: open ChatGPT"
 description = "Open ChatGPT in the browser"
 palette = false
 
 [panels.demo]
-title = "Codex Usage"
+title = "Codex usage"
 icon = "zed_assistant"
 default_dock = "right"
 default_size = 360
@@ -67,21 +67,21 @@ refresh_interval_seconds = 60
 [[menus]]
 id = "demo-editor-menu"
 location = "editor-context"
-title = "Codex Usage: Sign In"
+title = "Codex usage: sign in"
 command = "demo-begin-login"
 priority = 20
 
 [[menus]]
 id = "demo-project-panel-menu"
 location = "project-panel-context"
-title = "Codex Usage: Refresh"
+title = "Codex usage: refresh"
 command = "demo-refresh"
 priority = 20
 
 [[menus]]
 id = "demo-panel-overflow-menu"
 location = "panel-overflow"
-title = "Codex Usage: Refresh"
+title = "Codex usage: refresh"
 command = "demo-refresh"
 panel = "demo"
 priority = 10
@@ -89,7 +89,7 @@ priority = 10
 [[menus]]
 id = "demo-panel-overflow-menu-login"
 location = "panel-overflow"
-title = "Codex Usage: Sign In"
+title = "Codex usage: sign in"
 command = "demo-begin-login"
 panel = "demo"
 priority = 20
@@ -97,7 +97,7 @@ priority = 20
 [[menus]]
 id = "demo-panel-overflow-menu-chatgpt"
 location = "panel-overflow"
-title = "Codex Usage: Open ChatGPT"
+title = "Codex usage: open ChatGPT"
 command = "demo-open-url"
 panel = "demo"
 priority = 30
@@ -105,7 +105,7 @@ priority = 30
 [[menus]]
 id = "demo-panel-overflow-menu-logout"
 location = "panel-overflow"
-title = "Codex Usage: Sign Out"
+title = "Codex usage: sign out"
 command = "demo-logout"
 panel = "demo"
 priority = 40
@@ -113,6 +113,6 @@ priority = 40
 [[menus]]
 id = "demo-item-tab-menu"
 location = "item-tab-context"
-title = "Codex Usage: Toggle Panel"
+title = "Codex usage: toggle panel"
 command = "demo-toggle-panel"
 priority = 20

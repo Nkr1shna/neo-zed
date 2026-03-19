@@ -9,11 +9,15 @@ use crate::AiWorkspace;
 
 pub struct AgentWorkspaceItem {
     ai_workspace: Entity<AiWorkspace>,
+    focus_handle: FocusHandle,
 }
 
 impl AgentWorkspaceItem {
-    pub fn new(ai_workspace: Entity<AiWorkspace>) -> Self {
-        Self { ai_workspace }
+    pub fn new(ai_workspace: Entity<AiWorkspace>, focus_handle: FocusHandle) -> Self {
+        Self {
+            ai_workspace,
+            focus_handle,
+        }
     }
 
     pub fn deploy_in_workspace(
@@ -30,7 +34,8 @@ impl AgentWorkspaceItem {
             workspace.activate_item(&existing_item, true, true, window, cx);
             existing_item
         } else {
-            let item = cx.new(|_| AgentWorkspaceItem::new(ai_workspace.clone()));
+            let item_focus_handle = ai_workspace.read(cx).item_focus_handle();
+            let item = cx.new(|_| AgentWorkspaceItem::new(ai_workspace.clone(), item_focus_handle));
             workspace.add_item_to_center(Box::new(item.clone()), window, cx);
             item
         }
@@ -44,8 +49,8 @@ impl AgentWorkspaceItem {
 impl EventEmitter<ItemEvent> for AgentWorkspaceItem {}
 
 impl Focusable for AgentWorkspaceItem {
-    fn focus_handle(&self, cx: &App) -> FocusHandle {
-        self.ai_workspace.read(cx).focus_handle(cx)
+    fn focus_handle(&self, _cx: &App) -> FocusHandle {
+        self.focus_handle.clone()
     }
 }
 

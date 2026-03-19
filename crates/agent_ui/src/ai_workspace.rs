@@ -2980,6 +2980,12 @@ impl Focusable for AiWorkspace {
     }
 }
 
+impl AiWorkspace {
+    pub(crate) fn item_focus_handle(&self) -> FocusHandle {
+        self.focus_handle.clone()
+    }
+}
+
 pub enum AiWorkspaceEvent {
     ActiveViewChanged,
     ThreadFocused,
@@ -5096,6 +5102,58 @@ mod tests {
             item_count, 1,
             "toggle should still open a center AI tab after the attached controller outlives setup scope"
         );
+    }
+
+    #[gpui::test]
+    async fn test_redeploy_existing_center_item_does_not_reenter_ai_workspace(
+        cx: &mut TestAppContext,
+    ) {
+        init_test(cx);
+
+        let fs = FakeFs::new(cx.executor());
+
+        cx.update(|cx| {
+            cx.update_flags(true, vec!["agent-v2".to_string()]);
+            agent::ThreadStore::init_global(cx);
+            language_model::LanguageModelRegistry::test(cx);
+        });
+
+        let project = Project::test(fs.clone(), [], cx).await;
+
+        let multi_workspace =
+            cx.add_window(|window, cx| MultiWorkspace::test_new(project.clone(), window, cx));
+
+        let workspace = multi_workspace
+            .read_with(cx, |multi_workspace, _cx| {
+                multi_workspace.workspace().clone()
+            })
+            .unwrap();
+
+        let cx = &mut VisualTestContext::from_window(multi_workspace.into(), cx);
+
+        let panel = workspace.update_in(cx, |workspace, window, cx| {
+            let text_thread_store = cx.new(|cx| TextThreadStore::fake(project.clone(), cx));
+            let panel =
+                cx.new(|cx| AiWorkspace::new(workspace, text_thread_store, None, window, cx));
+            attach_workspace_controller(workspace, panel.clone(), window, cx);
+            panel
+        });
+
+        workspace.update_in(cx, |workspace, window, cx| {
+            deploy_active_panel_item_in_center(&panel, workspace, window, cx);
+        });
+
+        panel.update_in(cx, |panel, window, cx| {
+            assert!(deploy_active_panel_item_in_center_from_panel(panel, window, cx));
+        });
+
+        let item_count = workspace.read_with(cx, |workspace, cx| {
+            workspace
+                .items_of_type::<crate::AgentWorkspaceItem>(cx)
+                .count()
+        });
+
+        assert_eq!(item_count, 1, "re-deploy should reuse the existing AI workspace tab");
     }
 
     /// Extracts the text from a Text content block, panicking if it's not Text.
