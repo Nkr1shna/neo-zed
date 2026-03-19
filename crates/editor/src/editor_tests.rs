@@ -26,7 +26,7 @@ use language::{
     BracketPairConfig,
     Capability::ReadWrite,
     DiagnosticSourceKind, FakeLspAdapter, IndentGuideSettings, LanguageConfig,
-    LanguageConfigOverride, LanguageMatcher, LanguageName, Override, Point,
+    LanguageConfigOverride, LanguageMatcher, LanguageName, LanguageQueries, Override, Point,
     language_settings::{
         CompletionSettingsContent, FormatterList, LanguageSettingsContent, LspInsertMode,
     },
@@ -51,6 +51,7 @@ use settings::{
     IndentGuideBackgroundColoring, IndentGuideColoring, InlayHintSettingsContent,
     ProjectSettingsContent, SearchSettingsContent, SettingsContent, SettingsStore,
 };
+use std::borrow::Cow;
 use std::{cell::RefCell, future::Future, rc::Rc, sync::atomic::AtomicBool, time::Instant};
 use std::{
     iter,
@@ -1320,6 +1321,105 @@ fn test_fold_action_multiple_line_breaks(cx: &mut TestAppContext) {
         assert_eq!(
             editor.display_text(cx),
             editor.buffer.read(cx).read(cx).text()
+        );
+    });
+}
+
+#[gpui::test]
+async fn test_fold_with_unindented_multiline_raw_string(cx: &mut TestAppContext) {
+    init_test(cx, |_| {});
+
+    let mut cx = EditorTestContext::new(cx).await;
+
+    let language = Arc::new(
+        Language::new(
+            LanguageConfig::default(),
+            Some(tree_sitter_rust::LANGUAGE.into()),
+        )
+        .with_queries(LanguageQueries {
+            overrides: Some(Cow::from(indoc! {"
+                [
+                  (string_literal)
+                  (raw_string_literal)
+                ] @string
+                [
+                  (line_comment)
+                  (block_comment)
+                ] @comment.inclusive
+            "})),
+            ..Default::default()
+        })
+        .expect("Could not parse queries"),
+    );
+
+    cx.update_buffer(|buffer, cx| buffer.set_language(Some(language), cx));
+    cx.set_state(indoc! {"
+        fn main() {
+            let s = r#\"
+        a
+        b
+        c
+        \"#;
+        }ˇ
+    "});
+
+    cx.update_editor(|editor, window, cx| {
+        editor.fold_at_level(&FoldAtLevel(1), window, cx);
+        assert_eq!(
+            editor.display_text(cx),
+            indoc! {"
+                fn main() {⋯
+                }
+            "},
+        );
+    });
+}
+
+#[gpui::test]
+async fn test_fold_with_unindented_multiline_block_comment(cx: &mut TestAppContext) {
+    init_test(cx, |_| {});
+
+    let mut cx = EditorTestContext::new(cx).await;
+
+    let language = Arc::new(
+        Language::new(
+            LanguageConfig::default(),
+            Some(tree_sitter_rust::LANGUAGE.into()),
+        )
+        .with_queries(LanguageQueries {
+            overrides: Some(Cow::from(indoc! {"
+                [
+                  (string_literal)
+                  (raw_string_literal)
+                ] @string
+                [
+                  (line_comment)
+                  (block_comment)
+                ] @comment.inclusive
+            "})),
+            ..Default::default()
+        })
+        .expect("Could not parse queries"),
+    );
+
+    cx.update_buffer(|buffer, cx| buffer.set_language(Some(language), cx));
+    cx.set_state(indoc! {"
+        fn main() {
+            let x = 1;
+            /*
+        unindented comment line
+            */
+        }ˇ
+    "});
+
+    cx.update_editor(|editor, window, cx| {
+        editor.fold_at_level(&FoldAtLevel(1), window, cx);
+        assert_eq!(
+            editor.display_text(cx),
+            indoc! {"
+                fn main() {⋯
+                }
+            "},
         );
     });
 }
@@ -30828,7 +30928,7 @@ async fn test_scroll_by_clicking_sticky_header(cx: &mut TestAppContext) {
 
     let fn_foo = || empty_range(0, 0);
     let impl_bar = || empty_range(4, 0);
-    let fn_new = || empty_range(5, 4);
+    let fn_new = || empty_range(5, 0);
 
     let mut scroll_and_click = |scroll_offset: ScrollOffset, click_offset: ScrollOffset| {
         cx.update_editor(|e, window, cx| {
@@ -30914,6 +31014,36 @@ async fn test_scroll_by_clicking_sticky_header(cx: &mut TestAppContext) {
         // we don't assert on the visible_range because if we clicked the gutter, our line is fully selected
         (gpui::Point { x: 0., y: 1.5 })
     );
+
+    // Verify clicking at a specific x position within a sticky header places
+    // the cursor at the corresponding column.
+    let (text_origin_x, em_width) = cx.update_editor(|editor, _, _| {
+        let position_map = editor.last_position_map.as_ref().unwrap();
+        (
+            position_map.text_hitbox.bounds.origin.x,
+            position_map.em_layout_width,
+        )
+    });
+
+    // Click on "impl Bar {" sticky header at column 5 (the 'B' in 'Bar').
+    // The text "impl Bar {" starts at column 0, so column 5 = 'B'.
+    let click_x = text_origin_x + em_width * 5.5;
+    cx.update_editor(|e, window, cx| {
+        e.scroll(gpui::Point { x: 0., y: 4.5 }, None, window, cx);
+    });
+    cx.run_until_parked();
+    cx.simulate_click(
+        gpui::Point {
+            x: click_x,
+            y: 0.25 * line_height,
+        },
+        Modifiers::none(),
+    );
+    cx.run_until_parked();
+    let (scroll_pos, selections) =
+        cx.update_editor(|e, _, cx| (e.scroll_position(cx), display_ranges(e, cx)));
+    assert_eq!(scroll_pos, gpui::Point { x: 0., y: 4. });
+    assert_eq!(selections, vec![empty_range(4, 5)]);
 }
 
 #[gpui::test]
@@ -34118,4 +34248,152 @@ async fn test_restore_and_next(cx: &mut TestAppContext) {
         "#
         .unindent(),
     );
+}
+
+#[gpui::test]
+async fn test_align_selections(cx: &mut TestAppContext) {
+    init_test(cx, |_| {});
+    let mut cx = EditorTestContext::new(cx).await;
+
+    // 1) one cursor, no action
+    let before = " abc\n  abc\nabc\n     ˇabc";
+    cx.set_state(before);
+    cx.update_editor(|e, window, cx| e.align_selections(&AlignSelections, window, cx));
+    cx.assert_editor_state(before);
+
+    // 2) multiple cursors at different rows
+    let before = indoc!(
+        r#"
+            let aˇbc = 123;
+            let  xˇyz = 456;
+            let   fˇoo = 789;
+            let    bˇar = 0;
+        "#
+    );
+    let after = indoc!(
+        r#"
+            let a   ˇbc = 123;
+            let  x  ˇyz = 456;
+            let   f ˇoo = 789;
+            let    bˇar = 0;
+        "#
+    );
+    cx.set_state(before);
+    cx.update_editor(|e, window, cx| e.align_selections(&AlignSelections, window, cx));
+    cx.assert_editor_state(after);
+
+    // 3) multiple selections at different rows
+    let before = indoc!(
+        r#"
+            let «ˇabc» = 123;
+            let  «ˇxyz» = 456;
+            let   «ˇfoo» = 789;
+            let    «ˇbar» = 0;
+        "#
+    );
+    let after = indoc!(
+        r#"
+            let    «ˇabc» = 123;
+            let    «ˇxyz» = 456;
+            let    «ˇfoo» = 789;
+            let    «ˇbar» = 0;
+        "#
+    );
+    cx.set_state(before);
+    cx.update_editor(|e, window, cx| e.align_selections(&AlignSelections, window, cx));
+    cx.assert_editor_state(after);
+
+    // 4) multiple selections at different rows, inverted head
+    let before = indoc!(
+        r#"
+            let    «abcˇ» = 123;
+            // comment
+            let  «xyzˇ» = 456;
+            let «fooˇ» = 789;
+            let    «barˇ» = 0;
+        "#
+    );
+    let after = indoc!(
+        r#"
+            let    «abcˇ» = 123;
+            // comment
+            let    «xyzˇ» = 456;
+            let    «fooˇ» = 789;
+            let    «barˇ» = 0;
+        "#
+    );
+    cx.set_state(before);
+    cx.update_editor(|e, window, cx| e.align_selections(&AlignSelections, window, cx));
+    cx.assert_editor_state(after);
+}
+
+#[gpui::test]
+async fn test_align_selections_multicolumn(cx: &mut TestAppContext) {
+    init_test(cx, |_| {});
+    let mut cx = EditorTestContext::new(cx).await;
+
+    // 1) Multicolumn, one non affected editor row
+    let before = indoc!(
+        r#"
+            name «|ˇ» age «|ˇ» height «|ˇ» note
+            Matthew «|ˇ» 7 «|ˇ» 2333 «|ˇ» smart
+            Mike «|ˇ» 1234 «|ˇ» 567 «|ˇ» lazy
+            Anything that is not selected
+            Miles «|ˇ» 88 «|ˇ» 99 «|ˇ» funny
+        "#
+    );
+    let after = indoc!(
+        r#"
+            name    «|ˇ» age  «|ˇ» height «|ˇ» note
+            Matthew «|ˇ» 7    «|ˇ» 2333   «|ˇ» smart
+            Mike    «|ˇ» 1234 «|ˇ» 567    «|ˇ» lazy
+            Anything that is not selected
+            Miles   «|ˇ» 88   «|ˇ» 99     «|ˇ» funny
+        "#
+    );
+    cx.set_state(before);
+    cx.update_editor(|e, window, cx| e.align_selections(&AlignSelections, window, cx));
+    cx.assert_editor_state(after);
+
+    // 2) not all alignment rows has the number of alignment columns
+    let before = indoc!(
+        r#"
+            name «|ˇ» age «|ˇ» height
+            Matthew «|ˇ» 7 «|ˇ» 2333
+            Mike «|ˇ» 1234
+            Miles «|ˇ» 88 «|ˇ» 99
+        "#
+    );
+    let after = indoc!(
+        r#"
+            name    «|ˇ» age «|ˇ» height
+            Matthew «|ˇ» 7   «|ˇ» 2333
+            Mike    «|ˇ» 1234
+            Miles   «|ˇ» 88  «|ˇ» 99
+        "#
+    );
+    cx.set_state(before);
+    cx.update_editor(|e, window, cx| e.align_selections(&AlignSelections, window, cx));
+    cx.assert_editor_state(after);
+
+    // 3) A aligned column shall stay aligned
+    let before = indoc!(
+        r#"
+            $ ˇa    ˇa
+            $  ˇa   ˇa
+            $   ˇa  ˇa
+            $    ˇa ˇa
+        "#
+    );
+    let after = indoc!(
+        r#"
+            $    ˇa    ˇa
+            $    ˇa    ˇa
+            $    ˇa    ˇa
+            $    ˇa    ˇa
+        "#
+    );
+    cx.set_state(before);
+    cx.update_editor(|e, window, cx| e.align_selections(&AlignSelections, window, cx));
+    cx.assert_editor_state(after);
 }

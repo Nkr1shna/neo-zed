@@ -14,7 +14,7 @@ use agent::{ContextServerRegistry, SharedThread, ThreadStore};
 use agent_client_protocol as acp;
 use agent_servers::AgentServer;
 use collections::HashSet;
-use db::kvp::{Dismissable, KEY_VALUE_STORE};
+use db::kvp::{Dismissable, KeyValueStore};
 use itertools::Itertools;
 use project::AgentId;
 use serde::{Deserialize, Serialize};
@@ -73,7 +73,6 @@ use editor::{Anchor, AnchorRangeExt as _, Editor, EditorEvent, MultiBuffer};
 use extension::ExtensionEvents;
 use extension_host::ExtensionStore;
 use fs::Fs;
-use git::repository::validate_worktree_directory;
 use gpui::{
     Action, Animation, AnimationExt, AnyElement, App, AsyncWindowContext, ClipboardItem, Corner,
     DismissEvent, Entity, EventEmitter, ExternalPaths, FocusHandle, Focusable, KeyContext, Pixels,
@@ -95,7 +94,7 @@ use ui::{
 use util::{ResultExt as _, debug_panic};
 use workspace::{
     CollaboratorId, DraggedSelection, DraggedTab, OpenResult, PathList, SerializedPathList,
-    ToggleZoom, ToolbarItemView, Workspace, WorkspaceId,
+    ToggleWorkspaceSidebar, ToggleZoom, ToolbarItemView, Workspace, WorkspaceId,
 };
 use zed_actions::{
     DecreaseBufferFontSize, IncreaseBufferFontSize, ResetBufferFontSize,
@@ -499,8 +498,8 @@ impl From<Agent> for AgentType {
 impl StartThreadIn {
     fn label(&self) -> SharedString {
         match self {
-            Self::LocalProject => "Current Project".into(),
-            Self::NewWorktree => "New Worktree".into(),
+            Self::LocalProject => "Current Worktree".into(),
+            Self::NewWorktree => "New Git Worktree".into(),
         }
     }
 }
@@ -677,6 +676,7 @@ impl AiWorkspace {
             }
         });
 
+        let kvp = KeyValueStore::global(cx);
         self.pending_serialization = Some(cx.background_spawn(async move {
             save_serialized_ai_workspace(
                 workspace_id,
@@ -686,6 +686,7 @@ impl AiWorkspace {
                     last_active_thread,
                     start_thread_in,
                 },
+                kvp,
             )
             .await?;
             anyhow::Ok(())
@@ -698,6 +699,7 @@ impl AiWorkspace {
         mut cx: AsyncWindowContext,
     ) -> Task<Result<Entity<Self>>> {
         let prompt_store = cx.update(|_window, cx| PromptStore::global(cx));
+        let kvp = cx.update(|_window, cx| KeyValueStore::global(cx)).ok();
         cx.spawn(async move |cx| {
             let prompt_store = match prompt_store {
                 Ok(prompt_store) => prompt_store.await.ok(),
@@ -985,7 +987,7 @@ impl AiWorkspace {
             _worktree_creation_task: None,
             show_trust_workspace_message: false,
             last_configuration_error_telemetry: None,
-            on_boarding_upsell_dismissed: AtomicBool::new(OnboardingUpsell::dismissed()),
+            on_boarding_upsell_dismissed: AtomicBool::new(OnboardingUpsell::dismissed(cx)),
             _active_view_observation: None,
         };
 
@@ -1249,10 +1251,12 @@ impl AiWorkspace {
         }
 
         let thread_store = self.thread_store.clone();
+        let kvp = KeyValueStore::global(cx);
 
         if let Some(agent) = agent_choice {
             cx.background_spawn({
                 let agent = agent.clone();
+                let kvp = kvp;
                 async move {
                     if let Some(serialized) =
                         serde_json::to_string(&LastUsedExternalAgent { agent }).log_err()
@@ -1888,6 +1892,21 @@ impl AiWorkspace {
     /// Returns the primary thread views for all retained connections: the
     pub fn is_background_thread(&self, session_id: &acp::SessionId) -> bool {
         self.background_threads.contains_key(session_id)
+    }
+
+    pub fn cancel_thread(&self, session_id: &acp::SessionId, cx: &mut Context<Self>) -> bool {
+        let conversation_views = self
+            .active_conversation_view()
+            .into_iter()
+            .chain(self.background_threads.values());
+
+        for conversation_view in conversation_views {
+            if let Some(thread_view) = conversation_view.read(cx).thread_view(session_id) {
+                thread_view.update(cx, |view, cx| view.cancel_generation(cx));
+                return true;
+            }
+        }
+        false
     }
 
     /// active thread plus any background threads that are still running or
@@ -2558,11 +2577,10 @@ impl AiWorkspace {
 
         for repo in git_repos {
             let (work_dir, new_path, receiver) = repo.update(cx, |repo, _cx| {
-                let original_repo = repo.original_repo_abs_path.clone();
-                let directory =
-                    validate_worktree_directory(&original_repo, worktree_directory_setting)?;
-                let new_path = directory.join(branch_name);
-                let receiver = repo.create_worktree(branch_name.to_string(), directory, None);
+                let new_path =
+                    repo.path_for_new_linked_worktree(branch_name, worktree_directory_setting)?;
+                let receiver =
+                    repo.create_worktree(branch_name.to_string(), new_path.clone(), None);
                 let work_dir = repo.work_directory_abs_path.clone();
                 anyhow::Ok((work_dir, new_path, receiver))
             })?;
@@ -2965,8 +2983,17 @@ impl AiWorkspace {
             multi_workspace.activate(new_workspace.clone(), cx);
         })?;
 
-        this.update_in(cx, |this, _window, cx| {
+        this.update_in(cx, |this, window, cx| {
             this.worktree_creation_status = None;
+
+            if let Some(thread_view) = this.active_thread_view(cx) {
+                thread_view.update(cx, |thread_view, cx| {
+                    thread_view
+                        .message_editor
+                        .update(cx, |editor, cx| editor.clear(window, cx));
+                });
+            }
+
             cx.notify();
         })?;
 
@@ -3301,6 +3328,7 @@ impl AiWorkspace {
                             .action("Profiles", Box::new(ManageProfiles::default()))
                             .action("Settings", Box::new(OpenSettings))
                             .separator()
+                            .action("Toggle Threads Sidebar", Box::new(ToggleWorkspaceSidebar))
                             .action(full_screen_label, Box::new(ToggleZoom));
 
                         if has_auth_methods {
@@ -3426,7 +3454,7 @@ impl AiWorkspace {
 
                     menu.header("Start Thread In…")
                         .item(
-                            ContextMenuEntry::new("Current Project")
+                            ContextMenuEntry::new("Current Worktree")
                                 .toggleable(IconPosition::End, is_local_selected)
                                 .documentation_aside(documentation_side, move |_| {
                                     HoldForDefault::new(is_local_default)
@@ -3454,7 +3482,7 @@ impl AiWorkspace {
                                 }),
                         )
                         .item({
-                            let entry = ContextMenuEntry::new("New Worktree")
+                            let entry = ContextMenuEntry::new("New Git Worktree")
                                 .toggleable(IconPosition::End, is_new_worktree_selected)
                                 .disabled(new_worktree_disabled)
                                 .handler({
@@ -3509,6 +3537,7 @@ impl AiWorkspace {
 
     fn render_toolbar(&self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let agent_server_store = self.project.read(cx).agent_server_store().clone();
+        let has_visible_worktrees = self.project.read(cx).visible_worktrees(cx).next().is_some();
         let focus_handle = self.focus_handle(cx);
 
         let selected_agent_custom_icon =
@@ -3868,7 +3897,9 @@ impl AiWorkspace {
                         .gap(DynamicSpacing::Base04.rems(cx))
                         .pl(DynamicSpacing::Base04.rems(cx))
                         .child(agent_selector_menu)
-                        .child(self.render_start_thread_in_selector(cx)),
+                        .when(has_visible_worktrees, |this| {
+                            this.child(self.render_start_thread_in_selector(cx))
+                        }),
                 )
                 .child(
                     h_flex()
@@ -3988,7 +4019,7 @@ impl AiWorkspace {
     }
 
     fn should_render_trial_end_upsell(&self, cx: &mut Context<Self>) -> bool {
-        if TrialEndUpsell::dismissed() {
+        if TrialEndUpsell::dismissed(cx) {
             return false;
         }
 

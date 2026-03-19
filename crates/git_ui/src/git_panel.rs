@@ -14,7 +14,7 @@ use anyhow::Context as _;
 use askpass::AskPassDelegate;
 use cloud_llm_client::CompletionIntent;
 use collections::{BTreeMap, HashMap, HashSet};
-use db::kvp::KEY_VALUE_STORE;
+use db::kvp::KeyValueStore;
 use editor::{
     Direction, Editor, EditorElement, EditorMode, MultiBuffer, MultiBufferOffset,
     actions::ExpandAllDiffHunks,
@@ -927,6 +927,7 @@ impl GitPanel {
     fn serialize(&mut self, cx: &mut Context<Self>) {
         let amend_pending = self.amend_pending;
         let signoff_enabled = self.signoff_enabled;
+        let kvp = KeyValueStore::global(cx);
 
         self.pending_serialization = cx.spawn(async move |git_panel, cx| {
             cx.background_executor()
@@ -947,16 +948,15 @@ impl GitPanel {
             };
             cx.background_spawn(
                 async move {
-                    KEY_VALUE_STORE
-                        .write_kvp(
-                            serialization_key,
-                            serde_json::to_string(&SerializedGitPanel {
-                                width: None,
-                                amend_pending,
-                                signoff_enabled,
-                            })?,
-                        )
-                        .await?;
+                    kvp.write_kvp(
+                        serialization_key,
+                        serde_json::to_string(&SerializedGitPanel {
+                            width: None,
+                            amend_pending,
+                            signoff_enabled,
+                        })?,
+                    )
+                    .await?;
                     anyhow::Ok(())
                 }
                 .log_err(),
@@ -5541,12 +5541,14 @@ impl GitPanel {
         mut cx: AsyncWindowContext,
     ) -> anyhow::Result<Entity<Self>> {
         let serialized_panel = match workspace
-            .read_with(&cx, |workspace, _| Self::serialization_key(workspace))
+            .read_with(&cx, |workspace, cx| {
+                Self::serialization_key(workspace).map(|key| (key, KeyValueStore::global(cx)))
+            })
             .ok()
             .flatten()
         {
-            Some(serialization_key) => cx
-                .background_spawn(async move { KEY_VALUE_STORE.read_kvp(&serialization_key) })
+            Some((serialization_key, kvp)) => cx
+                .background_spawn(async move { kvp.read_kvp(&serialization_key) })
                 .await
                 .context("loading git panel")
                 .log_err()
@@ -5814,6 +5816,10 @@ impl Panel for GitPanel {
 
     fn toggle_action(&self) -> Box<dyn Action> {
         Box::new(ToggleFocus)
+    }
+
+    fn starts_open(&self, _: &Window, cx: &App) -> bool {
+        GitPanelSettings::get_global(cx).starts_open
     }
 
     fn activation_priority(&self) -> u32 {

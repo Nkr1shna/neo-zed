@@ -1,3 +1,5 @@
+use std::cell::RefCell;
+
 use acp_thread::ContentBlock;
 use cloud_api_types::{SubmitAgentThreadFeedbackBody, SubmitAgentThreadFeedbackCommentsBody};
 use editor::actions::OpenExcerpts;
@@ -6,6 +8,7 @@ use crate::StartThreadIn;
 use crate::agent_workspace_surface::{
     open_saved_text_thread_in_center, open_thread_in_center, start_thread_in,
 };
+use crate::message_editor::SharedSessionCapabilities;
 use gpui::{Corner, List};
 use language_model::{LanguageModelEffortLevel, Speed};
 use settings::update_settings_file;
@@ -190,8 +193,7 @@ pub struct ThreadView {
     pub last_token_limit_telemetry: Option<acp_thread::TokenUsageRatio>,
     thread_feedback: ThreadFeedbackState,
     pub list_state: ListState,
-    pub prompt_capabilities: Rc<RefCell<PromptCapabilities>>,
-    pub available_commands: Rc<RefCell<Vec<agent_client_protocol::AvailableCommand>>>,
+    pub session_capabilities: SharedSessionCapabilities,
     /// Tracks which tool calls have their content/output expanded.
     /// Used for showing/hiding tool call results, terminal output, etc.
     pub expanded_tool_calls: HashSet<agent_client_protocol::ToolCallId>,
@@ -271,8 +273,7 @@ impl ThreadView {
         model_selector: Option<Entity<ModelSelectorPopover>>,
         profile_selector: Option<Entity<ProfileSelector>>,
         list_state: ListState,
-        prompt_capabilities: Rc<RefCell<PromptCapabilities>>,
-        available_commands: Rc<RefCell<Vec<agent_client_protocol::AvailableCommand>>>,
+        session_capabilities: SharedSessionCapabilities,
         resumed_without_history: bool,
         project: WeakEntity<Project>,
         thread_store: Option<Entity<ThreadStore>>,
@@ -303,8 +304,7 @@ impl ThreadView {
                 thread_store,
                 history.as_ref().map(|h| h.downgrade()),
                 prompt_store,
-                prompt_capabilities.clone(),
-                available_commands.clone(),
+                session_capabilities.clone(),
                 agent_id.clone(),
                 &placeholder,
                 editor::EditorMode::AutoHeight {
@@ -420,8 +420,7 @@ impl ThreadView {
             model_selector,
             profile_selector,
             list_state,
-            prompt_capabilities,
-            available_commands,
+            session_capabilities,
             resumed_without_history,
             _subscriptions: subscriptions,
             permission_dropdown_handle: PopoverMenuHandle::default(),
@@ -873,8 +872,9 @@ impl ThreadView {
             // Does the agent have a specific logout command? Prefer that in case they need to reset internal state.
             let logout_supported = text == "/logout"
                 && self
-                    .available_commands
-                    .borrow()
+                    .session_capabilities
+                    .read()
+                    .available_commands()
                     .iter()
                     .any(|command| command.name == "logout");
             if can_login && !logout_supported {
@@ -998,7 +998,10 @@ impl ThreadView {
                 let text: String = contents
                     .iter()
                     .filter_map(|block| match block {
-                        acp::ContentBlock::Text(text_content) => Some(text_content.text.as_str()),
+                        acp::ContentBlock::Text(text_content) => Some(text_content.text.clone()),
+                        acp::ContentBlock::ResourceLink(resource_link) => {
+                            Some(format!("@{}", resource_link.name))
+                        }
                         _ => None,
                     })
                     .collect::<Vec<_>>()
@@ -3571,8 +3574,9 @@ impl ThreadView {
     ) -> Entity<ContextMenu> {
         let message_editor = self.message_editor.clone();
         let workspace = self.workspace.clone();
-        let supports_images = self.prompt_capabilities.borrow().image;
-        let supports_embedded_context = self.prompt_capabilities.borrow().embedded_context;
+        let session_capabilities = self.session_capabilities.read();
+        let supports_images = session_capabilities.supports_images();
+        let supports_embedded_context = session_capabilities.supports_embedded_context();
 
         let has_editor_selection = workspace
             .upgrade()
@@ -4026,6 +4030,13 @@ impl ThreadView {
                         .w_full()
                         .text_ui(cx)
                         .child(self.render_message_context_menu(entry_ix, message_body, cx))
+                        .when_some(
+                            self.entry_view_state
+                                .read(cx)
+                                .entry(entry_ix)
+                                .and_then(|entry| entry.focus_handle(cx)),
+                            |this, handle| this.track_focus(&handle),
+                        )
                         .into_any()
                 }
             }
