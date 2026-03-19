@@ -14,7 +14,7 @@ pub mod visual_tests;
 #[cfg(target_os = "windows")]
 pub(crate) mod windows_only_instance;
 
-use agent_ui::{AgentDiffToolbar, AgentPanelDelegate};
+use agent_ui::{AgentDiffToolbar, AiWorkspaceDelegate};
 use anyhow::Context as _;
 pub use app_menus::*;
 use assets::Assets;
@@ -90,7 +90,7 @@ use workspace::notifications::{
 };
 
 use workspace::{
-    AppState, MultiWorkspace, NewFile, NewWindow, OpenLog, Panel, Toast, Workspace,
+    AppState, MultiWorkspace, NewFile, NewWindow, OpenLog, Toast, Workspace,
     WorkspaceSettings, create_and_open_local_file,
     notifications::simple_message_notification::MessageNotification, open_new,
 };
@@ -668,71 +668,47 @@ fn initialize_panels(
             add_panel_when_ready(channels_panel, workspace_handle.clone(), cx.clone()),
             add_panel_when_ready(notification_panel, workspace_handle.clone(), cx.clone()),
             add_panel_when_ready(debug_panel, workspace_handle.clone(), cx.clone()),
-            initialize_agent_panel(workspace_handle, prompt_builder, cx.clone()).map(|r| r.log_err()),
+            initialize_ai_surface(workspace_handle, prompt_builder, cx.clone()).map(|r| r.log_err()),
         );
 
         anyhow::Ok(())
     })
 }
 
-fn setup_or_teardown_ai_panel<P: Panel>(
-    workspace: &mut Workspace,
-    window: &mut Window,
-    cx: &mut Context<Workspace>,
-    load_panel: impl FnOnce(
-        WeakEntity<Workspace>,
-        AsyncWindowContext,
-    ) -> Task<anyhow::Result<Entity<P>>>
-    + 'static,
-) -> Task<anyhow::Result<()>> {
-    let disable_ai = SettingsStore::global(cx)
-        .get::<DisableAiSettings>(None)
-        .disable_ai
-        || cfg!(test);
-    let existing_panel = workspace.panel::<P>(cx);
-    match (disable_ai, existing_panel) {
-        (false, None) => cx.spawn_in(window, async move |workspace, cx| {
-            let panel = load_panel(workspace.clone(), cx.clone()).await?;
-            workspace.update_in(cx, |workspace, window, cx| {
-                let disable_ai = SettingsStore::global(cx)
-                    .get::<DisableAiSettings>(None)
-                    .disable_ai;
-                let have_panel = workspace.panel::<P>(cx).is_some();
-                if !disable_ai && !have_panel {
-                    workspace.add_panel(panel, window, cx);
-                }
-            })
-        }),
-        (true, Some(existing_panel)) => {
-            workspace.remove_panel::<P>(&existing_panel, window, cx);
-            Task::ready(Ok(()))
-        }
-        _ => Task::ready(Ok(())),
-    }
-}
-
-async fn initialize_agent_panel(
+async fn initialize_ai_surface(
     workspace_handle: WeakEntity<Workspace>,
     prompt_builder: Arc<PromptBuilder>,
     mut cx: AsyncWindowContext,
 ) -> anyhow::Result<()> {
-    workspace_handle
-        .update_in(&mut cx, |workspace, window, cx| {
-            let prompt_builder = prompt_builder.clone();
-            setup_or_teardown_ai_panel(workspace, window, cx, move |workspace, cx| {
-                agent_ui::AgentPanel::load(workspace, prompt_builder, cx)
-            })
-        })?
-        .await?;
+    if !cfg!(test) {
+        let disable_ai = workspace_handle
+            .read_with(&cx, |_, cx| {
+                SettingsStore::global(cx)
+                    .get::<DisableAiSettings>(None)
+                    .disable_ai
+            })?
+            || cfg!(test);
+        if !disable_ai {
+            agent_ui::initialize(workspace_handle.clone(), prompt_builder.clone(), cx.clone())
+                .await?;
+        }
+    }
 
     workspace_handle.update_in(&mut cx, |workspace, window, cx| {
         let prompt_builder = prompt_builder.clone();
         cx.observe_global_in::<SettingsStore>(window, move |workspace, window, cx| {
             let prompt_builder = prompt_builder.clone();
-            setup_or_teardown_ai_panel(workspace, window, cx, move |workspace, cx| {
-                agent_ui::AgentPanel::load(workspace, prompt_builder, cx)
-            })
-            .detach_and_log_err(cx);
+            let disable_ai = SettingsStore::global(cx)
+                .get::<DisableAiSettings>(None)
+                .disable_ai
+                || cfg!(test);
+            if !disable_ai && agent_ui::workspace_controller(workspace, cx).is_none() {
+                let workspace = workspace.weak_handle();
+                cx.spawn_in(window, async move |_, cx| {
+                    agent_ui::initialize(workspace, prompt_builder, cx.clone()).await
+                })
+                .detach_and_log_err(cx);
+            }
         })
         .detach();
 
@@ -741,16 +717,16 @@ async fn initialize_agent_panel(
         // We need to do this here instead of within the individual `init`
         // functions so that we only register the actions once.
         //
-        // Once we ship `assistant2` we can push this back down into `agent::agent_panel::init`.
+        // Once we ship `assistant2` we can push this back down into `agent::ai_workspace::init`.
         if !cfg!(test) {
-            <dyn AgentPanelDelegate>::set_global(
-                Arc::new(agent_ui::ConcreteAssistantPanelDelegate),
+            <dyn AiWorkspaceDelegate>::set_global(
+                Arc::new(agent_ui::ConcreteAiWorkspaceDelegate),
                 cx,
             );
 
             workspace
-                .register_action(agent_ui::AgentPanel::toggle_focus)
-                .register_action(agent_ui::AgentPanel::toggle)
+                .register_action(agent_ui::toggle_focus)
+                .register_action(agent_ui::toggle)
                 .register_action(agent_ui::InlineAssistant::inline_assist);
         }
     })?;
@@ -5135,6 +5111,7 @@ mod tests {
                 false,
                 cx,
             );
+            orchestration_ui::init(cx);
 
             repl::init(app_state.fs.clone(), cx);
             repl::notebook::init(cx);

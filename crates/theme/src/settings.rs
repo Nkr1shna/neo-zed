@@ -110,9 +110,9 @@ pub struct ThemeSettings {
     ///
     /// The terminal font family can be overridden using it's own setting.
     pub buffer_font: Font,
-    /// The agent font size. Determines the size of text in the agent panel. Falls back to the UI font size if unset.
+    /// The agent font size. Determines the size of text in the AI workspace. Falls back to the UI font size if unset.
     agent_ui_font_size: Option<Pixels>,
-    /// The agent buffer font size. Determines the size of user messages in the agent panel.
+    /// The agent buffer font size. Determines the size of user messages in the AI workspace.
     agent_buffer_font_size: Option<Pixels>,
     /// The line height for buffers, and the terminal.
     ///
@@ -188,7 +188,7 @@ pub(crate) struct UiFontSize(Pixels);
 
 impl Global for UiFontSize {}
 
-/// In-memory override for the font size in the agent panel.
+/// In-memory override for the font size in the AI workspace.
 #[derive(Default)]
 pub struct AgentFontSize(Pixels);
 
@@ -480,7 +480,7 @@ impl ThemeSettings {
         clamp_font_size(font_size)
     }
 
-    /// Returns the agent panel font size. Falls back to the UI font size if unset.
+    /// Returns the AI workspace font size. Falls back to the UI font size if unset.
     pub fn agent_ui_font_size(&self, cx: &App) -> Pixels {
         cx.try_global::<AgentFontSize>()
             .map(|size| size.0)
@@ -489,7 +489,7 @@ impl ThemeSettings {
             .unwrap_or_else(|| self.ui_font_size(cx))
     }
 
-    /// Returns the agent panel buffer font size.
+    /// Returns the AI workspace buffer font size.
     pub fn agent_buffer_font_size(&self, cx: &App) -> Pixels {
         cx.try_global::<AgentFontSize>()
             .map(|size| size.0)
@@ -645,7 +645,7 @@ pub fn reset_ui_font_size(cx: &mut App) {
     }
 }
 
-/// Sets the adjusted font size of agent responses in the agent panel.
+/// Sets the adjusted font size of agent responses in the AI workspace.
 pub fn adjust_agent_ui_font_size(cx: &mut App, f: impl FnOnce(Pixels) -> Pixels) {
     let agent_ui_font_size = ThemeSettings::get_global(cx).agent_ui_font_size(cx);
     let adjusted_size = cx
@@ -655,7 +655,7 @@ pub fn adjust_agent_ui_font_size(cx: &mut App, f: impl FnOnce(Pixels) -> Pixels)
     cx.refresh_windows();
 }
 
-/// Resets the agent response font size in the agent panel to the default value.
+/// Resets the agent response font size in the AI workspace to the default value.
 pub fn reset_agent_ui_font_size(cx: &mut App) {
     if cx.has_global::<AgentFontSize>() {
         cx.remove_global::<AgentFontSize>();
@@ -663,7 +663,7 @@ pub fn reset_agent_ui_font_size(cx: &mut App) {
     }
 }
 
-/// Sets the adjusted font size of user messages in the agent panel.
+/// Sets the adjusted font size of user messages in the AI workspace.
 pub fn adjust_agent_buffer_font_size(cx: &mut App, f: impl FnOnce(Pixels) -> Pixels) {
     let agent_buffer_font_size = ThemeSettings::get_global(cx).agent_buffer_font_size(cx);
     let adjusted_size = cx
@@ -673,7 +673,7 @@ pub fn adjust_agent_buffer_font_size(cx: &mut App, f: impl FnOnce(Pixels) -> Pix
     cx.refresh_windows();
 }
 
-/// Resets the user message font size in the agent panel to the default value.
+/// Resets the user message font size in the AI workspace to the default value.
 pub fn reset_agent_buffer_font_size(cx: &mut App) {
     if cx.has_global::<AgentFontSize>() {
         cx.remove_global::<AgentFontSize>();

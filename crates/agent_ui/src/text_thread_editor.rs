@@ -127,7 +127,7 @@ pub enum ThoughtProcessStatus {
     Completed,
 }
 
-pub trait AgentPanelDelegate {
+pub trait AiWorkspaceDelegate {
     fn active_text_thread_editor(
         &self,
         workspace: &mut Workspace,
@@ -169,22 +169,22 @@ pub trait AgentPanelDelegate {
     );
 }
 
-impl dyn AgentPanelDelegate {
-    /// Returns the global [`AssistantPanelDelegate`], if it exists.
+impl dyn AiWorkspaceDelegate {
+    /// Returns the global AI workspace delegate, if it exists.
     pub fn try_global(cx: &App) -> Option<Arc<Self>> {
-        cx.try_global::<GlobalAssistantPanelDelegate>()
+        cx.try_global::<GlobalAiWorkspaceDelegate>()
             .map(|global| global.0.clone())
     }
 
-    /// Sets the global [`AssistantPanelDelegate`].
+    /// Sets the global AI workspace delegate.
     pub fn set_global(delegate: Arc<Self>, cx: &mut App) {
-        cx.set_global(GlobalAssistantPanelDelegate(delegate));
+        cx.set_global(GlobalAiWorkspaceDelegate(delegate));
     }
 }
 
-struct GlobalAssistantPanelDelegate(Arc<dyn AgentPanelDelegate>);
+struct GlobalAiWorkspaceDelegate(Arc<dyn AiWorkspaceDelegate>);
 
-impl Global for GlobalAssistantPanelDelegate {}
+impl Global for GlobalAiWorkspaceDelegate {}
 
 pub struct TextThreadEditor {
     text_thread: Entity<TextThread>,
@@ -1332,11 +1332,11 @@ impl TextThreadEditor {
         window: &mut Window,
         cx: &mut Context<Workspace>,
     ) {
-        let Some(agent_panel_delegate) = <dyn AgentPanelDelegate>::try_global(cx) else {
+        let Some(ai_workspace_delegate) = <dyn AiWorkspaceDelegate>::try_global(cx) else {
             return;
         };
         let Some(context_editor_view) =
-            agent_panel_delegate.active_text_thread_editor(workspace, window, cx)
+            ai_workspace_delegate.active_text_thread_editor(workspace, window, cx)
         else {
             return;
         };
@@ -1362,9 +1362,9 @@ impl TextThreadEditor {
         cx: &mut Context<Workspace>,
     ) {
         let result = maybe!({
-            let agent_panel_delegate = <dyn AgentPanelDelegate>::try_global(cx)?;
+            let ai_workspace_delegate = <dyn AiWorkspaceDelegate>::try_global(cx)?;
             let context_editor_view =
-                agent_panel_delegate.active_text_thread_editor(workspace, window, cx)?;
+                ai_workspace_delegate.active_text_thread_editor(workspace, window, cx)?;
             Self::get_selection_or_code_block(&context_editor_view, cx)
         });
         let Some((text, is_code_block)) = result else {
@@ -1397,11 +1397,11 @@ impl TextThreadEditor {
         window: &mut Window,
         cx: &mut Context<Workspace>,
     ) {
-        let Some(agent_panel_delegate) = <dyn AgentPanelDelegate>::try_global(cx) else {
+        let Some(ai_workspace_delegate) = <dyn AiWorkspaceDelegate>::try_global(cx) else {
             return;
         };
         let Some(context_editor_view) =
-            agent_panel_delegate.active_text_thread_editor(workspace, window, cx)
+            ai_workspace_delegate.active_text_thread_editor(workspace, window, cx)
         else {
             return;
         };
@@ -1491,7 +1491,7 @@ impl TextThreadEditor {
         window: &mut Window,
         cx: &mut Context<Workspace>,
     ) {
-        let Some(agent_panel_delegate) = <dyn AgentPanelDelegate>::try_global(cx) else {
+        let Some(ai_workspace_delegate) = <dyn AiWorkspaceDelegate>::try_global(cx) else {
             return;
         };
 
@@ -1524,7 +1524,7 @@ impl TextThreadEditor {
             });
             Some((selections, buffer))
         }) {
-            agent_panel_delegate.quote_selection(workspace, selections, buffer, window, cx);
+            ai_workspace_delegate.quote_selection(workspace, selections, buffer, window, cx);
         }
     }
 
@@ -2909,10 +2909,10 @@ impl FollowableItem for TextThreadEditor {
         let editor_state = state.editor?;
 
         let project = workspace.read(cx).project().clone();
-        let agent_panel_delegate = <dyn AgentPanelDelegate>::try_global(cx)?;
+        let ai_workspace_delegate = <dyn AiWorkspaceDelegate>::try_global(cx)?;
 
         let text_thread_editor_task = workspace.update(cx, |workspace, cx| {
-            agent_panel_delegate.open_remote_text_thread(workspace, text_thread_id, window, cx)
+            ai_workspace_delegate.open_remote_text_thread(workspace, text_thread_id, window, cx)
         });
 
         Some(window.spawn(cx, async move |cx| {

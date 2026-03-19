@@ -30,26 +30,26 @@ pub enum RenderReason {
     ExplicitRefresh,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub struct RemoteViewProperty {
     pub name: String,
     pub value: String,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub struct VirtualListProps {
     pub item_count: u32,
     pub estimated_row_height: u32,
     pub selection_mode: Option<String>,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub struct ProgressBarProps {
     pub value: u32,
     pub max_value: u32,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub enum RemoteViewNodeKind {
     Row,
     Column,
@@ -68,7 +68,7 @@ pub enum RemoteViewNodeKind {
     VirtualList(VirtualListProps),
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub struct RemoteViewNode {
     pub node_id: String,
     pub parent_id: Option<String>,
@@ -76,7 +76,7 @@ pub struct RemoteViewNode {
     pub properties: Vec<RemoteViewProperty>,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub struct RemoteViewTree {
     pub revision: u64,
     pub root_id: String,

@@ -3312,7 +3312,7 @@ mod tests {
 
         // Open a regular editor with the created file, and select a portion of
         // the text that will be used for the selections that are meant to be
-        // inserted in the agent panel.
+        // inserted in the AI workspace.
         let editor = workspace
             .update_in(&mut cx, |workspace, window, cx| {
                 workspace.open_path(
@@ -3382,7 +3382,7 @@ mod tests {
                 // remains off screen.
                 let mut lines = String::new();
                 for _ in 1..=100 {
-                    lines.push_str(&"Another line in the agent panel's message editor\n");
+                    lines.push_str(&"Another line in the AI workspace's message editor\n");
                 }
                 editor.set_text(lines.as_str(), window, cx);
                 editor.change_selections(Default::default(), window, cx, |selections| {

@@ -229,7 +229,7 @@
     },
   },
   {
-    "context": "Editor && !agent_diff && !AgentPanel",
+    "context": "Editor && !agent_diff && !AiWorkspace",
     "use_key_equivalents": true,
     "bindings": {
       "cmd-alt-z": "git::Restore",
@@ -281,7 +281,7 @@
     },
   },
   {
-    "context": "AgentPanel",
+    "context": "AiWorkspace",
     "use_key_equivalents": true,
     "bindings": {
       "cmd-n": "agent::NewThread",
@@ -308,14 +308,14 @@
     },
   },
   {
-    "context": "AgentPanel > Markdown",
+    "context": "AiWorkspace > Markdown",
     "use_key_equivalents": true,
     "bindings": {
       "cmd-c": "markdown::CopyAsMarkdown",
     },
   },
   {
-    "context": "AgentPanel && text_thread",
+    "context": "AiWorkspace && text_thread",
     "use_key_equivalents": true,
     "bindings": {
       "cmd-n": "agent::NewTextThread",
@@ -323,7 +323,7 @@
     },
   },
   {
-    "context": "AgentPanel && acp_thread",
+    "context": "AiWorkspace && acp_thread",
     "use_key_equivalents": true,
     "bindings": {
       "cmd-n": "agent::NewExternalAgentThread",

@@ -571,7 +571,7 @@ pub async fn list_models(
                 // When displayed in the UI, these names can get truncated from the right.
                 // Since users typically already know the provider, we extract just the model name
                 // portion (after the colon) to create a more concise and user-friendly label
-                // for the model dropdown in the agent panel.
+                // for the model dropdown in the AI workspace.
                 display_name: Some(
                     entry
                         .name

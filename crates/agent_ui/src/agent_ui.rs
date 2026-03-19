@@ -2,8 +2,10 @@ mod agent_configuration;
 pub(crate) mod agent_connection_store;
 mod agent_diff;
 mod agent_model_selector;
-mod agent_panel;
+mod ai_workspace;
 mod agent_registry_ui;
+mod agent_workspace_item;
+mod agent_workspace_surface;
 mod branch_names;
 mod buffer_codegen;
 mod completion_provider;
@@ -61,13 +63,25 @@ use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 use settings::{LanguageModelSelection, Settings as _, SettingsStore};
 use std::any::TypeId;
+use ::ui::DocumentationSide;
 use workspace::Workspace;
 
 use crate::agent_configuration::{ConfigureContextServerModal, ManageProfilesModal};
-pub use crate::agent_panel::{
-    AgentPanel, AgentPanelEvent, ConcreteAssistantPanelDelegate, WorktreeCreationStatus,
+pub use crate::ai_workspace::{
+    AiWorkspace, AiWorkspaceEvent, ConcreteAiWorkspaceDelegate, WorktreeCreationStatus,
 };
 use crate::agent_registry_ui::AgentRegistryPage;
+pub use crate::agent_workspace_item::AgentWorkspaceItem;
+pub use crate::agent_workspace_surface::{
+    AgentThreadSummary, active_workspace_focused_thread_id, agent_connection_store,
+    attach_workspace_controller,
+    focus_ai_surface,
+    focused_thread_id, focused_thread_id_for_panel, load_agent_thread_in_center,
+    initialize,
+    new_agent_thread_with_external_source_prompt_in_center,
+    open_saved_text_thread_in_center, open_thread_in_center, thread_store, thread_summaries,
+    toggle, toggle_focus, workspace_controller,
+};
 pub use crate::inline_assistant::InlineAssistant;
 pub use agent_diff::{AgentDiffPane, AgentDiffToolbar};
 pub(crate) use conversation_view::ConversationView;
@@ -75,10 +89,14 @@ pub use external_source_prompt::ExternalSourcePrompt;
 pub(crate) use mode_selector::ModeSelector;
 pub(crate) use model_selector::ModelSelector;
 pub(crate) use model_selector_popover::ModelSelectorPopover;
-pub use text_thread_editor::{AgentPanelDelegate, TextThreadEditor};
+pub use text_thread_editor::{AiWorkspaceDelegate, TextThreadEditor};
 pub(crate) use thread_history::ThreadHistory;
 pub(crate) use thread_history_view::*;
 use zed_actions;
+
+pub(crate) fn agent_documentation_side() -> DocumentationSide {
+    DocumentationSide::Left
+}
 
 actions!(
     agent,
@@ -323,7 +341,7 @@ pub fn init(
         init_language_model_settings(cx);
     }
     assistant_slash_command::init(cx);
-    agent_panel::init(cx);
+    ai_workspace::init(cx);
     context_server_configuration::init(language_registry.clone(), fs.clone(), cx);
     TextThreadEditor::init(cx);
     thread_metadata_store::init(cx);

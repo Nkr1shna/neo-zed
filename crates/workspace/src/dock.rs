@@ -37,11 +37,12 @@ pub trait Panel: Focusable + EventEmitter<PanelEvent> + Render + Sized {
     fn position(&self, window: &Window, cx: &App) -> DockPosition;
     fn position_is_valid(&self, position: DockPosition) -> bool;
     fn set_position(&mut self, position: DockPosition, window: &mut Window, cx: &mut Context<Self>);
-    fn size(&self, window: &Window, cx: &App) -> Pixels;
-    fn set_size(&mut self, size: Option<Pixels>, window: &mut Window, cx: &mut Context<Self>);
     fn icon(&self, window: &Window, cx: &App) -> Option<ui::IconName>;
     fn icon_tooltip(&self, window: &Window, cx: &App) -> Option<&'static str>;
     fn toggle_action(&self) -> Box<dyn Action>;
+    fn legacy_dock_size(&self, _window: &Window, _cx: &App) -> Option<Pixels> {
+        None
+    }
     fn icon_label(&self, _window: &Window, _: &App) -> Option<String> {
         None
     }
@@ -77,12 +78,11 @@ pub trait PanelHandle: Send + Sync {
     fn set_active(&self, active: bool, window: &mut Window, cx: &mut App);
     fn remote_id(&self) -> Option<proto::PanelId>;
     fn pane(&self, cx: &App) -> Option<Entity<Pane>>;
-    fn size(&self, window: &Window, cx: &App) -> Pixels;
-    fn set_size(&self, size: Option<Pixels>, window: &mut Window, cx: &mut App);
     fn icon(&self, window: &Window, cx: &App) -> Option<ui::IconName>;
     fn icon_tooltip(&self, window: &Window, cx: &App) -> Option<&'static str>;
     fn toggle_action(&self, window: &Window, cx: &App) -> Box<dyn Action>;
     fn icon_label(&self, window: &Window, cx: &App) -> Option<String>;
+    fn legacy_dock_size(&self, window: &Window, cx: &App) -> Option<Pixels>;
     fn panel_focus_handle(&self, cx: &App) -> FocusHandle;
     fn to_any(&self) -> AnyView;
     fn activation_priority(&self, cx: &App) -> u32;
@@ -152,14 +152,6 @@ where
         T::remote_id()
     }
 
-    fn size(&self, window: &Window, cx: &App) -> Pixels {
-        self.read(cx).size(window, cx)
-    }
-
-    fn set_size(&self, size: Option<Pixels>, window: &mut Window, cx: &mut App) {
-        self.update(cx, |this, cx| this.set_size(size, window, cx))
-    }
-
     fn icon(&self, window: &Window, cx: &App) -> Option<ui::IconName> {
         self.read(cx).icon(window, cx)
     }
@@ -174,6 +166,10 @@ where
 
     fn icon_label(&self, window: &Window, cx: &App) -> Option<String> {
         self.read(cx).icon_label(window, cx)
+    }
+
+    fn legacy_dock_size(&self, window: &Window, cx: &App) -> Option<Pixels> {
+        self.read(cx).legacy_dock_size(window, cx)
     }
 
     fn to_any(&self) -> AnyView {
@@ -207,6 +203,7 @@ pub struct Dock {
     workspace: WeakEntity<Workspace>,
     is_open: bool,
     active_panel_index: Option<usize>,
+    size: Option<Pixels>,
     focus_handle: FocusHandle,
     pub(crate) serialized_dock: Option<DockData>,
     zoom_layer_open: bool,
@@ -248,6 +245,10 @@ impl Into<settings::DockPosition> for DockPosition {
 }
 
 impl DockPosition {
+    pub const DEFAULT_LEFT_SIZE: Pixels = px(240.);
+    pub const DEFAULT_RIGHT_SIZE: Pixels = px(640.);
+    pub const DEFAULT_BOTTOM_SIZE: Pixels = px(320.);
+
     fn label(&self) -> &'static str {
         match self {
             Self::Left => "Left",
@@ -260,6 +261,14 @@ impl DockPosition {
         match self {
             Self::Left | Self::Right => Axis::Horizontal,
             Self::Bottom => Axis::Vertical,
+        }
+    }
+
+    pub fn default_size(&self) -> Pixels {
+        match self {
+            Self::Left => Self::DEFAULT_LEFT_SIZE,
+            Self::Bottom => Self::DEFAULT_BOTTOM_SIZE,
+            Self::Right => Self::DEFAULT_RIGHT_SIZE,
         }
     }
 }
@@ -301,6 +310,7 @@ impl Dock {
                 workspace: workspace.downgrade(),
                 panel_entries: Default::default(),
                 active_panel_index: None,
+                size: None,
                 is_open: false,
                 focus_handle: focus_handle.clone(),
                 _subscriptions: [focus_subscription, zoom_subscription],
@@ -416,6 +426,18 @@ impl Dock {
 
     pub fn active_panel_index(&self) -> Option<usize> {
         self.active_panel_index
+    }
+
+    pub fn size(&self) -> Option<Pixels> {
+        self.size
+    }
+
+    pub fn default_size(&self) -> Pixels {
+        self.position.default_size()
+    }
+
+    fn effective_size(&self) -> Pixels {
+        self.size.unwrap_or_else(|| self.default_size())
     }
 
     pub fn set_open(&mut self, open: bool, window: &mut Window, cx: &mut Context<Self>) {
@@ -607,6 +629,21 @@ impl Dock {
             },
         );
 
+        let should_migrate_legacy_size = self.size.is_none()
+            && self.serialized_dock.as_ref().is_some_and(|dock| {
+                dock.active_panel
+                    .as_deref()
+                    .map_or(self.panel_entries.len() == 1, |active_panel| {
+                        active_panel == T::persistent_name()
+                    })
+            });
+        if should_migrate_legacy_size {
+            self.size = panel
+                .read(cx)
+                .legacy_dock_size(window, cx)
+                .map(|size| size.round());
+        }
+
         self.restore_state(window, cx);
 
         if panel.read(cx).starts_open(window, cx) {
@@ -620,6 +657,7 @@ impl Dock {
 
     pub fn restore_state(&mut self, window: &mut Window, cx: &mut Context<Self>) -> bool {
         if let Some(serialized) = self.serialized_dock.clone() {
+            self.size = serialized.size.map(|size| px(size).round());
             if let Some(active_panel) = serialized.active_panel.filter(|_| serialized.visible)
                 && let Some(idx) = self.panel_index_for_persistent_name(active_panel.as_str(), cx)
             {
@@ -716,47 +754,33 @@ impl Dock {
         }
     }
 
-    pub fn panel_size(&self, panel: &dyn PanelHandle, window: &Window, cx: &App) -> Option<Pixels> {
+    pub fn panel_size(
+        &self,
+        panel: &dyn PanelHandle,
+        _window: &Window,
+        _cx: &App,
+    ) -> Option<Pixels> {
         self.panel_entries
             .iter()
             .find(|entry| entry.panel.panel_id() == panel.panel_id())
-            .map(|entry| entry.panel.size(window, cx))
+            .map(|_| self.effective_size())
     }
 
-    pub fn active_panel_size(&self, window: &Window, cx: &App) -> Option<Pixels> {
+    pub fn active_panel_size(&self, _window: &Window, _cx: &App) -> Option<Pixels> {
         if self.is_open {
-            self.active_panel_entry()
-                .map(|entry| entry.panel.size(window, cx))
+            self.active_panel_entry().map(|_| self.effective_size())
         } else {
             None
         }
     }
 
-    pub fn resize_active_panel(
-        &mut self,
-        size: Option<Pixels>,
-        window: &mut Window,
-        cx: &mut Context<Self>,
-    ) {
-        if let Some(entry) = self.active_panel_entry() {
-            let size = size.map(|size| size.max(RESIZE_HANDLE_SIZE).round());
-
-            entry.panel.set_size(size, window, cx);
-            cx.notify();
-        }
+    pub fn set_size(&mut self, size: Option<Pixels>, cx: &mut Context<Self>) {
+        self.size = size.map(|size| size.max(RESIZE_HANDLE_SIZE).round());
+        cx.notify();
     }
 
-    pub fn resize_all_panels(
-        &mut self,
-        size: Option<Pixels>,
-        window: &mut Window,
-        cx: &mut Context<Self>,
-    ) {
-        for entry in &mut self.panel_entries {
-            let size = size.map(|size| size.max(RESIZE_HANDLE_SIZE).round());
-            entry.panel.set_size(size, window, cx);
-        }
-        cx.notify();
+    pub fn reset_size(&mut self, cx: &mut Context<Self>) {
+        self.set_size(None, cx);
     }
 
     pub fn toggle_action(&self) -> Box<dyn Action> {
@@ -774,21 +798,19 @@ impl Dock {
         dispatch_context
     }
 
-    pub fn clamp_panel_size(&mut self, max_size: Pixels, window: &mut Window, cx: &mut App) {
+    pub fn clamp_panel_size(&mut self, max_size: Pixels, _window: &mut Window, _cx: &mut App) {
         let max_size = (max_size - RESIZE_HANDLE_SIZE).abs();
-        for panel in self.panel_entries.iter().map(|entry| &entry.panel) {
-            if panel.size(window, cx) > max_size {
-                panel.set_size(Some(max_size.max(RESIZE_HANDLE_SIZE)), window, cx);
-            }
+        if self.effective_size() > max_size {
+            self.size = Some(max_size.max(RESIZE_HANDLE_SIZE).round());
         }
     }
 }
 
 impl Render for Dock {
-    fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+    fn render(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let dispatch_context = Self::dispatch_context();
         if let Some(entry) = self.visible_entry() {
-            let size = entry.panel.size(window, cx);
+            let size = self.effective_size();
 
             let position = self.position;
             let create_resize_handle = || {
@@ -808,7 +830,7 @@ impl Render for Dock {
                         MouseButton::Left,
                         cx.listener(|dock, e: &MouseUpEvent, window, cx| {
                             if e.click_count == 2 {
-                                dock.resize_active_panel(None, window, cx);
+                                dock.reset_size(cx);
                                 dock.workspace
                                     .update(cx, |workspace, cx| {
                                         workspace.serialize_workspace(window, cx);
@@ -1100,14 +1122,6 @@ pub mod test {
             cx.update_global::<SettingsStore, _>(|_, _| {});
         }
 
-        fn size(&self, _window: &Window, _: &App) -> Pixels {
-            self.size
-        }
-
-        fn set_size(&mut self, size: Option<Pixels>, _window: &mut Window, _: &mut Context<Self>) {
-            self.size = size.unwrap_or(px(300.));
-        }
-
         fn icon(&self, _window: &Window, _: &App) -> Option<ui::IconName> {
             None
         }
@@ -1118,6 +1132,10 @@ pub mod test {
 
         fn toggle_action(&self) -> Box<dyn Action> {
             ToggleTestPanel.boxed_clone()
+        }
+
+        fn legacy_dock_size(&self, _window: &Window, _: &App) -> Option<Pixels> {
+            Some(self.size)
         }
 
         fn is_zoomed(&self, _window: &Window, _: &App) -> bool {

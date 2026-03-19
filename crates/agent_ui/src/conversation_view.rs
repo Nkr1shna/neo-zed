@@ -61,13 +61,14 @@ use workspace::{
     CollaboratorId, MultiWorkspace, NewTerminal, Toast, Workspace, notifications::NotificationId,
 };
 use zed_actions::agent::{Chat, ToggleModelSelector};
-use zed_actions::assistant::OpenRulesLibrary;
+use zed_actions::assistant::{OpenRulesLibrary, ToggleFocus};
 
 use super::config_options::ConfigOptionsView;
 use super::entry_view_state::EntryViewState;
 use super::thread_history::ThreadHistory;
 use crate::ModeSelector;
 use crate::ModelSelectorPopover;
+use crate::agent_workspace_surface::ai_surface_visible;
 use crate::agent_connection_store::{
     AgentConnectedState, AgentConnectionEntryEvent, AgentConnectionStore,
 };
@@ -78,7 +79,7 @@ use crate::profile_selector::{ProfileProvider, ProfileSelector};
 use crate::thread_metadata_store::ThreadMetadataStore;
 use crate::ui::{AgentNotification, AgentNotificationEvent};
 use crate::{
-    Agent, AgentDiffPane, AgentInitialContent, AgentPanel, AllowAlways, AllowOnce,
+    Agent, AgentDiffPane, AgentInitialContent, AllowAlways, AllowOnce,
     AuthorizeToolCall, ClearMessageQueue, CycleFavoriteModels, CycleModeSelector,
     CycleThinkingEffort, EditFirstQueuedMessage, ExpandMessageEditor, Follow, KeepAll, NewThread,
     OpenAddContextMenu, OpenAgentDiff, OpenHistory, RejectAll, RejectOnce,
@@ -2031,7 +2032,7 @@ impl ConversationView {
         let agent_name = self.agent.agent_id();
 
         telemetry::event!(
-            "Agent Panel Error Shown",
+            "AI Workspace Error Shown",
             agent = agent_name,
             kind = error_kind,
             message = error.to_string(),
@@ -2328,12 +2329,12 @@ impl ConversationView {
         self.show_notification(caption, icon, window, cx);
     }
 
-    fn agent_panel_visible(&self, multi_workspace: &Entity<MultiWorkspace>, cx: &App) -> bool {
+    fn ai_workspace_visible(&self, multi_workspace: &Entity<MultiWorkspace>, cx: &App) -> bool {
         let Some(workspace) = self.workspace.upgrade() else {
             return false;
         };
 
-        multi_workspace.read(cx).workspace() == &workspace && AgentPanel::is_visible(&workspace, cx)
+        multi_workspace.read(cx).workspace() == &workspace && ai_surface_visible(&workspace.read(cx), cx)
     }
 
     fn agent_status_visible(&self, window: &Window, cx: &App) -> bool {
@@ -2343,11 +2344,11 @@ impl ConversationView {
 
         if let Some(multi_workspace) = window.root::<MultiWorkspace>().flatten() {
             multi_workspace.read(cx).sidebar_open()
-                || self.agent_panel_visible(&multi_workspace, cx)
+                || self.ai_workspace_visible(&multi_workspace, cx)
         } else {
             self.workspace
                 .upgrade()
-                .is_some_and(|workspace| AgentPanel::is_visible(&workspace, cx))
+                .is_some_and(|workspace| ai_surface_visible(&workspace.read(cx), cx))
         }
     }
 
@@ -2355,11 +2356,11 @@ impl ConversationView {
         let settings = AgentSettings::get_global(cx);
         let visible = window.is_window_active()
             && if let Some(mw) = window.root::<MultiWorkspace>().flatten() {
-                self.agent_panel_visible(&mw, cx)
+                self.ai_workspace_visible(&mw, cx)
             } else {
                 self.workspace
                     .upgrade()
-                    .is_some_and(|workspace| AgentPanel::is_visible(&workspace, cx))
+                    .is_some_and(|workspace| ai_surface_visible(&workspace.read(cx), cx))
             };
         if settings.play_sound_when_agent_done && !visible {
             Audio::play_sound(Sound::AgentDone, cx);
@@ -2457,8 +2458,9 @@ impl ConversationView {
                                         window.activate_window();
                                         if let Some(workspace) = workspace_handle.upgrade() {
                                             multi_workspace.activate(workspace.clone(), cx);
-                                            workspace.update(cx, |workspace, cx| {
-                                                workspace.focus_panel::<AgentPanel>(window, cx);
+                                            workspace.update(cx, |_workspace, cx| {
+                                                window
+                                                    .dispatch_action(ToggleFocus.boxed_clone(), cx);
                                             });
                                         }
                                     })
@@ -2779,7 +2781,7 @@ pub(crate) mod tests {
     use std::sync::Arc;
     use workspace::{Item, MultiWorkspace};
 
-    use crate::agent_panel;
+    use crate::ai_workspace;
 
     use super::*;
 
@@ -3248,7 +3250,7 @@ pub(crate) mod tests {
 
         // Window is active (don't deactivate), but panel will be hidden
         // Note: In the test environment, the panel is not actually added to the dock,
-        // so is_agent_panel_hidden will return true
+        // so is_ai_workspace_hidden will return true
 
         active_thread(&conversation_view, cx)
             .update_in(cx, |view, window, cx| view.send(window, cx));
@@ -3299,7 +3301,7 @@ pub(crate) mod tests {
     ) {
         init_test(cx);
 
-        // Enable multi-workspace feature flag and init globals needed by AgentPanel
+        // Enable multi-workspace feature flag and init globals needed by AiWorkspace
         let fs = FakeFs::new(cx.executor());
 
         cx.update(|cx| {
@@ -3326,19 +3328,17 @@ pub(crate) mod tests {
             let text_thread_store =
                 cx.new(|cx| TextThreadStore::fake(workspace.project().clone(), cx));
             let panel =
-                cx.new(|cx| crate::AgentPanel::new(workspace, text_thread_store, None, window, cx));
-            workspace.add_panel(panel, window, cx);
-
-            // Open the dock and activate the agent panel so it's visible
-            workspace.focus_panel::<crate::AgentPanel>(window, cx);
+                cx.new(|cx| crate::AiWorkspace::new(workspace, text_thread_store, None, window, cx));
+            crate::attach_workspace_controller(workspace, panel, window, cx);
+            crate::focus_ai_surface(workspace, window, cx);
         });
 
         cx.run_until_parked();
 
         cx.read(|cx| {
             assert!(
-                crate::AgentPanel::is_visible(&workspace1, cx),
-                "AgentPanel should be visible in workspace1's dock"
+                crate::AiWorkspace::is_visible(&workspace1, cx),
+                "AI surface should be visible in workspace1"
             );
         });
 
@@ -3393,9 +3393,9 @@ pub(crate) mod tests {
             })
             .unwrap();
 
-        // Window is active, agent panel is visible in workspace1, but workspace1
+        // Window is active, AI workspace is visible in workspace1, but workspace1
         // is in the background. The notification should show because the user
-        // can't actually see the agent panel.
+        // can't actually see the AI workspace.
         active_thread(&conversation_view, cx)
             .update_in(cx, |view, window, cx| view.send(window, cx));
 
@@ -3650,7 +3650,7 @@ pub(crate) mod tests {
     impl Render for ThreadViewItem {
         fn render(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
             // Render the title editor in the element tree too. In the real app
-            // it is part of the agent panel
+            // it is part of the AI workspace
             let title_editor = self
                 .0
                 .read(cx)
@@ -4294,7 +4294,7 @@ pub(crate) mod tests {
             ThreadMetadataStore::init_global(cx);
             theme::init(theme::LoadThemes::JustBase, cx);
             editor::init(cx);
-            agent_panel::init(cx);
+            ai_workspace::init(cx);
             release_channel::init(semver::Version::new(0, 0, 0), cx);
             prompt_store::init(cx)
         });

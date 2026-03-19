@@ -6,7 +6,7 @@ use gpui::{
 use ui::{TintColor, Vector, VectorName, prelude::*};
 use workspace::{ModalView, Workspace};
 
-use crate::agent_panel::{AgentPanel, AgentType};
+use crate::{Agent, NewExternalAgentThread};
 
 macro_rules! acp_onboarding_event {
     ($name:expr) => {
@@ -32,20 +32,15 @@ impl AcpOnboardingModal {
     }
 
     fn open_panel(&mut self, _: &ClickEvent, window: &mut Window, cx: &mut Context<Self>) {
-        self.workspace.update(cx, |workspace, cx| {
-            workspace.focus_panel::<AgentPanel>(window, cx);
-
-            if let Some(panel) = workspace.panel::<AgentPanel>(cx) {
-                panel.update(cx, |panel, cx| {
-                    panel.new_agent_thread(
-                        AgentType::Custom {
-                            id: GEMINI_ID.into(),
-                        },
-                        window,
-                        cx,
-                    );
-                });
-            }
+        self.workspace.update(cx, |_workspace, cx| {
+            window.dispatch_action(
+                Box::new(NewExternalAgentThread {
+                    agent: Some(Agent::Custom {
+                        id: GEMINI_ID.into(),
+                    }),
+                }),
+                cx,
+            );
         });
 
         cx.emit(DismissEvent);

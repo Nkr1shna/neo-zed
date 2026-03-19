@@ -6,7 +6,7 @@ use gpui::{
 use ui::{TintColor, Vector, VectorName, prelude::*};
 use workspace::{ModalView, Workspace};
 
-use crate::agent_panel::{AgentPanel, AgentType};
+use crate::{Agent, NewExternalAgentThread};
 
 macro_rules! claude_agent_onboarding_event {
     ($name:expr) => {
@@ -32,20 +32,15 @@ impl ClaudeCodeOnboardingModal {
     }
 
     fn open_panel(&mut self, _: &ClickEvent, window: &mut Window, cx: &mut Context<Self>) {
-        self.workspace.update(cx, |workspace, cx| {
-            workspace.focus_panel::<AgentPanel>(window, cx);
-
-            if let Some(panel) = workspace.panel::<AgentPanel>(cx) {
-                panel.update(cx, |panel, cx| {
-                    panel.new_agent_thread(
-                        AgentType::Custom {
-                            id: CLAUDE_AGENT_ID.into(),
-                        },
-                        window,
-                        cx,
-                    );
-                });
-            }
+        self.workspace.update(cx, |_workspace, cx| {
+            window.dispatch_action(
+                Box::new(NewExternalAgentThread {
+                    agent: Some(Agent::Custom {
+                        id: CLAUDE_AGENT_ID.into(),
+                    }),
+                }),
+                cx,
+            );
         });
 
         cx.emit(DismissEvent);
@@ -198,9 +193,9 @@ impl Render for ClaudeCodeOnboardingModal {
             )
             .child(Headline::new("Claude Agent: Natively in Zed").size(HeadlineSize::Large));
 
-        let copy = "Powered by the Agent Client Protocol, you can now run Claude Agent as\na first-class citizen in Zed's agent panel.";
+        let copy = "Powered by the Agent Client Protocol, you can now run Claude Agent as\na first-class citizen in Zed's AI workspace.";
 
-        let open_panel_button = Button::new("open-panel", "Start with Claude Agent")
+        let open_panel_button = Button::new("open-ai-workspace", "Start with Claude Agent")
             .style(ButtonStyle::Tinted(TintColor::Accent))
             .full_width()
             .on_click(cx.listener(Self::open_panel));

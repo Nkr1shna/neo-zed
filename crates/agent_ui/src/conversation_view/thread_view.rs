@@ -3,6 +3,9 @@ use cloud_api_types::{SubmitAgentThreadFeedbackBody, SubmitAgentThreadFeedbackCo
 use editor::actions::OpenExcerpts;
 
 use crate::StartThreadIn;
+use crate::agent_workspace_surface::{
+    open_saved_text_thread_in_center, open_thread_in_center, start_thread_in,
+};
 use gpui::{Corner, List};
 use language_model::{LanguageModelEffortLevel, Speed};
 use settings::update_settings_file;
@@ -808,18 +811,14 @@ impl ThreadView {
 
         let message_editor = self.message_editor.clone();
 
-        // Intercept the first send so the agent panel can capture the full
+        // Intercept the first send so the AI workspace can capture the full
         // content blocks — needed for "Start thread in New Worktree",
         // which must create a workspace before sending the message there.
         let intercept_first_send = self.thread.read(cx).entries().is_empty()
             && !message_editor.read(cx).is_empty(cx)
-            && self
-                .workspace
-                .upgrade()
-                .and_then(|workspace| workspace.read(cx).panel::<AgentPanel>(cx))
-                .is_some_and(|panel| {
-                    panel.read(cx).start_thread_in() == &StartThreadIn::NewWorktree
-                });
+            && self.workspace.upgrade().is_some_and(|workspace| {
+                start_thread_in(&workspace.read(cx), cx) == Some(StartThreadIn::NewWorktree)
+            });
 
         if intercept_first_send {
             let content_task = self.resolve_message_contents(&message_editor, cx);
@@ -1162,7 +1161,7 @@ impl ThreadView {
             .map(|id| id.to_string());
 
         telemetry::event!(
-            "Agent Panel Error Shown",
+            "AI Workspace Error Shown",
             agent = agent_telemetry_id,
             session_id = session_id,
             parent_session_id = parent_session_id,
@@ -8048,20 +8047,11 @@ pub(crate) fn open_link(
             }
             MentionUri::Selection { abs_path: None, .. } => {}
             MentionUri::Thread { id, name } => {
-                if let Some(panel) = workspace.panel::<AgentPanel>(cx) {
-                    panel.update(cx, |panel, cx| {
-                        panel.open_thread(id, None, Some(name.into()), window, cx)
-                    });
-                }
+                open_thread_in_center(workspace, id, None, Some(name.into()), window, cx);
             }
             MentionUri::TextThread { path, .. } => {
-                if let Some(panel) = workspace.panel::<AgentPanel>(cx) {
-                    panel.update(cx, |panel, cx| {
-                        panel
-                            .open_saved_text_thread(path.as_path().into(), window, cx)
-                            .detach_and_log_err(cx);
-                    });
-                }
+                open_saved_text_thread_in_center(workspace, path.as_path().into(), window, cx)
+                    .detach_and_log_err(cx);
             }
             MentionUri::Rule { id, .. } => {
                 let PromptId::User { uuid } = id else {

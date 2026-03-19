@@ -241,7 +241,7 @@
     },
   },
   {
-    "context": "AgentPanel",
+    "context": "AiWorkspace",
     "use_key_equivalents": true,
     "bindings": {
       "ctrl-n": "agent::NewThread",
@@ -253,7 +253,7 @@
       "ctrl-i": "agent::ToggleProfileSelector",
       "shift-tab": "agent::CycleModeSelector",
       "alt-tab": "agent::CycleFavoriteModels",
-      // `alt-l` is provided as an alternative to `alt-tab` as the latter breaks on Windows under the `AgentPanel` context
+      // `alt-l` is provided as an alternative to `alt-tab` as the latter breaks on Windows under the `AiWorkspace` context
       "alt-l": "agent::CycleFavoriteModels",
       "shift-alt-/": "agent::ToggleModelSelector",
       "shift-alt-j": "agent::ToggleNavigationMenu",
@@ -270,14 +270,14 @@
     },
   },
   {
-    "context": "AgentPanel > Markdown",
+    "context": "AiWorkspace > Markdown",
     "use_key_equivalents": true,
     "bindings": {
       "ctrl-c": "markdown::CopyAsMarkdown",
     },
   },
   {
-    "context": "AgentPanel && text_thread",
+    "context": "AiWorkspace && text_thread",
     "use_key_equivalents": true,
     "bindings": {
       "ctrl-n": "agent::NewTextThread",
@@ -285,7 +285,7 @@
     },
   },
   {
-    "context": "AgentPanel && acp_thread",
+    "context": "AiWorkspace && acp_thread",
     "use_key_equivalents": true,
     "bindings": {
       "ctrl-n": "agent::NewExternalAgentThread",

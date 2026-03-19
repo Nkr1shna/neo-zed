@@ -477,7 +477,6 @@ impl CollabPanel {
         else {
             return;
         };
-        let width = self.width;
         let collapsed_channels = self.collapsed_channels.clone();
         self.pending_serialization = cx.background_spawn(
             async move {
@@ -485,7 +484,7 @@ impl CollabPanel {
                     .write_kvp(
                         serialization_key,
                         serde_json::to_string(&SerializedCollabPanel {
-                            width,
+                            width: None,
                             collapsed_channels: Some(
                                 collapsed_channels.iter().map(|cid| cid.0).collect(),
                             ),
@@ -3178,17 +3177,8 @@ impl Panel for CollabPanel {
         });
     }
 
-    fn size(&self, _window: &Window, cx: &App) -> Pixels {
+    fn legacy_dock_size(&self, _window: &Window, _cx: &App) -> Option<Pixels> {
         self.width
-            .unwrap_or_else(|| CollaborationPanelSettings::get_global(cx).default_width)
-    }
-
-    fn set_size(&mut self, size: Option<Pixels>, window: &mut Window, cx: &mut Context<Self>) {
-        self.width = size;
-        cx.notify();
-        cx.defer_in(window, |this, _, cx| {
-            this.serialize(cx);
-        });
     }
 
     fn icon(&self, _window: &Window, cx: &App) -> Option<ui::IconName> {

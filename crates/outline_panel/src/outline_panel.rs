@@ -956,14 +956,16 @@ impl OutlinePanel {
         else {
             return;
         };
-        let width = self.width;
         let active = Some(self.active);
         self.pending_serialization = cx.background_spawn(
             async move {
                 KEY_VALUE_STORE
                     .write_kvp(
                         serialization_key,
-                        serde_json::to_string(&SerializedOutlinePanel { width, active })?,
+                        serde_json::to_string(&SerializedOutlinePanel {
+                            width: None,
+                            active,
+                        })?,
                     )
                     .await?;
                 anyhow::Ok(())
@@ -5004,17 +5006,8 @@ impl Panel for OutlinePanel {
         });
     }
 
-    fn size(&self, _: &Window, cx: &App) -> Pixels {
+    fn legacy_dock_size(&self, _: &Window, _cx: &App) -> Option<Pixels> {
         self.width
-            .unwrap_or_else(|| OutlinePanelSettings::get_global(cx).default_width)
-    }
-
-    fn set_size(&mut self, size: Option<Pixels>, window: &mut Window, cx: &mut Context<Self>) {
-        self.width = size;
-        cx.notify();
-        cx.defer_in(window, |this, _, cx| {
-            this.serialize(cx);
-        });
     }
 
     fn icon(&self, _: &Window, cx: &App) -> Option<IconName> {

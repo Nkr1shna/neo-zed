@@ -145,9 +145,9 @@ pub struct ThemeSettingsContent {
     /// The OpenType features to enable for rendering in text buffers.
     #[schemars(default = "default_font_features")]
     pub buffer_font_features: Option<FontFeaturesContent>,
-    /// The font size for agent responses in the agent panel. Falls back to the UI font size if unset.
+    /// The font size for agent responses in the AI workspace. Falls back to the UI font size if unset.
     pub agent_ui_font_size: Option<FontSize>,
-    /// The font size for user messages in the agent panel.
+    /// The font size for user messages in the AI workspace.
     pub agent_buffer_font_size: Option<FontSize>,
     /// The name of the Zed theme to use.
     pub theme: Option<ThemeSelection>,

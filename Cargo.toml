@@ -137,6 +137,8 @@ members = [
     "crates/open_ai",
     "crates/open_path_prompt",
     "crates/open_router",
+    "crates/orchestration",
+    "crates/orchestration_ui",
     "crates/outline",
     "crates/outline_panel",
     "crates/panel",
@@ -385,6 +387,8 @@ onboarding = { path = "crates/onboarding" }
 open_ai = { path = "crates/open_ai" }
 open_path_prompt = { path = "crates/open_path_prompt" }
 open_router = { path = "crates/open_router", features = ["schemars"] }
+orchestration = { path = "crates/orchestration" }
+orchestration_ui = { path = "crates/orchestration_ui" }
 outline = { path = "crates/outline" }
 outline_panel = { path = "crates/outline_panel" }
 panel = { path = "crates/panel" }

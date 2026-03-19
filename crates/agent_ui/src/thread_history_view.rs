@@ -1,5 +1,8 @@
 use crate::thread_history::ThreadHistory;
-use crate::{AgentPanel, ConversationView, RemoveHistory, RemoveSelectedThread};
+use crate::{
+    ConversationView, RemoveHistory, RemoveSelectedThread,
+    agent_workspace_surface::load_selected_agent_thread_in_center,
+};
 use acp_thread::AgentSessionInfo;
 use chrono::{Datelike as _, Local, NaiveDate, TimeDelta, Utc};
 use editor::{Editor, EditorEvent};
@@ -749,21 +752,16 @@ impl RenderOnce for HistoryEntryElement {
                         .upgrade()
                         .and_then(|view| view.read(cx).workspace().upgrade())
                     {
-                        if let Some(panel) = workspace.read(cx).panel::<AgentPanel>(cx) {
-                            panel.update(cx, |panel, cx| {
-                                if let Some(agent) = panel.selected_agent() {
-                                    panel.load_agent_thread(
-                                        agent,
-                                        entry.session_id.clone(),
-                                        entry.work_dirs.clone(),
-                                        entry.title.clone(),
-                                        true,
-                                        window,
-                                        cx,
-                                    );
-                                }
-                            });
-                        }
+                        workspace.update(cx, |workspace, cx| {
+                            load_selected_agent_thread_in_center(
+                                workspace,
+                                entry.session_id.clone(),
+                                entry.work_dirs.clone(),
+                                entry.title.clone(),
+                                window,
+                                cx,
+                            );
+                        });
                     }
                 }
             })

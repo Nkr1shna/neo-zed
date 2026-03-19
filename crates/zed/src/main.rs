@@ -6,7 +6,7 @@ mod zed;
 
 use agent::{SharedThread, ThreadStore};
 use agent_client_protocol;
-use agent_ui::AgentPanel;
+use agent_ui::{new_agent_thread_with_external_source_prompt_in_center, open_thread_in_center};
 use anyhow::{Context as _, Error, Result};
 use clap::Parser;
 use cli::FORCE_CLI_MODE_ENV_VAR_NAME;
@@ -21,7 +21,7 @@ use fs::{Fs, RealFs};
 use futures::{StreamExt, channel::oneshot, future};
 use git::GitHostingProviderRegistry;
 use git_ui::clone::clone_and_open;
-use gpui::{App, AppContext, Application, AsyncApp, Focusable as _, QuitMode, UpdateGlobal as _};
+use gpui::{App, AppContext, Application, AsyncApp, QuitMode, UpdateGlobal as _};
 use gpui_platform;
 
 use gpui_tokio::Tokio;
@@ -681,6 +681,7 @@ fn main() {
             false,
             cx,
         );
+        orchestration_ui::init(cx);
 
         repl::init(app_state.fs.clone(), cx);
         recent_projects::init(cx);
@@ -914,7 +915,7 @@ fn handle_open_request(request: OpenRequest, app_state: Arc<AppState>, cx: &mut 
                 })
                 .detach_and_log_err(cx);
             }
-            OpenRequestKind::AgentPanel {
+            OpenRequestKind::Agent {
                 external_source_prompt,
             } => {
                 cx.spawn(async move |cx| {
@@ -923,15 +924,12 @@ fn handle_open_request(request: OpenRequest, app_state: Arc<AppState>, cx: &mut 
 
                     multi_workspace.update(cx, |multi_workspace, window, cx| {
                         multi_workspace.workspace().update(cx, |workspace, cx| {
-                            if let Some(panel) = workspace.focus_panel::<AgentPanel>(window, cx) {
-                                panel.update(cx, |panel, cx| {
-                                    panel.new_agent_thread_with_external_source_prompt(
-                                        external_source_prompt,
-                                        window,
-                                        cx,
-                                    );
-                                });
-                            }
+                            new_agent_thread_with_external_source_prompt_in_center(
+                                workspace,
+                                external_source_prompt,
+                                window,
+                                cx,
+                            );
                         });
                     })
                 })
@@ -950,16 +948,9 @@ fn handle_open_request(request: OpenRequest, app_state: Arc<AppState>, cx: &mut 
                         multi_workspace.update(cx, |_, _window, cx| {
                             workspace.update(cx, |workspace, cx| {
                                 let client = workspace.project().read(cx).client();
-                                let thread_store: Option<gpui::Entity<ThreadStore>> = workspace
-                                    .panel::<AgentPanel>(cx)
-                                    .map(|panel| panel.read(cx).thread_store().clone());
-                                anyhow::Ok((client, thread_store))
+                                anyhow::Ok((client, ThreadStore::global(cx)))
                             })
                         })??;
-
-                    let Some(thread_store): Option<gpui::Entity<ThreadStore>> = thread_store else {
-                        anyhow::bail!("Agent panel not available");
-                    };
 
                     let response = client
                         .request(proto::GetSharedAgentThread {
@@ -989,18 +980,14 @@ fn handle_open_request(request: OpenRequest, app_state: Arc<AppState>, cx: &mut 
 
                     multi_workspace.update(cx, |_, window, cx| {
                         workspace.update(cx, |workspace, cx| {
-                            if let Some(panel) = workspace.panel::<AgentPanel>(cx) {
-                                panel.update(cx, |panel, cx| {
-                                    panel.open_thread(
-                                        session_id,
-                                        None,
-                                        Some(format!("🔗 {}", response.title).into()),
-                                        window,
-                                        cx,
-                                    );
-                                });
-                                panel.focus_handle(cx).focus(window, cx);
-                            }
+                            open_thread_in_center(
+                                workspace,
+                                session_id,
+                                None,
+                                Some(format!("🔗 {}", response.title).into()),
+                                window,
+                                cx,
+                            );
 
                             struct ImportedThreadToast;
                             workspace.show_toast(

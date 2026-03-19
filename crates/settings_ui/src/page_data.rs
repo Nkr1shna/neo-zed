@@ -971,12 +971,12 @@ fn appearance_page() -> SettingsPage {
         ]
     }
 
-    fn agent_panel_font_section() -> [SettingsPageItem; 3] {
+    fn ai_workspace_font_section() -> [SettingsPageItem; 3] {
         [
-            SettingsPageItem::SectionHeader("Agent Panel Font"),
+            SettingsPageItem::SectionHeader("AI Workspace Font"),
             SettingsPageItem::SettingItem(SettingItem {
                 title: "UI Font Size",
-                description: "Font size for agent response text in the agent panel. Falls back to the regular UI font size.",
+                description: "Font size for agent response text in the AI workspace. Falls back to the regular UI font size.",
                 field: Box::new(SettingField {
                     json_path: Some("agent_ui_font_size"),
                     pick: |settings_content| {
@@ -995,7 +995,7 @@ fn appearance_page() -> SettingsPage {
             }),
             SettingsPageItem::SettingItem(SettingItem {
                 title: "Buffer Font Size",
-                description: "Font size for user messages text in the agent panel.",
+                description: "Font size for user messages text in the AI workspace.",
                 field: Box::new(SettingField {
                     json_path: Some("agent_buffer_font_size"),
                     pick: |settings_content| {
@@ -1230,7 +1230,7 @@ fn appearance_page() -> SettingsPage {
         theme_section(),
         buffer_font_section(),
         ui_font_section(),
-        agent_panel_font_section(),
+        ai_workspace_font_section(),
         text_rendering_section(),
         cursor_section(),
         highlighting_section(),
@@ -5496,63 +5496,17 @@ fn panels_page() -> SettingsPage {
         ]
     }
 
-    fn agent_panel_section() -> [SettingsPageItem; 5] {
+    fn ai_workspace_section() -> [SettingsPageItem; 2] {
         [
-            SettingsPageItem::SectionHeader("Agent Panel"),
+            SettingsPageItem::SectionHeader("AI Workspace"),
             SettingsPageItem::SettingItem(SettingItem {
-                title: "Agent Panel Button",
-                description: "Whether to show the agent panel button in the status bar.",
+                title: "AI Workspace Button",
+                description: "Whether to show the AI workspace button in the status bar.",
                 field: Box::new(SettingField {
                     json_path: Some("agent.button"),
                     pick: |settings_content| settings_content.agent.as_ref()?.button.as_ref(),
                     write: |settings_content, value| {
                         settings_content.agent.get_or_insert_default().button = value;
-                    },
-                }),
-                metadata: None,
-                files: USER,
-            }),
-            SettingsPageItem::SettingItem(SettingItem {
-                title: "Agent Panel Dock",
-                description: "Where to dock the agent panel.",
-                field: Box::new(SettingField {
-                    json_path: Some("agent.dock"),
-                    pick: |settings_content| settings_content.agent.as_ref()?.dock.as_ref(),
-                    write: |settings_content, value| {
-                        settings_content.agent.get_or_insert_default().dock = value;
-                    },
-                }),
-                metadata: None,
-                files: USER,
-            }),
-            SettingsPageItem::SettingItem(SettingItem {
-                title: "Agent Panel Default Width",
-                description: "Default width when the agent panel is docked to the left or right.",
-                field: Box::new(SettingField {
-                    json_path: Some("agent.default_width"),
-                    pick: |settings_content| {
-                        settings_content.agent.as_ref()?.default_width.as_ref()
-                    },
-                    write: |settings_content, value| {
-                        settings_content.agent.get_or_insert_default().default_width = value;
-                    },
-                }),
-                metadata: None,
-                files: USER,
-            }),
-            SettingsPageItem::SettingItem(SettingItem {
-                title: "Agent Panel Default Height",
-                description: "Default height when the agent panel is docked to the bottom.",
-                field: Box::new(SettingField {
-                    json_path: Some("agent.default_height"),
-                    pick: |settings_content| {
-                        settings_content.agent.as_ref()?.default_height.as_ref()
-                    },
-                    write: |settings_content, value| {
-                        settings_content
-                            .agent
-                            .get_or_insert_default()
-                            .default_height = value;
                     },
                 }),
                 metadata: None,
@@ -5572,7 +5526,7 @@ fn panels_page() -> SettingsPage {
             debugger_panel_section(),
             notification_panel_section(),
             collaboration_panel_section(),
-            agent_panel_section(),
+            ai_workspace_section(),
         ],
     }
 }
@@ -7223,7 +7177,7 @@ fn ai_page(cx: &App) -> SettingsPage {
             }),
             SettingsPageItem::SettingItem(SettingItem {
                 title: "Expand Edit Card",
-                description: "Whether to have edit cards in the agent panel expanded, showing a Preview of the diff.",
+                description: "Whether to have edit cards in the AI workspace expanded, showing a Preview of the diff.",
                 field: Box::new(SettingField {
                     json_path: Some("agent.expand_edit_card"),
                     pick: |settings_content| {
@@ -7241,7 +7195,7 @@ fn ai_page(cx: &App) -> SettingsPage {
             }),
             SettingsPageItem::SettingItem(SettingItem {
                 title: "Expand Terminal Card",
-                description: "Whether to have terminal cards in the agent panel expanded, showing the whole command output.",
+                description: "Whether to have terminal cards in the AI workspace expanded, showing the whole command output.",
                 field: Box::new(SettingField {
                     json_path: Some("agent.expand_terminal_card"),
                     pick: |settings_content| {
@@ -7401,7 +7355,7 @@ fn ai_page(cx: &App) -> SettingsPage {
             }),
             SettingsPageItem::SettingItem(SettingItem {
                 title: "Display In Text Threads",
-                description: "Whether edit predictions are enabled when editing text threads in the agent panel.",
+                description: "Whether edit predictions are enabled when editing text threads in the AI workspace.",
                 field: Box::new(SettingField {
                     json_path: Some("edit_prediction.in_text_threads"),
                     pick: |settings_content| {

@@ -297,9 +297,12 @@ fn render_footer_view(view: &DemoViewState) -> RemoteViewTree {
 }
 
 fn render_panel_view(view: &DemoViewState) -> RemoteViewTree {
-    let mut nodes = vec![
-        node("panel.root", None, RemoteViewNodeKind::Column, [("gap", "8")]),
-    ];
+    let mut nodes = vec![node(
+        "panel.root",
+        None,
+        RemoteViewNodeKind::Column,
+        [("gap", "8")],
+    )];
 
     for usage_limit in view.snapshot.usage_limits.iter().take(5) {
         let section_id = format!("panel.limit.{}", usage_limit.id);
@@ -427,10 +430,7 @@ fn load_sidecar_snapshot(force_refresh: bool) -> (SidecarSnapshot, Option<String
 }
 
 fn toggle_panel(workspace_id: u64) -> zed::Result<(), String> {
-    zed::request_host_mutation(
-        workspace_id,
-        &HostMutation::TogglePanel("demo".to_string()),
-    )
+    zed::request_host_mutation(workspace_id, &HostMutation::TogglePanel("demo".to_string()))
 }
 
 fn parse_sidecar_snapshot(value: zed::serde_json::Value) -> zed::Result<SidecarSnapshot, String> {
@@ -646,7 +646,10 @@ mod tests {
             .collect::<Vec<_>>();
 
         assert_eq!(tree.root_id, "titlebar.root");
-        assert_eq!(node_ids, vec!["titlebar.root", "titlebar.icon", "titlebar.badge"]);
+        assert_eq!(
+            node_ids,
+            vec!["titlebar.root", "titlebar.icon", "titlebar.badge"]
+        );
     }
 
     #[test]

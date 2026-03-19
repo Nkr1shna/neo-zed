@@ -403,12 +403,12 @@ impl<T: 'static> PromptEditor<T> {
             PromptEditorMode::Terminal { .. } => "Generate",
         };
 
-        let agent_panel_keybinding =
+        let ai_workspace_keybinding =
             ui::text_for_action(&zed_actions::assistant::ToggleFocus, window, cx)
                 .map(|keybinding| format!("{keybinding} to chat"))
                 .unwrap_or_default();
 
-        format!("{action}… ({agent_panel_keybinding} ― ↓↑ for history — @ to include context)")
+        format!("{action}… ({ai_workspace_keybinding} ― ↓↑ for history — @ to include context)")
     }
 
     pub fn prompt(&self, cx: &App) -> String {

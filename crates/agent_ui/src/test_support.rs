@@ -7,8 +7,8 @@ use settings::SettingsStore;
 use std::any::Any;
 use std::rc::Rc;
 
-use crate::AgentPanel;
-use crate::agent_panel;
+use crate::AiWorkspace;
+use crate::ai_workspace;
 
 pub struct StubAgentServer<C> {
     connection: C,
@@ -62,12 +62,12 @@ pub fn init_test(cx: &mut TestAppContext) {
         theme::init(theme::LoadThemes::JustBase, cx);
         editor::init(cx);
         release_channel::init("0.0.0".parse().unwrap(), cx);
-        agent_panel::init(cx);
+        ai_workspace::init(cx);
     });
 }
 
 pub fn open_thread_with_connection(
-    panel: &Entity<AgentPanel>,
+    panel: &Entity<AiWorkspace>,
     connection: StubAgentConnection,
     cx: &mut VisualTestContext,
 ) {
@@ -81,7 +81,7 @@ pub fn open_thread_with_connection(
     cx.run_until_parked();
 }
 
-pub fn send_message(panel: &Entity<AgentPanel>, cx: &mut VisualTestContext) {
+pub fn send_message(panel: &Entity<AiWorkspace>, cx: &mut VisualTestContext) {
     let thread_view = panel.read_with(cx, |panel, cx| panel.active_thread_view(cx).unwrap());
     let message_editor = thread_view.read_with(cx, |view, _cx| view.message_editor.clone());
     message_editor.update_in(cx, |editor, window, cx| {
@@ -91,7 +91,7 @@ pub fn send_message(panel: &Entity<AgentPanel>, cx: &mut VisualTestContext) {
     cx.run_until_parked();
 }
 
-pub fn active_session_id(panel: &Entity<AgentPanel>, cx: &VisualTestContext) -> acp::SessionId {
+pub fn active_session_id(panel: &Entity<AiWorkspace>, cx: &VisualTestContext) -> acp::SessionId {
     panel.read_with(cx, |panel, cx| {
         let thread = panel.active_agent_thread(cx).unwrap();
         thread.read(cx).session_id().clone()

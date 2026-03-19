@@ -1,10 +1,14 @@
-use acp_thread::ThreadStatus;
 use action_log::DiffStats;
 use agent::ThreadStore;
 use agent_client_protocol::{self as acp};
 use agent_ui::thread_metadata_store::{ThreadMetadata, ThreadMetadataStore};
 use agent_ui::threads_archive_view::{ThreadsArchiveView, ThreadsArchiveViewEvent};
-use agent_ui::{Agent, AgentPanel, AgentPanelEvent, NewThread, RemoveSelectedThread};
+use agent_ui::{
+    Agent, AgentThreadSummary, NewThread, RemoveSelectedThread, agent_connection_store,
+    load_agent_thread_in_center, thread_store, thread_summaries, workspace_controller,
+};
+#[cfg(test)]
+use agent_ui::{AiWorkspace, attach_workspace_controller};
 use chrono::Utc;
 use editor::Editor;
 use feature_flags::{AgentV2FeatureFlag, FeatureFlagViewExt as _};
@@ -166,7 +170,7 @@ fn fuzzy_match_positions(query: &str, candidate: &str) -> Option<Vec<usize>> {
 }
 
 // TODO: The mapping from workspace root paths to git repositories needs a
-// unified approach across the codebase: this function, `AgentPanel::classify_worktrees`,
+// unified approach across the codebase: this function, `AiWorkspace::classify_worktrees`,
 // thread persistence (which PathList is saved to the database), and thread
 // querying (which PathList is used to read threads back). All of these need
 // to agree on how repos are resolved for a given workspace, especially in
@@ -317,7 +321,7 @@ impl Sidebar {
     }
 
     fn subscribe_to_workspace(
-        &self,
+        &mut self,
         workspace: &Entity<Workspace>,
         window: &mut Window,
         cx: &mut Context<Self>,
@@ -360,103 +364,35 @@ impl Sidebar {
         cx.subscribe_in(
             workspace,
             window,
-            |this, _workspace, event: &workspace::Event, window, cx| {
-                if let workspace::Event::PanelAdded(view) = event {
-                    if let Ok(agent_panel) = view.clone().downcast::<AgentPanel>() {
-                        this.subscribe_to_agent_panel(&agent_panel, window, cx);
-                    }
+            |this, workspace, event: &workspace::Event, _window, cx| {
+                if let workspace::Event::AiSurfaceChanged = event {
+                    this.focused_thread = agent_ui::focused_thread_id(&workspace.read(cx), cx);
+                    this.update_entries(false, cx);
                 }
             },
         )
         .detach();
 
-        if let Some(agent_panel) = workspace.read(cx).panel::<AgentPanel>(cx) {
-            self.subscribe_to_agent_panel(&agent_panel, window, cx);
+        if workspace_controller(&workspace.read(cx), cx).is_some() {
+            self.focused_thread = agent_ui::focused_thread_id(&workspace.read(cx), cx);
         }
-    }
-
-    fn subscribe_to_agent_panel(
-        &self,
-        agent_panel: &Entity<AgentPanel>,
-        window: &mut Window,
-        cx: &mut Context<Self>,
-    ) {
-        cx.subscribe_in(
-            agent_panel,
-            window,
-            |this, agent_panel, event: &AgentPanelEvent, _window, cx| match event {
-                AgentPanelEvent::ActiveViewChanged => {
-                    this.focused_thread = agent_panel
-                        .read(cx)
-                        .active_conversation()
-                        .and_then(|cv| cv.read(cx).parent_id(cx));
-                    this.update_entries(false, cx);
-                }
-                AgentPanelEvent::ThreadFocused => {
-                    let new_focused = agent_panel
-                        .read(cx)
-                        .active_conversation()
-                        .and_then(|cv| cv.read(cx).parent_id(cx));
-                    if new_focused.is_some() && new_focused != this.focused_thread {
-                        this.focused_thread = new_focused;
-                        this.update_entries(false, cx);
-                    }
-                }
-                AgentPanelEvent::BackgroundThreadChanged => {
-                    this.update_entries(false, cx);
-                }
-            },
-        )
-        .detach();
     }
 
     fn all_thread_infos_for_workspace(
         workspace: &Entity<Workspace>,
         cx: &App,
     ) -> Vec<ActiveThreadInfo> {
-        let Some(agent_panel) = workspace.read(cx).panel::<AgentPanel>(cx) else {
-            return Vec::new();
-        };
-        let agent_panel_ref = agent_panel.read(cx);
-
-        agent_panel_ref
-            .parent_threads(cx)
+        thread_summaries(&workspace.read(cx), cx)
             .into_iter()
-            .map(|thread_view| {
-                let thread_view_ref = thread_view.read(cx);
-                let thread = thread_view_ref.thread.read(cx);
-
-                let icon = thread_view_ref.agent_icon;
-                let icon_from_external_svg = thread_view_ref.agent_icon_from_external_svg.clone();
-                let title = thread.title();
-                let is_native = thread_view_ref.as_native_thread(cx).is_some();
-                let is_title_generating = is_native && thread.has_provisional_title();
-                let session_id = thread.session_id().clone();
-                let is_background = agent_panel_ref.is_background_thread(&session_id);
-
-                let status = if thread.is_waiting_for_confirmation() {
-                    AgentThreadStatus::WaitingForConfirmation
-                } else if thread.had_error() {
-                    AgentThreadStatus::Error
-                } else {
-                    match thread.status() {
-                        ThreadStatus::Generating => AgentThreadStatus::Running,
-                        ThreadStatus::Idle => AgentThreadStatus::Completed,
-                    }
-                };
-
-                let diff_stats = thread.action_log().read(cx).diff_stats(cx);
-
-                ActiveThreadInfo {
-                    session_id,
-                    title,
-                    status,
-                    icon,
-                    icon_from_external_svg,
-                    is_background,
-                    is_title_generating,
-                    diff_stats,
-                }
+            .map(|summary: AgentThreadSummary| ActiveThreadInfo {
+                session_id: summary.session_id,
+                title: summary.title,
+                status: summary.status,
+                icon: summary.icon,
+                icon_from_external_svg: summary.icon_from_external_svg,
+                is_background: summary.is_background,
+                is_title_generating: summary.is_title_generating,
+                diff_stats: summary.diff_stats,
             })
             .collect()
     }
@@ -1515,22 +1451,16 @@ impl Sidebar {
         });
 
         workspace.update(cx, |workspace, cx| {
-            workspace.open_panel::<AgentPanel>(window, cx);
+            load_agent_thread_in_center(
+                workspace,
+                agent,
+                session_info.session_id,
+                session_info.work_dirs,
+                session_info.title,
+                window,
+                cx,
+            );
         });
-
-        if let Some(agent_panel) = workspace.read(cx).panel::<AgentPanel>(cx) {
-            agent_panel.update(cx, |panel, cx| {
-                panel.load_agent_thread(
-                    agent,
-                    session_info.session_id,
-                    session_info.work_dirs,
-                    session_info.title,
-                    true,
-                    window,
-                    cx,
-                );
-            });
-        }
 
         self.update_entries(false, cx);
     }
@@ -1899,13 +1829,8 @@ impl Sidebar {
             multi_workspace.activate(workspace.clone(), cx);
         });
 
-        workspace.update(cx, |workspace, cx| {
-            if let Some(agent_panel) = workspace.panel::<AgentPanel>(cx) {
-                agent_panel.update(cx, |panel, cx| {
-                    panel.new_thread(&NewThread, window, cx);
-                });
-            }
-            workspace.focus_panel::<AgentPanel>(window, cx);
+        workspace.update(cx, |_workspace, cx| {
+            window.dispatch_action(NewThread.boxed_clone(), cx);
         });
     }
 
@@ -2051,19 +1976,15 @@ impl Sidebar {
             return;
         };
 
-        let Some(agent_panel) = active_workspace.read(cx).panel::<AgentPanel>(cx) else {
+        let workspace_read = active_workspace.read(cx);
+        let Some(thread_store) = thread_store(&workspace_read, cx) else {
             return;
         };
-
-        let thread_store = agent_panel.read(cx).thread_store().clone();
-        let fs = active_workspace.read(cx).project().read(cx).fs().clone();
-        let agent_connection_store = agent_panel.read(cx).connection_store().clone();
-        let agent_server_store = active_workspace
-            .read(cx)
-            .project()
-            .read(cx)
-            .agent_server_store()
-            .clone();
+        let Some(agent_connection_store) = agent_connection_store(&workspace_read, cx) else {
+            return;
+        };
+        let fs = workspace_read.project().read(cx).fs().clone();
+        let agent_server_store = workspace_read.project().read(cx).agent_server_store().clone();
 
         let archive_view = cx.new(|cx| {
             ThreadsArchiveView::new(
@@ -3211,7 +3132,7 @@ mod tests {
         );
     }
 
-    async fn init_test_project_with_agent_panel(
+    async fn init_test_project_with_ai_workspace(
         worktree_path: &str,
         cx: &mut TestAppContext,
     ) -> Entity<project::Project> {
@@ -3231,36 +3152,36 @@ mod tests {
         project::Project::test(fs, [worktree_path.as_ref()], cx).await
     }
 
-    fn add_agent_panel(
+    fn add_ai_workspace(
         workspace: &Entity<Workspace>,
         project: &Entity<project::Project>,
         cx: &mut gpui::VisualTestContext,
-    ) -> Entity<AgentPanel> {
+    ) -> Entity<AiWorkspace> {
         workspace.update_in(cx, |workspace, window, cx| {
             let text_thread_store = cx.new(|cx| TextThreadStore::fake(project.clone(), cx));
-            let panel = cx.new(|cx| AgentPanel::test_new(workspace, text_thread_store, window, cx));
-            workspace.add_panel(panel.clone(), window, cx);
+            let panel = cx.new(|cx| AiWorkspace::test_new(workspace, text_thread_store, window, cx));
+            attach_workspace_controller(workspace, panel.clone(), window, cx);
             panel
         })
     }
 
-    fn setup_sidebar_with_agent_panel(
+    fn setup_sidebar_with_ai_workspace(
         multi_workspace: &Entity<MultiWorkspace>,
         project: &Entity<project::Project>,
         cx: &mut gpui::VisualTestContext,
-    ) -> (Entity<Sidebar>, Entity<AgentPanel>) {
+    ) -> (Entity<Sidebar>, Entity<AiWorkspace>) {
         let sidebar = setup_sidebar(multi_workspace, cx);
         let workspace = multi_workspace.read_with(cx, |mw, _cx| mw.workspace().clone());
-        let panel = add_agent_panel(&workspace, project, cx);
+        let panel = add_ai_workspace(&workspace, project, cx);
         (sidebar, panel)
     }
 
     #[gpui::test]
     async fn test_parallel_threads_shown_with_live_status(cx: &mut TestAppContext) {
-        let project = init_test_project_with_agent_panel("/my-project", cx).await;
+        let project = init_test_project_with_ai_workspace("/my-project", cx).await;
         let (multi_workspace, cx) =
             cx.add_window_view(|window, cx| MultiWorkspace::test_new(project.clone(), window, cx));
-        let (sidebar, panel) = setup_sidebar_with_agent_panel(&multi_workspace, &project, cx);
+        let (sidebar, panel) = setup_sidebar_with_ai_workspace(&multi_workspace, &project, cx);
 
         let path_list = PathList::new(&[std::path::PathBuf::from("/my-project")]);
 
@@ -3303,10 +3224,10 @@ mod tests {
 
     #[gpui::test]
     async fn test_background_thread_completion_triggers_notification(cx: &mut TestAppContext) {
-        let project_a = init_test_project_with_agent_panel("/project-a", cx).await;
+        let project_a = init_test_project_with_ai_workspace("/project-a", cx).await;
         let (multi_workspace, cx) = cx
             .add_window_view(|window, cx| MultiWorkspace::test_new(project_a.clone(), window, cx));
-        let (sidebar, panel_a) = setup_sidebar_with_agent_panel(&multi_workspace, &project_a, cx);
+        let (sidebar, panel_a) = setup_sidebar_with_ai_workspace(&multi_workspace, &project_a, cx);
 
         let path_list_a = PathList::new(&[std::path::PathBuf::from("/project-a")]);
 
@@ -4000,10 +3921,10 @@ mod tests {
 
     #[gpui::test]
     async fn test_thread_title_update_propagates_to_sidebar(cx: &mut TestAppContext) {
-        let project = init_test_project_with_agent_panel("/my-project", cx).await;
+        let project = init_test_project_with_ai_workspace("/my-project", cx).await;
         let (multi_workspace, cx) =
             cx.add_window_view(|window, cx| MultiWorkspace::test_new(project.clone(), window, cx));
-        let (sidebar, panel) = setup_sidebar_with_agent_panel(&multi_workspace, &project, cx);
+        let (sidebar, panel) = setup_sidebar_with_ai_workspace(&multi_workspace, &project, cx);
 
         let path_list = PathList::new(&[std::path::PathBuf::from("/my-project")]);
 
@@ -4026,11 +3947,11 @@ mod tests {
         // Simulate the agent generating a title. The notification chain is:
         // AcpThread::set_title emits TitleUpdated →
         // ConnectionView::handle_thread_event calls cx.notify() →
-        // AgentPanel observer fires and emits AgentPanelEvent →
+        // Agent workspace controller emits Workspace::AiSurfaceChanged →
         // Sidebar subscription calls update_entries / rebuild_contents.
         //
         // Before the fix, handle_thread_event did NOT call cx.notify() for
-        // TitleUpdated, so the AgentPanel observer never fired and the
+        // TitleUpdated, so the workspace AI change event never fired and the
         // sidebar kept showing the old title.
         let thread = panel.read_with(cx, |panel, cx| panel.active_agent_thread(cx).unwrap());
         thread.update(cx, |thread, cx| {
@@ -4048,10 +3969,10 @@ mod tests {
 
     #[gpui::test]
     async fn test_focused_thread_tracks_user_intent(cx: &mut TestAppContext) {
-        let project_a = init_test_project_with_agent_panel("/project-a", cx).await;
+        let project_a = init_test_project_with_ai_workspace("/project-a", cx).await;
         let (multi_workspace, cx) = cx
             .add_window_view(|window, cx| MultiWorkspace::test_new(project_a.clone(), window, cx));
-        let (sidebar, panel_a) = setup_sidebar_with_agent_panel(&multi_workspace, &project_a, cx);
+        let (sidebar, panel_a) = setup_sidebar_with_ai_workspace(&multi_workspace, &project_a, cx);
 
         let path_list_a = PathList::new(&[std::path::PathBuf::from("/project-a")]);
 
@@ -4065,7 +3986,7 @@ mod tests {
         let session_id_a = active_session_id(&panel_a, cx);
         save_test_thread_metadata(&session_id_a, path_list_a.clone(), cx).await;
 
-        // Add a second workspace with its own agent panel.
+        // Add a second workspace with its own AI workspace.
         let fs = cx.update(|_, cx| <dyn fs::Fs>::global(cx));
         fs.as_fake()
             .insert_tree("/project-b", serde_json::json!({ "src": {} }))
@@ -4074,7 +3995,7 @@ mod tests {
         let workspace_b = multi_workspace.update_in(cx, |mw, window, cx| {
             mw.test_add_workspace(project_b.clone(), window, cx)
         });
-        let panel_b = add_agent_panel(&workspace_b, &project_b, cx);
+        let panel_b = add_ai_workspace(&workspace_b, &project_b, cx);
         cx.run_until_parked();
 
         let workspace_a = multi_workspace.read_with(cx, |mw, _cx| mw.workspaces()[0].clone());
@@ -4129,13 +4050,15 @@ mod tests {
 
         workspace_a.read_with(cx, |workspace, cx| {
             assert!(
-                workspace.panel::<AgentPanel>(cx).is_some(),
-                "Agent panel should exist"
+                workspace_controller(workspace, cx).is_some(),
+                "AI workspace controller should exist"
             );
-            let dock = workspace.right_dock().read(cx);
             assert!(
-                dock.is_open(),
-                "Clicking a thread should open the agent panel dock"
+                workspace
+                    .items_of_type::<agent_ui::AgentWorkspaceItem>(cx)
+                    .next()
+                    .is_some(),
+                "Clicking a thread should activate the center AI item"
             );
         });
 
@@ -4192,15 +4115,16 @@ mod tests {
 
         sidebar.read_with(cx, |sidebar, _cx| {
             assert_eq!(
-                sidebar.focused_thread, None,
-                "External workspace switch should clear focused_thread"
+                sidebar.focused_thread.as_ref(),
+                Some(&session_id_a),
+                "External workspace switch should restore the active center thread"
             );
             let active_entry = sidebar
                 .active_entry_index
                 .and_then(|ix| sidebar.contents.entries.get(ix));
             assert!(
-                matches!(active_entry, Some(ListEntry::ProjectHeader { .. })),
-                "Active entry should be the workspace header after external switch"
+                matches!(active_entry, Some(ListEntry::Thread(thread)) if thread.session_info.session_id == session_id_a),
+                "Active entry should be the restored thread after external switch"
             );
         });
 
@@ -4251,32 +4175,6 @@ mod tests {
             assert!(
                 matches!(active_entry, Some(ListEntry::ProjectHeader { .. })),
                 "Active entry should be the workspace header"
-            );
-        });
-
-        // ── 8. Focusing the agent panel thread restores focused_thread ────
-        // Workspace B still has session_id_b2 loaded in the agent panel.
-        // Clicking into the thread (simulated by focusing its view) should
-        // set focused_thread via the ThreadFocused event.
-        panel_b.update_in(cx, |panel, window, cx| {
-            if let Some(thread_view) = panel.active_conversation_view() {
-                thread_view.read(cx).focus_handle(cx).focus(window, cx);
-            }
-        });
-        cx.run_until_parked();
-
-        sidebar.read_with(cx, |sidebar, _cx| {
-            assert_eq!(
-                sidebar.focused_thread.as_ref(),
-                Some(&session_id_b2),
-                "Focusing the agent panel thread should set focused_thread"
-            );
-            let active_entry = sidebar
-                .active_entry_index
-                .and_then(|ix| sidebar.contents.entries.get(ix));
-            assert!(
-                matches!(active_entry, Some(ListEntry::Thread(thread)) if thread.session_info.session_id == session_id_b2),
-                "Active entry should be the focused thread"
             );
         });
     }

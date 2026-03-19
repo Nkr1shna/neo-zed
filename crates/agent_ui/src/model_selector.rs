@@ -3,7 +3,6 @@ use std::{cmp::Reverse, rc::Rc, sync::Arc};
 use acp_thread::{AgentModelIcon, AgentModelInfo, AgentModelList, AgentModelSelector};
 use agent_client_protocol::ModelId;
 use agent_servers::AgentServer;
-use agent_settings::AgentSettings;
 use anyhow::Result;
 use collections::{HashSet, IndexMap};
 use fs::Fs;
@@ -16,12 +15,15 @@ use gpui::{
 use itertools::Itertools;
 use ordered_float::OrderedFloat;
 use picker::{Picker, PickerDelegate};
-use settings::{Settings, SettingsStore};
-use ui::{DocumentationAside, DocumentationSide, IntoElement, prelude::*};
+use settings::SettingsStore;
+use ui::{DocumentationAside, IntoElement, prelude::*};
 use util::ResultExt;
 use zed_actions::agent::OpenSettings;
 
-use crate::ui::{HoldForDefault, ModelSelectorFooter, ModelSelectorHeader, ModelSelectorListItem};
+use crate::{
+    agent_documentation_side,
+    ui::{HoldForDefault, ModelSelectorFooter, ModelSelectorHeader, ModelSelectorListItem},
+};
 
 pub type ModelSelector = Picker<ModelPickerDelegate>;
 
@@ -377,7 +379,7 @@ impl PickerDelegate for ModelPickerDelegate {
     fn documentation_aside(
         &self,
         _window: &mut Window,
-        cx: &mut Context<Picker<Self>>,
+        _cx: &mut Context<Picker<Self>>,
     ) -> Option<ui::DocumentationAside> {
         self.selected_description
             .as_ref()
@@ -385,16 +387,8 @@ impl PickerDelegate for ModelPickerDelegate {
                 let description = description.clone();
                 let is_default = *is_default;
 
-                let settings = AgentSettings::get_global(cx);
-                let side = match settings.dock {
-                    settings::DockPosition::Left => DocumentationSide::Right,
-                    settings::DockPosition::Bottom | settings::DockPosition::Right => {
-                        DocumentationSide::Left
-                    }
-                };
-
                 DocumentationAside::new(
-                    side,
+                    agent_documentation_side(),
                     Rc::new(move |_| {
                         v_flex()
                             .gap_1()

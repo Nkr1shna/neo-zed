@@ -241,7 +241,7 @@
     },
   },
   {
-    "context": "AgentPanel",
+    "context": "AiWorkspace",
     "bindings": {
       "ctrl-n": "agent::NewThread",
       "ctrl-alt-n": "agent::NewTextThread",
@@ -253,7 +253,7 @@
       "shift-tab": "agent::CycleModeSelector",
       "ctrl-alt-/": "agent::ToggleModelSelector",
       "alt-tab": "agent::CycleFavoriteModels",
-      // `alt-l` is provided as an alternative to `alt-tab` as the latter breaks on Linux under the `AgentPanel` context
+      // `alt-l` is provided as an alternative to `alt-tab` as the latter breaks on Linux under the `AiWorkspace` context
       "alt-l": "agent::CycleFavoriteModels",
       "ctrl-shift-j": "agent::ToggleNavigationMenu",
       "ctrl-alt-i": "agent::ToggleOptionsMenu",
@@ -269,7 +269,7 @@
     },
   },
   {
-    "context": "AgentPanel > Markdown",
+    "context": "AiWorkspace > Markdown",
     "bindings": {
       "copy": "markdown::CopyAsMarkdown",
       "ctrl-insert": "markdown::CopyAsMarkdown",
@@ -277,14 +277,14 @@
     },
   },
   {
-    "context": "AgentPanel && text_thread",
+    "context": "AiWorkspace && text_thread",
     "bindings": {
       "ctrl-n": "agent::NewTextThread",
       "ctrl-alt-t": "agent::NewThread",
     },
   },
   {
-    "context": "AgentPanel && acp_thread",
+    "context": "AiWorkspace && acp_thread",
     "use_key_equivalents": true,
     "bindings": {
       "ctrl-n": "agent::NewExternalAgentThread",

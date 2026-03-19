@@ -1,5 +1,4 @@
-use std::sync::Arc;
-use std::time::Duration;
+use std::{fs, sync::Arc, time::Duration};
 
 use anyhow::{Context as _, Result, anyhow, bail};
 use collections::HashMap;
@@ -28,10 +27,11 @@ use serde::Deserialize;
 use theme::ActiveTheme;
 use title_bar::TitleBar;
 use ui::{
-    Button, ButtonCommon, Clickable, ContextMenu, ContextMenuEntry, ContextMenuItem, Divider,
-    Icon, IconButton, IconName, IconSize, PopoverMenu, ProgressBar, Tooltip,
+    Button, ButtonCommon, Clickable, ContextMenu, ContextMenuEntry, ContextMenuItem, Divider, Icon,
+    IconButton, IconName, IconSize, PopoverMenu, ProgressBar, Tooltip,
     utils::platform_title_bar_height, v_flex,
 };
+use util::ResultExt as _;
 use workspace::dock::{DockPosition, PanelEvent, PanelHandle};
 use workspace::notifications::NotificationId;
 use workspace::{
@@ -103,7 +103,6 @@ struct RegisteredRemoteUiPanel {
     root_view: Arc<str>,
     title: SharedString,
     default_dock: DockPosition,
-    default_size: Pixels,
     activation_priority: u32,
 }
 
@@ -150,6 +149,68 @@ struct WidgetStripKey {
 struct RemoteUiProxy;
 
 struct RemoteUiCommandError;
+
+fn remote_ui_snapshot_key(workspace_id: u64, qualified_panel_id: &str) -> String {
+    let sanitized_panel_id = qualified_panel_id
+        .chars()
+        .map(|character| {
+            if character.is_ascii_alphanumeric() || matches!(character, '-' | '_') {
+                character
+            } else {
+                '_'
+            }
+        })
+        .collect::<String>();
+    format!("{workspace_id}_{sanitized_panel_id}.json")
+}
+
+fn remote_ui_panel_snapshot_path(
+    workspace_id: u64,
+    qualified_panel_id: &str,
+) -> std::path::PathBuf {
+    paths::data_dir()
+        .join("remote_ui_snapshots")
+        .join(remote_ui_snapshot_key(workspace_id, qualified_panel_id))
+}
+
+fn load_remote_ui_panel_snapshot(
+    workspace_id: u64,
+    qualified_panel_id: &str,
+) -> Option<RemoteViewTree> {
+    let snapshot_path = remote_ui_panel_snapshot_path(workspace_id, qualified_panel_id);
+    let snapshot_json = match fs::read_to_string(&snapshot_path) {
+        Ok(snapshot_json) => snapshot_json,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return None,
+        Err(error) => {
+            Err(error)
+                .with_context(|| {
+                    format!(
+                        "reading remote ui snapshot from {}",
+                        snapshot_path.display()
+                    )
+                })
+                .log_err()?;
+            return None;
+        }
+    };
+    serde_json::from_str(&snapshot_json).log_err()
+}
+
+fn save_remote_ui_panel_snapshot(
+    workspace_id: u64,
+    qualified_panel_id: Arc<str>,
+    tree: RemoteViewTree,
+) -> anyhow::Result<()> {
+    let snapshot_path = remote_ui_panel_snapshot_path(workspace_id, qualified_panel_id.as_ref());
+    let parent_dir = snapshot_path
+        .parent()
+        .context("remote ui snapshot path is missing a parent directory")?;
+    fs::create_dir_all(parent_dir).context("creating remote ui snapshot directory")?;
+    let snapshot_json = serde_json::to_string(&tree).context("serializing remote ui snapshot")?;
+    fs::write(&snapshot_path, snapshot_json)
+        .with_context(|| format!("writing remote ui snapshot to {}", snapshot_path.display()))?;
+    Ok(())
+}
 
 pub fn init(cx: &mut App) {
     let proxy = ExtensionHostProxy::default_global(cx);
@@ -278,13 +339,17 @@ impl RemoteUiRegistry {
         let mut registered_panels = Vec::with_capacity(remote_ui.panels.len());
         for (panel_id, panel) in &remote_ui.panels {
             let qualified_panel_id = qualified_remote_ui_id(extension_id.as_ref(), panel_id);
+            if panel.default_size.is_some() {
+                log::warn!(
+                    "extension panel `{qualified_panel_id}` uses deprecated `default_size`; dock sizing is host-owned and the value is ignored"
+                );
+            }
             let registered_panel = RegisteredRemoteUiPanel {
                 qualified_panel_id: qualified_panel_id.clone(),
                 extension_id: extension_id.clone(),
                 root_view: panel.root_view.clone().into(),
                 title: panel.title.clone().into(),
                 default_dock: dock_position_for_panel(panel),
-                default_size: px(panel.default_size.unwrap_or(320) as f32),
                 activation_priority: self.next_panel_activation_priority,
             };
             self.next_panel_activation_priority = self
@@ -624,7 +689,6 @@ struct RemoteUiPanel {
     loading: bool,
     error_message: Option<SharedString>,
     position: DockPosition,
-    size: Pixels,
 }
 
 impl EventEmitter<PanelEvent> for RemoteUiPanel {}
@@ -636,15 +700,15 @@ impl RemoteUiPanel {
         workspace_id: u64,
         cx: &mut Context<Self>,
     ) -> Self {
+        let qualified_panel_id = descriptor.qualified_panel_id.clone();
         let mut this = Self {
             position: descriptor.default_dock,
-            size: descriptor.default_size,
             descriptor,
             workspace,
             workspace_id,
             focus_handle: cx.focus_handle(),
             instance_id: None,
-            tree: None,
+            tree: load_remote_ui_panel_snapshot(workspace_id, qualified_panel_id.as_ref()),
             loading: false,
             error_message: None,
         };
@@ -711,8 +775,15 @@ impl RemoteUiPanel {
                 match result {
                     Ok((instance_id, tree)) => {
                         panel.instance_id = Some(instance_id);
-                        panel.tree = Some(tree);
+                        panel.tree = Some(tree.clone());
                         panel.error_message = None;
+                        let workspace_id = panel.workspace_id;
+                        let qualified_panel_id = panel.descriptor.qualified_panel_id.clone();
+                        cx.background_spawn(async move {
+                            save_remote_ui_panel_snapshot(workspace_id, qualified_panel_id, tree)
+                                .log_err();
+                        })
+                        .detach();
                     }
                     Err(error) => {
                         let message = format!(
@@ -804,7 +875,11 @@ impl RemoteUiPanel {
 
     fn render_content(&mut self, window: &mut Window, cx: &mut Context<Self>) -> AnyElement {
         let body = if let Some(error_message) = &self.error_message {
-            v_flex().gap_2().p_2().child(error_message.clone()).into_any_element()
+            v_flex()
+                .gap_2()
+                .p_2()
+                .child(error_message.clone())
+                .into_any_element()
         } else if self.loading && self.tree.is_none() {
             v_flex()
                 .gap_2()
@@ -935,7 +1010,9 @@ impl RemoteUiPanel {
                         .cursor_pointer()
                         .hover(|style| style.bg(cx.theme().colors().ghost_element_hover))
                         .active(|style| style.bg(cx.theme().colors().ghost_element_active))
-                        .when_some(tooltip, |this, tooltip| this.tooltip(Tooltip::text(tooltip)))
+                        .when_some(tooltip, |this, tooltip| {
+                            this.tooltip(Tooltip::text(tooltip))
+                        })
                         .on_click(cx.listener(move |panel, _, window, cx| {
                             panel.handle_remote_event(
                                 RemoteViewEvent {
@@ -980,7 +1057,10 @@ impl RemoteUiPanel {
                         }))
                         .into_any_element()
                 } else {
-                    v_flex().gap(gap).children(rendered_children).into_any_element()
+                    v_flex()
+                        .gap(gap)
+                        .children(rendered_children)
+                        .into_any_element()
                 }
             }
             RemoteViewNodeKind::Stack => {
@@ -1008,7 +1088,10 @@ impl RemoteUiPanel {
                         }))
                         .into_any_element()
                 } else {
-                    v_flex().gap(gap).children(rendered_children).into_any_element()
+                    v_flex()
+                        .gap(gap)
+                        .children(rendered_children)
+                        .into_any_element()
                 }
             }
             RemoteViewNodeKind::Text(text) => text.clone().into_any_element(),
@@ -1133,15 +1216,6 @@ impl Panel for RemoteUiPanel {
         cx: &mut Context<Self>,
     ) {
         self.position = position;
-        cx.notify();
-    }
-
-    fn size(&self, _window: &Window, _cx: &App) -> Pixels {
-        self.size
-    }
-
-    fn set_size(&mut self, size: Option<Pixels>, _window: &mut Window, cx: &mut Context<Self>) {
-        self.size = size.unwrap_or(self.descriptor.default_size);
         cx.notify();
     }
 
@@ -1472,7 +1546,9 @@ impl RemoteUiWidget {
                         .hover(|style| style.bg(cx.theme().colors().ghost_element_hover))
                         .active(|style| style.bg(cx.theme().colors().ghost_element_active))
                         .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
-                        .when_some(tooltip, |this, tooltip| this.tooltip(Tooltip::text(tooltip)))
+                        .when_some(tooltip, |this, tooltip| {
+                            this.tooltip(Tooltip::text(tooltip))
+                        })
                         .on_click(cx.listener(move |widget, _, window, cx| {
                             widget.handle_remote_event(
                                 RemoteViewEvent {
@@ -1507,7 +1583,9 @@ impl RemoteUiWidget {
                         .hover(|style| style.bg(cx.theme().colors().ghost_element_hover))
                         .active(|style| style.bg(cx.theme().colors().ghost_element_active))
                         .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
-                        .when_some(tooltip, |this, tooltip| this.tooltip(Tooltip::text(tooltip)))
+                        .when_some(tooltip, |this, tooltip| {
+                            this.tooltip(Tooltip::text(tooltip))
+                        })
                         .on_click(cx.listener(move |widget, _, window, cx| {
                             widget.handle_remote_event(
                                 RemoteViewEvent {
@@ -1521,7 +1599,10 @@ impl RemoteUiWidget {
                         }))
                         .into_any_element()
                 } else {
-                    v_flex().gap(gap).children(rendered_children).into_any_element()
+                    v_flex()
+                        .gap(gap)
+                        .children(rendered_children)
+                        .into_any_element()
                 }
             }
             RemoteViewNodeKind::Stack => {
@@ -1539,7 +1620,9 @@ impl RemoteUiWidget {
                         .hover(|style| style.bg(cx.theme().colors().ghost_element_hover))
                         .active(|style| style.bg(cx.theme().colors().ghost_element_active))
                         .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
-                        .when_some(tooltip, |this, tooltip| this.tooltip(Tooltip::text(tooltip)))
+                        .when_some(tooltip, |this, tooltip| {
+                            this.tooltip(Tooltip::text(tooltip))
+                        })
                         .on_click(cx.listener(move |widget, _, window, cx| {
                             widget.handle_remote_event(
                                 RemoteViewEvent {
@@ -1553,7 +1636,10 @@ impl RemoteUiWidget {
                         }))
                         .into_any_element()
                 } else {
-                    v_flex().gap(gap).children(rendered_children).into_any_element()
+                    v_flex()
+                        .gap(gap)
+                        .children(rendered_children)
+                        .into_any_element()
                 }
             }
             RemoteViewNodeKind::Text(text) => text.clone().into_any_element(),
@@ -1566,7 +1652,9 @@ impl RemoteUiWidget {
                     ui::ButtonLike::new(node_id.clone())
                         .style(ui::ButtonStyle::Transparent)
                         .size(ui::ButtonSize::Compact)
-                        .when_some(tooltip, |this, tooltip| this.tooltip(Tooltip::text(tooltip)))
+                        .when_some(tooltip, |this, tooltip| {
+                            this.tooltip(Tooltip::text(tooltip))
+                        })
                         .child(Icon::from_path(icon.clone()))
                         .on_click(cx.listener(move |widget, _, window, cx| {
                             widget.handle_remote_event(
@@ -1586,7 +1674,9 @@ impl RemoteUiWidget {
                 let node_id = node.node_id.clone();
                 let tooltip = node_tooltip(node);
                 Button::new(node_id.clone(), label.clone())
-                    .when_some(tooltip, |this, tooltip| this.tooltip(Tooltip::text(tooltip)))
+                    .when_some(tooltip, |this, tooltip| {
+                        this.tooltip(Tooltip::text(tooltip))
+                    })
                     .on_click(cx.listener(move |widget, _, window, cx| {
                         widget.handle_remote_event(
                             RemoteViewEvent {
@@ -1617,7 +1707,9 @@ impl RemoteUiWidget {
                     ui::ButtonLike::new(node_id.clone())
                         .style(ui::ButtonStyle::Transparent)
                         .size(ui::ButtonSize::Compact)
-                        .when_some(tooltip, |this, tooltip| this.tooltip(Tooltip::text(tooltip)))
+                        .when_some(tooltip, |this, tooltip| {
+                            this.tooltip(Tooltip::text(tooltip))
+                        })
                         .child(value.clone())
                         .on_click(cx.listener(move |widget, _, window, cx| {
                             widget.handle_remote_event(
@@ -1751,9 +1843,7 @@ impl RemoteUiWidgetStrip {
 }
 
 fn is_extension_not_loaded_error(error: &anyhow::Error) -> bool {
-    error
-        .to_string()
-        .contains("is not loaded")
+    error.to_string().contains("is not loaded")
 }
 
 fn node_is_clickable(node: &RemoteViewNode) -> bool {
@@ -1792,7 +1882,9 @@ fn widget_width_bounds(widget: &RegisteredRemoteUiWidget) -> (Option<u32>, Optio
 
     let min_width = widget.min_width;
     let max_width = match (widget.max_width, host_max_width) {
-        (Some(widget_max_width), Some(host_max_width)) => Some(widget_max_width.min(host_max_width)),
+        (Some(widget_max_width), Some(host_max_width)) => {
+            Some(widget_max_width.min(host_max_width))
+        }
         (Some(widget_max_width), None) => Some(widget_max_width),
         (None, host_max_width) => host_max_width,
     };
@@ -1807,7 +1899,11 @@ fn validate_widget_tree(widget: &RegisteredRemoteUiWidget, tree: &RemoteViewTree
 
     for node in &tree.nodes {
         match (widget.surface, widget.side, &node.kind) {
-            (_, _, RemoteViewNodeKind::Row | RemoteViewNodeKind::Column | RemoteViewNodeKind::Stack) => {}
+            (
+                _,
+                _,
+                RemoteViewNodeKind::Row | RemoteViewNodeKind::Column | RemoteViewNodeKind::Stack,
+            ) => {}
             (WidgetSurface::Titlebar, _, RemoteViewNodeKind::Icon(_)) => {
                 icon_count += 1;
                 content_unit_count += 1;
@@ -1819,7 +1915,11 @@ fn validate_widget_tree(widget: &RegisteredRemoteUiWidget, tree: &RemoteViewTree
                 badge_count += 1;
                 content_unit_count += 1;
             }
-            (WidgetSurface::Footer, StripSide::Left | StripSide::Right, RemoteViewNodeKind::Icon(_)) => {
+            (
+                WidgetSurface::Footer,
+                StripSide::Left | StripSide::Right,
+                RemoteViewNodeKind::Icon(_),
+            ) => {
                 icon_count += 1;
                 content_unit_count += 1;
             }
@@ -1827,10 +1927,10 @@ fn validate_widget_tree(widget: &RegisteredRemoteUiWidget, tree: &RemoteViewTree
                 WidgetSurface::Footer,
                 StripSide::Center,
                 RemoteViewNodeKind::Icon(_)
-                    | RemoteViewNodeKind::Text(_)
-                    | RemoteViewNodeKind::Badge(_)
-                    | RemoteViewNodeKind::Button(_)
-                    | RemoteViewNodeKind::ProgressBar(_),
+                | RemoteViewNodeKind::Text(_)
+                | RemoteViewNodeKind::Badge(_)
+                | RemoteViewNodeKind::Button(_)
+                | RemoteViewNodeKind::ProgressBar(_),
             ) => {
                 content_unit_count += 1;
             }
@@ -1844,8 +1944,10 @@ fn validate_widget_tree(widget: &RegisteredRemoteUiWidget, tree: &RemoteViewTree
         }
     }
 
-    if matches!((widget.surface, widget.side), (WidgetSurface::Footer, StripSide::Left | StripSide::Right))
-        && icon_count != 1
+    if matches!(
+        (widget.surface, widget.side),
+        (WidgetSurface::Footer, StripSide::Left | StripSide::Right)
+    ) && icon_count != 1
     {
         bail!(
             "widget `{}` must render exactly one icon in footer edge slots",
@@ -1905,12 +2007,8 @@ impl Render for RemoteUiWidgetStrip {
                     .flex_none()
                     .items_center()
                     .overflow_hidden()
-                    .when_some(min_width, |div, min_width| {
-                        div.min_w(px(min_width as f32))
-                    })
-                    .when_some(max_width, |div, max_width| {
-                        div.max_w(px(max_width as f32))
-                    })
+                    .when_some(min_width, |div, min_width| div.min_w(px(min_width as f32)))
+                    .when_some(max_width, |div, max_width| div.max_w(px(max_width as f32)))
                     .child(item.entity.clone())
             }))
             .h(host_height)
@@ -2215,16 +2313,6 @@ fn mount_remote_ui_panels_for_workspace(
                 cx,
             )
         });
-        if let Some(size) = workspace
-            .dock_at_position(descriptor.default_dock)
-            .read(cx)
-            .active_panel()
-            .map(|active_panel| active_panel.size(window, cx))
-        {
-            panel.update(cx, |panel, cx| {
-                panel.set_size(Some(size), window, cx);
-            });
-        }
         workspace.add_panel(panel.clone(), window, cx);
         RemoteUiRegistry::update_global(cx, |registry| {
             registry.remember_mounted_panel(
@@ -2319,7 +2407,6 @@ fn set_panel_open_state(
     let _ = window_handle.update(cx, |_, window, cx| {
         workspace.update(cx, |workspace, cx| {
             if open {
-                sync_remote_ui_panel_size_with_dock(workspace, panel.clone(), window, cx);
                 panel.update(cx, |_, cx| cx.emit(PanelEvent::Activate));
             } else {
                 panel.update(cx, |_, cx| cx.emit(PanelEvent::Close));
@@ -2443,33 +2530,10 @@ fn toggle_panel_visibility(
             window.focus(&pane.focus_handle(cx), cx);
         });
     } else {
-        sync_remote_ui_panel_size_with_dock(workspace, panel.clone(), window, cx);
         panel.update(cx, |_, cx| cx.emit(PanelEvent::Activate));
     }
 
     Ok(())
-}
-
-fn sync_remote_ui_panel_size_with_dock(
-    workspace: &mut Workspace,
-    panel: Entity<RemoteUiPanel>,
-    window: &mut Window,
-    cx: &mut Context<Workspace>,
-) {
-    let position = panel.read(cx).position(window, cx);
-    let size = workspace
-        .dock_at_position(position)
-        .read(cx)
-        .active_panel()
-        .and_then(|active_panel| {
-            (active_panel.panel_id() != panel.entity_id()).then(|| active_panel.size(window, cx))
-        });
-
-    if let Some(size) = size {
-        panel.update(cx, |panel, cx| {
-            panel.set_size(Some(size), window, cx);
-        });
-    }
 }
 
 fn dock_position_for_panel(panel: &ExtensionPanelManifestEntry) -> DockPosition {
@@ -2658,8 +2722,12 @@ fn append_remote_ui_context_menu_entries(
     window: &mut Window,
     cx: &mut App,
 ) -> ContextMenu {
-    let entries =
-        remote_ui_context_menu_entries(menu_location, action_target, current_panel_qualified_id, cx);
+    let entries = remote_ui_context_menu_entries(
+        menu_location,
+        action_target,
+        current_panel_qualified_id,
+        cx,
+    );
     if entries.is_empty() {
         return menu;
     }
@@ -3091,7 +3159,9 @@ mod tests {
             ],
         };
 
-        let error = validate_widget_tree(&widget, &tree).unwrap_err().to_string();
+        let error = validate_widget_tree(&widget, &tree)
+            .unwrap_err()
+            .to_string();
         assert!(error.contains("exceeds the `m` content budget"));
     }
 
@@ -3127,7 +3197,9 @@ mod tests {
             ],
         };
 
-        let error = validate_widget_tree(&widget, &tree).unwrap_err().to_string();
+        let error = validate_widget_tree(&widget, &tree)
+            .unwrap_err()
+            .to_string();
         assert!(error.contains("unsupported element"));
     }
 

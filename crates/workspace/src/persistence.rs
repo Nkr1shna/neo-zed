@@ -26,6 +26,7 @@ use project::{
 };
 
 use language::{LanguageName, Toolchain, ToolchainScope};
+use orchestration::OrchestrationState;
 use remote::{
     DockerConnectionOptions, RemoteConnectionOptions, SshConnectionOptions, WslConnectionOptions,
 };
@@ -970,6 +971,20 @@ impl Domain for WorkspaceDb {
         sql!(
             ALTER TABLE remote_connections ADD COLUMN use_podman BOOLEAN;
         ),
+        sql!(
+            ALTER TABLE workspaces ADD COLUMN left_dock_size REAL;
+            ALTER TABLE workspaces ADD COLUMN right_dock_size REAL;
+            ALTER TABLE workspaces ADD COLUMN bottom_dock_size REAL;
+        ),
+        sql!(
+            CREATE TABLE orchestration_states (
+                workspace_id INTEGER PRIMARY KEY,
+                state_json TEXT NOT NULL,
+                FOREIGN KEY(workspace_id) REFERENCES workspaces(workspace_id)
+                ON DELETE CASCADE
+                ON UPDATE CASCADE
+            ) STRICT;
+        ),
     ];
 
     // Allow recovering from bad migration that was initially shipped to nightly
@@ -1052,12 +1067,15 @@ impl WorkspaceDb {
                     left_dock_visible,
                     left_dock_active_panel,
                     left_dock_zoom,
+                    left_dock_size,
                     right_dock_visible,
                     right_dock_active_panel,
                     right_dock_zoom,
+                    right_dock_size,
                     bottom_dock_visible,
                     bottom_dock_active_panel,
                     bottom_dock_zoom,
+                    bottom_dock_size,
                     window_id
                 FROM workspaces
                 WHERE
@@ -1148,12 +1166,15 @@ impl WorkspaceDb {
                     left_dock_visible,
                     left_dock_active_panel,
                     left_dock_zoom,
+                    left_dock_size,
                     right_dock_visible,
                     right_dock_active_panel,
                     right_dock_zoom,
+                    right_dock_size,
                     bottom_dock_visible,
                     bottom_dock_active_panel,
                     bottom_dock_zoom,
+                    bottom_dock_size,
                     window_id,
                     remote_connection_id
                 FROM workspaces
@@ -1426,17 +1447,20 @@ impl WorkspaceDb {
                         left_dock_visible,
                         left_dock_active_panel,
                         left_dock_zoom,
+                        left_dock_size,
                         right_dock_visible,
                         right_dock_active_panel,
                         right_dock_zoom,
+                        right_dock_size,
                         bottom_dock_visible,
                         bottom_dock_active_panel,
                         bottom_dock_zoom,
+                        bottom_dock_size,
                         session_id,
                         window_id,
                         timestamp
                     )
-                    VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, CURRENT_TIMESTAMP)
+                    VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17, ?18, CURRENT_TIMESTAMP)
                     ON CONFLICT DO
                     UPDATE SET
                         paths = ?2,
@@ -1445,14 +1469,17 @@ impl WorkspaceDb {
                         left_dock_visible = ?5,
                         left_dock_active_panel = ?6,
                         left_dock_zoom = ?7,
-                        right_dock_visible = ?8,
-                        right_dock_active_panel = ?9,
-                        right_dock_zoom = ?10,
-                        bottom_dock_visible = ?11,
-                        bottom_dock_active_panel = ?12,
-                        bottom_dock_zoom = ?13,
-                        session_id = ?14,
-                        window_id = ?15,
+                        left_dock_size = ?8,
+                        right_dock_visible = ?9,
+                        right_dock_active_panel = ?10,
+                        right_dock_zoom = ?11,
+                        right_dock_size = ?12,
+                        bottom_dock_visible = ?13,
+                        bottom_dock_active_panel = ?14,
+                        bottom_dock_zoom = ?15,
+                        bottom_dock_size = ?16,
+                        session_id = ?17,
+                        window_id = ?18,
                         timestamp = CURRENT_TIMESTAMP
                 );
                 let mut prepared_query = conn.exec_bound(query)?;
@@ -1477,6 +1504,45 @@ impl WorkspaceDb {
             .log_err();
         })
         .await;
+    }
+
+    pub(crate) fn orchestration_state(
+        &self,
+        workspace_id: WorkspaceId,
+    ) -> Result<Option<OrchestrationState>> {
+        let state_json: Option<String> = self.select_row_bound(sql!(
+            SELECT state_json
+            FROM orchestration_states
+            WHERE workspace_id = ?
+        ))?(workspace_id)?;
+
+        state_json
+            .map(|state_json| {
+                OrchestrationState::deserialize(&state_json)
+                    .map_err(anyhow::Error::from)
+                    .with_context(|| {
+                        format!("failed to load orchestration state for workspace {workspace_id:?}")
+                    })
+            })
+            .transpose()
+    }
+
+    pub(crate) async fn save_orchestration_state(
+        &self,
+        workspace_id: WorkspaceId,
+        state: OrchestrationState,
+    ) -> Result<()> {
+        let state_json = state.serialize()?;
+        self.write(move |conn| {
+            conn.exec_bound(sql!(
+                INSERT INTO orchestration_states(workspace_id, state_json)
+                VALUES (?1, ?2)
+                ON CONFLICT(workspace_id) DO UPDATE SET
+                    state_json = excluded.state_json
+            ))?((workspace_id, state_json))?;
+            Ok(())
+        })
+        .await
     }
 
     pub(crate) async fn get_or_create_remote_connection(
@@ -2396,6 +2462,7 @@ mod tests {
         SerializedItem, SerializedPane, SerializedPaneGroup, SerializedWorkspace, SessionWorkspace,
     };
     use gpui;
+    use orchestration::{OrchestrationProject, OrchestrationProjectId, OrchestrationState};
     use pretty_assertions::assert_eq;
     use remote::SshConnectionOptions;
     use serde_json::json;
@@ -2885,6 +2952,35 @@ mod tests {
         assert_eq!(test_text_1, "test-text-1");
     }
 
+    #[gpui::test]
+    async fn test_orchestration_state_round_trips_and_cascades() {
+        zlog::init_test();
+
+        let db = WorkspaceDb::open_test_db("test_orchestration_state_round_trips").await;
+        let workspace_id = db.next_id().await.unwrap();
+        let orchestration_state = OrchestrationState {
+            projects: vec![OrchestrationProject {
+                id: OrchestrationProjectId("project-alpha".to_string()),
+                title: "Project Alpha".to_string(),
+                feature_ids: Vec::new(),
+            }],
+            ..Default::default()
+        };
+
+        db.save_orchestration_state(workspace_id, orchestration_state.clone())
+            .await
+            .unwrap();
+
+        assert_eq!(
+            db.orchestration_state(workspace_id).unwrap(),
+            Some(orchestration_state)
+        );
+
+        db.delete_workspace_by_id(workspace_id).await.unwrap();
+
+        assert_eq!(db.orchestration_state(workspace_id).unwrap(), None);
+    }
+
     fn group(axis: Axis, children: Vec<SerializedPaneGroup>) -> SerializedPaneGroup {
         SerializedPaneGroup::Group {
             axis: SerializedAxis(axis),
@@ -2965,6 +3061,39 @@ mod tests {
 
         let round_trip_workspace = db.workspace_for_roots(&["/tmp", "/tmp2"]);
         assert_eq!(workspace, round_trip_workspace.unwrap());
+    }
+
+    #[gpui::test]
+    async fn test_orchestration_state_round_trip() {
+        let db = WorkspaceDb::open_test_db("test_orchestration_state_round_trip").await;
+
+        let workspace = default_workspace(&["/tmp"], &Default::default());
+        db.save_workspace(workspace.clone()).await;
+
+        let orchestration_state = OrchestrationState {
+            selected_node_id: Some(orchestration::OrchestrationNodeId::Project(
+                orchestration::OrchestrationProjectId("project-alpha".to_string()),
+            )),
+            projects: vec![orchestration::OrchestrationProject {
+                id: orchestration::OrchestrationProjectId("project-alpha".to_string()),
+                title: "Project Alpha".to_string(),
+                feature_ids: Vec::new(),
+            }],
+            features: Vec::new(),
+            tasks: Vec::new(),
+            workflow_runs: Vec::new(),
+        };
+
+        db.save_orchestration_state(workspace.id, orchestration_state.clone())
+            .await
+            .unwrap();
+
+        let restored_state = db.orchestration_state(workspace.id).unwrap();
+        assert_eq!(restored_state, Some(orchestration_state));
+
+        db.delete_workspace_by_id(workspace.id).await.unwrap();
+        let restored_state = db.orchestration_state(workspace.id).unwrap();
+        assert_eq!(restored_state, None);
     }
 
     #[gpui::test]
@@ -3996,6 +4125,54 @@ mod tests {
         assert!(
             serialized.is_some(),
             "flush_serialization should have persisted the workspace to DB"
+        );
+    }
+
+    #[gpui::test]
+    async fn test_flush_serialization_persists_orchestration_state(cx: &mut gpui::TestAppContext) {
+        use crate::multi_workspace::MultiWorkspace;
+        use feature_flags::FeatureFlagAppExt;
+        use project::Project;
+
+        crate::tests::init_test(cx);
+
+        cx.update(|cx| {
+            cx.set_staff(true);
+            cx.update_flags(true, vec!["agent-v2".to_string()]);
+        });
+
+        let fs = fs::FakeFs::new(cx.executor());
+        let project = Project::test(fs.clone(), [], cx).await;
+
+        let (multi_workspace, cx) =
+            cx.add_window_view(|window, cx| MultiWorkspace::test_new(project.clone(), window, cx));
+
+        let workspace = multi_workspace.read_with(cx, |mw, _| mw.workspace().clone());
+        let workspace_id = DB.next_id().await.unwrap();
+        let orchestration_state = OrchestrationState {
+            projects: vec![OrchestrationProject {
+                id: OrchestrationProjectId("project-alpha".to_string()),
+                title: "Project Alpha".to_string(),
+                feature_ids: Vec::new(),
+            }],
+            ..Default::default()
+        };
+
+        workspace.update(cx, |workspace, cx| {
+            workspace.set_database_id(workspace_id);
+            workspace.set_orchestration_state(orchestration_state.clone(), cx);
+        });
+
+        let task = multi_workspace.update_in(cx, |mw, window, cx| {
+            mw.workspace().update(cx, |workspace, cx| {
+                workspace.flush_serialization(window, cx)
+            })
+        });
+        task.await;
+
+        assert_eq!(
+            DB.orchestration_state(workspace_id).unwrap(),
+            Some(orchestration_state)
         );
     }
 

@@ -40,20 +40,26 @@ pub struct AgentSettingsContent {
     ///
     /// Default: true
     pub enabled: Option<bool>,
-    /// Whether to show the agent panel button in the status bar.
+    /// Whether to show the AI workspace button in the status bar.
     ///
     /// Default: true
     pub button: Option<bool>,
-    /// Where to dock the agent panel.
+    /// Legacy dock placement for the AI workspace.
+    ///
+    /// Deprecated: ignored at runtime now that the AI workspace opens in the center pane.
     ///
     /// Default: right
     pub dock: Option<DockPosition>,
-    /// Default width in pixels when the agent panel is docked to the left or right.
+    /// Legacy dock width for the AI workspace.
+    ///
+    /// Deprecated: ignored at runtime now that the AI workspace opens in the center pane.
     ///
     /// Default: 640
     #[serde(serialize_with = "crate::serialize_optional_f32_with_two_decimal_places")]
     pub default_width: Option<f32>,
-    /// Default height in pixels when the agent panel is docked to the bottom.
+    /// Legacy dock height for the AI workspace.
+    ///
+    /// Deprecated: ignored at runtime now that the AI workspace opens in the center pane.
     ///
     /// Default: 320
     #[serde(serialize_with = "crate::serialize_optional_f32_with_two_decimal_places")]
@@ -79,7 +85,7 @@ pub struct AgentSettingsContent {
     ///
     /// Default: write
     pub default_profile: Option<Arc<str>>,
-    /// Which view type to show by default in the agent panel.
+    /// Which view type to show by default in the AI workspace.
     ///
     /// Default: "thread"
     pub default_view: Option<DefaultAgentView>,
@@ -110,15 +116,15 @@ pub struct AgentSettingsContent {
     /// Default: []
     #[serde(default)]
     pub model_parameters: Vec<LanguageModelParameters>,
-    /// Whether to show thumb buttons for feedback in the agent panel.
+    /// Whether to show thumb buttons for feedback in the AI workspace.
     ///
     /// Default: true
     pub enable_feedback: Option<bool>,
-    /// Whether to have edit cards in the agent panel expanded, showing a preview of the full diff.
+    /// Whether to have edit cards in the AI workspace expanded, showing a preview of the full diff.
     ///
     /// Default: true
     pub expand_edit_card: Option<bool>,
-    /// Whether to have terminal cards in the agent panel expanded, showing the whole command output.
+    /// Whether to have terminal cards in the AI workspace expanded, showing the whole command output.
     ///
     /// Default: true
     pub expand_terminal_card: Option<bool>,
@@ -127,7 +133,7 @@ pub struct AgentSettingsContent {
     ///
     /// Default: true
     pub cancel_generation_on_terminal_stop: Option<bool>,
-    /// Whether to always use cmd-enter (or ctrl-enter on Linux or Windows) to send messages in the agent panel.
+    /// Whether to always use cmd-enter (or ctrl-enter on Linux or Windows) to send messages in the AI workspace.
     ///
     /// Default: false
     pub use_modifier_to_send: Option<bool>,

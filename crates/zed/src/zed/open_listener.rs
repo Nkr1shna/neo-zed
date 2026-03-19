@@ -48,7 +48,7 @@ pub enum OpenRequestKind {
     Extension {
         extension_id: String,
     },
-    AgentPanel {
+    Agent {
         external_source_prompt: Option<ExternalSourcePrompt>,
     },
     SharedAgentThread {
@@ -170,7 +170,7 @@ impl OpenRequest {
                 .find_map(|(key, value)| (key == "prompt").then_some(value))
                 .and_then(|prompt| ExternalSourcePrompt::new(prompt.as_ref()))
         });
-        self.kind = Some(OpenRequestKind::AgentPanel {
+        self.kind = Some(OpenRequestKind::Agent {
             external_source_prompt,
         });
     }
@@ -794,12 +794,12 @@ mod tests {
         });
 
         match request.kind {
-            Some(OpenRequestKind::AgentPanel {
+            Some(OpenRequestKind::Agent {
                 external_source_prompt,
             }) => {
                 assert_eq!(external_source_prompt, None);
             }
-            _ => panic!("Expected AgentPanel kind"),
+            _ => panic!("Expected Agent kind"),
         }
     }
 
@@ -826,7 +826,7 @@ mod tests {
         });
 
         match request.kind {
-            Some(OpenRequestKind::AgentPanel {
+            Some(OpenRequestKind::Agent {
                 external_source_prompt,
             }) => {
                 assert_eq!(
@@ -836,7 +836,7 @@ mod tests {
                     Some("Write me a script\nThanks")
                 );
             }
-            _ => panic!("Expected AgentPanel kind"),
+            _ => panic!("Expected Agent kind"),
         }
     }
 
@@ -856,12 +856,12 @@ mod tests {
         });
 
         match request.kind {
-            Some(OpenRequestKind::AgentPanel {
+            Some(OpenRequestKind::Agent {
                 external_source_prompt,
             }) => {
                 assert_eq!(external_source_prompt, None);
             }
-            _ => panic!("Expected AgentPanel kind"),
+            _ => panic!("Expected Agent kind"),
         }
     }
 

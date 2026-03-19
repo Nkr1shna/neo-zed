@@ -925,7 +925,6 @@ impl GitPanel {
     }
 
     fn serialize(&mut self, cx: &mut Context<Self>) {
-        let width = self.width;
         let amend_pending = self.amend_pending;
         let signoff_enabled = self.signoff_enabled;
 
@@ -952,7 +951,7 @@ impl GitPanel {
                         .write_kvp(
                             serialization_key,
                             serde_json::to_string(&SerializedGitPanel {
-                                width,
+                                width: None,
                                 amend_pending,
                                 signoff_enabled,
                             })?,
@@ -5793,15 +5792,8 @@ impl Panel for GitPanel {
         });
     }
 
-    fn size(&self, _: &Window, cx: &App) -> Pixels {
+    fn legacy_dock_size(&self, _: &Window, _cx: &App) -> Option<Pixels> {
         self.width
-            .unwrap_or_else(|| GitPanelSettings::get_global(cx).default_width)
-    }
-
-    fn set_size(&mut self, size: Option<Pixels>, _: &mut Window, cx: &mut Context<Self>) {
-        self.width = size;
-        self.serialize(cx);
-        cx.notify();
     }
 
     fn icon(&self, _: &Window, cx: &App) -> Option<ui::IconName> {

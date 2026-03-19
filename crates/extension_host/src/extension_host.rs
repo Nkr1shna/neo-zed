@@ -1502,7 +1502,6 @@ impl ExtensionStore {
                             cx,
                         );
                     }
-
                 }
 
                 this.wasm_extensions.extend(wasm_extensions.into_iter().map(

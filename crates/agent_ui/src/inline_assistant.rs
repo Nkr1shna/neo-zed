@@ -8,10 +8,12 @@ use std::sync::Arc;
 use uuid::Uuid;
 
 use crate::ThreadHistory;
+use crate::agent_workspace_surface::{
+    active_text_thread_editor, native_agent_history, prompt_store,
+};
 use crate::context::load_context;
 use crate::mention_set::MentionSet;
 use crate::{
-    AgentPanel,
     buffer_codegen::{BufferCodegen, CodegenAlternative, CodegenEvent},
     inline_prompt_editor::{CodegenStatus, InlineAssistId, PromptEditor, PromptEditorEvent},
     terminal_inline_assistant::TerminalInlineAssistant,
@@ -259,7 +261,6 @@ impl InlineAssistant {
 
         let Some(inline_assist_target) = Self::resolve_inline_assist_target(
             workspace,
-            workspace.panel::<AgentPanel>(cx),
             window,
             cx,
         ) else {
@@ -271,18 +272,9 @@ impl InlineAssistant {
             model_registry.configuration_error(model_registry.inline_assistant_model(), cx)
         };
 
-        let Some(agent_panel) = workspace.panel::<AgentPanel>(cx) else {
-            return;
-        };
-        let agent_panel = agent_panel.read(cx);
-
-        let prompt_store = agent_panel.prompt_store().as_ref().cloned();
-        let thread_store = agent_panel.thread_store().clone();
-        let history = agent_panel
-            .connection_store()
-            .read(cx)
-            .entry(&crate::Agent::NativeAgent)
-            .and_then(|s| s.read(cx).history().cloned());
+        let prompt_store = prompt_store(workspace, cx);
+        let thread_store = ThreadStore::global(cx);
+        let history = native_agent_history(workspace, cx);
 
         let handle_assist =
             |window: &mut Window, cx: &mut Context<Workspace>| match inline_assist_target {
@@ -1570,7 +1562,6 @@ impl InlineAssistant {
 
     fn resolve_inline_assist_target(
         workspace: &mut Workspace,
-        agent_panel: Option<Entity<AgentPanel>>,
         window: &mut Window,
         cx: &mut App,
     ) -> Option<InlineAssistTarget> {
@@ -1588,8 +1579,7 @@ impl InlineAssistant {
             return Some(InlineAssistTarget::Terminal(terminal_view));
         }
 
-        let text_thread_editor = agent_panel
-            .and_then(|panel| panel.read(cx).active_text_thread_editor())
+        let text_thread_editor = active_text_thread_editor(workspace, cx)
             .and_then(|editor| {
                 let editor = &editor.read(cx).editor().clone();
                 if editor.read(cx).is_focused(window) {
@@ -1968,20 +1958,12 @@ impl CodeActionProvider for AssistantCodeActionProvider {
         window.spawn(cx, async move |cx| {
             let workspace = workspace.upgrade().context("workspace was released")?;
             let (thread_store, history) = cx.update(|_window, cx| {
-                let panel = workspace
-                    .read(cx)
-                    .panel::<AgentPanel>(cx)
-                    .context("missing agent panel")?
-                    .read(cx);
+                let workspace = workspace.read(cx);
 
-                let history = panel
-                    .connection_store()
-                    .read(cx)
-                    .entry(&crate::Agent::NativeAgent)
-                    .and_then(|e| e.read(cx).history())
+                let history = native_agent_history(&workspace, cx)
                     .map(|h| h.downgrade());
 
-                anyhow::Ok((panel.thread_store().clone(), history))
+                anyhow::Ok((ThreadStore::global(cx), history))
             })??;
             let editor = editor.upgrade().context("editor was released")?;
             let range = editor

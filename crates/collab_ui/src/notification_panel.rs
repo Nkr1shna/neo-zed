@@ -21,7 +21,7 @@ use time::{OffsetDateTime, UtcOffset};
 use ui::{
     Avatar, Button, Icon, IconButton, IconName, Label, Tab, Tooltip, h_flex, prelude::*, v_flex,
 };
-use util::{ResultExt, TryFutureExt};
+use util::ResultExt;
 use workspace::notifications::{
     Notification as WorkspaceNotification, NotificationId, SuppressEvent,
 };
@@ -44,7 +44,6 @@ pub struct NotificationPanel {
     width: Option<Pixels>,
     active: bool,
     notification_list: ListState,
-    pending_serialization: Task<Option<()>>,
     subscriptions: Vec<gpui::Subscription>,
     workspace: WeakEntity<Workspace>,
     current_notification_toast: Option<(u64, Task<()>)>,
@@ -146,7 +145,6 @@ impl NotificationPanel {
                 channel_store: ChannelStore::global(cx),
                 notification_store: NotificationStore::global(cx),
                 notification_list,
-                pending_serialization: Task::ready(None),
                 workspace: workspace_handle,
                 focus_handle: cx.focus_handle(),
                 current_notification_toast: None,
@@ -208,22 +206,6 @@ impl NotificationPanel {
                 panel
             })
         })
-    }
-
-    fn serialize(&mut self, cx: &mut Context<Self>) {
-        let width = self.width;
-        self.pending_serialization = cx.background_spawn(
-            async move {
-                KEY_VALUE_STORE
-                    .write_kvp(
-                        NOTIFICATION_PANEL_KEY.into(),
-                        serde_json::to_string(&SerializedNotificationPanel { width })?,
-                    )
-                    .await?;
-                anyhow::Ok(())
-            }
-            .log_err(),
-        );
     }
 
     fn render_notification(
@@ -635,15 +617,8 @@ impl Panel for NotificationPanel {
         });
     }
 
-    fn size(&self, _: &Window, cx: &App) -> Pixels {
+    fn legacy_dock_size(&self, _: &Window, _cx: &App) -> Option<Pixels> {
         self.width
-            .unwrap_or_else(|| NotificationPanelSettings::get_global(cx).default_width)
-    }
-
-    fn set_size(&mut self, size: Option<Pixels>, _: &mut Window, cx: &mut Context<Self>) {
-        self.width = size;
-        self.serialize(cx);
-        cx.notify();
     }
 
     fn set_active(&mut self, active: bool, _: &mut Window, cx: &mut Context<Self>) {

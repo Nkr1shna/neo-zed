@@ -146,6 +146,7 @@ pub struct DockData {
     pub visible: bool,
     pub active_panel: Option<String>,
     pub zoom: bool,
+    pub size: Option<f32>,
 }
 
 impl Column for DockData {
@@ -153,11 +154,13 @@ impl Column for DockData {
         let (visible, next_index) = Option::<bool>::column(statement, start_index)?;
         let (active_panel, next_index) = Option::<String>::column(statement, next_index)?;
         let (zoom, next_index) = Option::<bool>::column(statement, next_index)?;
+        let (size, next_index) = Option::<f32>::column(statement, next_index)?;
         Ok((
             DockData {
                 visible: visible.unwrap_or(false),
                 active_panel,
                 zoom: zoom.unwrap_or(false),
+                size,
             },
             next_index,
         ))
@@ -168,7 +171,8 @@ impl Bind for DockData {
     fn bind(&self, statement: &Statement, start_index: i32) -> Result<i32> {
         let next_index = statement.bind(&self.visible, start_index)?;
         let next_index = statement.bind(&self.active_panel, next_index)?;
-        statement.bind(&self.zoom, next_index)
+        let next_index = statement.bind(&self.zoom, next_index)?;
+        statement.bind(&self.size, next_index)
     }
 }
 

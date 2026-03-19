@@ -6,16 +6,16 @@ use gpui::{Entity, IntoElement, ParentElement};
 use language_model::{LanguageModelRegistry, ZED_CLOUD_PROVIDER_ID};
 use ui::prelude::*;
 
-use crate::{AgentPanelOnboardingCard, ApiKeysWithoutProviders, ZedAiOnboarding};
+use crate::{AiWorkspaceOnboardingCard, ApiKeysWithoutProviders, ZedAiOnboarding};
 
-pub struct AgentPanelOnboarding {
+pub struct AiWorkspaceOnboarding {
     user_store: Entity<UserStore>,
     client: Arc<Client>,
     has_configured_providers: bool,
     continue_with_zed_ai: Arc<dyn Fn(&mut Window, &mut App)>,
 }
 
-impl AgentPanelOnboarding {
+impl AiWorkspaceOnboarding {
     pub fn new(
         user_store: Entity<UserStore>,
         client: Arc<Client>,
@@ -52,7 +52,7 @@ impl AgentPanelOnboarding {
     }
 }
 
-impl Render for AgentPanelOnboarding {
+impl Render for AiWorkspaceOnboarding {
     fn render(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let enrolled_in_trial = self
             .user_store
@@ -65,7 +65,7 @@ impl Render for AgentPanelOnboarding {
             .plan()
             .is_some_and(|plan| plan == Plan::ZedPro);
 
-        AgentPanelOnboardingCard::new()
+        AiWorkspaceOnboardingCard::new()
             .child(
                 ZedAiOnboarding::new(
                     self.client.clone(),

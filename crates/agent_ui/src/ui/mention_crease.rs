@@ -13,7 +13,7 @@ use theme::ThemeSettings;
 use ui::{ButtonLike, TintColor, Tooltip, prelude::*};
 use workspace::{OpenOptions, Workspace};
 
-use crate::Agent;
+use crate::agent_workspace_surface::open_thread_in_center;
 
 #[derive(IntoElement)]
 pub struct MentionCrease {
@@ -271,24 +271,7 @@ fn open_thread(
     window: &mut Window,
     cx: &mut Context<Workspace>,
 ) {
-    use crate::AgentPanel;
-
-    let Some(panel) = workspace.panel::<AgentPanel>(cx) else {
-        return;
-    };
-
-    // Right now we only support loading threads in the native agent
-    panel.update(cx, |panel, cx| {
-        panel.load_agent_thread(
-            Agent::NativeAgent,
-            id,
-            None,
-            Some(name.into()),
-            true,
-            window,
-            cx,
-        )
-    });
+    open_thread_in_center(workspace, id, None, Some(name.into()), window, cx);
 }
 
 fn open_rule(

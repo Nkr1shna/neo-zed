@@ -73,6 +73,7 @@ use notifications::{
     DetachAndPromptErr, Notifications, dismiss_app_notification,
     simple_message_notification::MessageNotification,
 };
+use orchestration::OrchestrationState;
 pub use pane::*;
 pub use pane_group::{
     ActivePaneDecorator, HANDLE_HITBOX_SIZE, Member, PaneAxis, PaneGroup, PaneRenderContext,
@@ -1236,6 +1237,7 @@ pub enum Event {
     ZoomChanged,
     ModalOpened,
     Activate,
+    AiSurfaceChanged,
     PanelAdded(AnyView),
 }
 
@@ -1330,6 +1332,7 @@ pub struct Workspace {
     pane_history_timestamp: Arc<AtomicUsize>,
     bounds: Bounds<Pixels>,
     pub centered_layout: bool,
+    orchestration_state: OrchestrationState,
     bounds_save_task_queued: Option<Task<()>>,
     on_prompt_for_new_path: Option<PromptForNewPath>,
     on_prompt_for_open_path: Option<PromptForOpenPath>,
@@ -1735,6 +1738,7 @@ impl Workspace {
             // This data will be incorrect, but it will be overwritten by the time it needs to be used.
             bounds: Default::default(),
             centered_layout: false,
+            orchestration_state: Default::default(),
             bounds_save_task_queued: None,
             on_prompt_for_new_path: None,
             on_prompt_for_open_path: None,
@@ -1815,6 +1819,7 @@ impl Workspace {
             } else {
                 DB.next_id().await.unwrap_or_else(|_| Default::default())
             };
+            let orchestration_state = DB.orchestration_state(workspace_id)?.unwrap_or_default();
 
             let toolchains = DB.toolchains(workspace_id).await?;
 
@@ -1871,6 +1876,7 @@ impl Workspace {
                             );
 
                             workspace.centered_layout = centered_layout;
+                            workspace.orchestration_state = orchestration_state.clone();
 
                             // Call init callback to add items before window renders
                             if let Some(init) = init {
@@ -1928,6 +1934,7 @@ impl Workspace {
                                     cx,
                                 );
                                 workspace.centered_layout = centered_layout;
+                                workspace.orchestration_state = orchestration_state.clone();
 
                                 // Call init callback to add items before window renders
                                 if let Some(init) = init {
@@ -2070,16 +2077,19 @@ impl Workspace {
                 visible: left_visible,
                 active_panel: left_active_panel,
                 zoom: left_dock_zoom,
+                size: left_dock.size().map(f32::from),
             },
             right: DockData {
                 visible: right_visible,
                 active_panel: right_active_panel,
                 zoom: right_dock_zoom,
+                size: right_dock.size().map(f32::from),
             },
             bottom: DockData {
                 visible: bottom_visible,
                 active_panel: bottom_active_panel,
                 zoom: bottom_dock_zoom,
+                size: bottom_dock.size().map(f32::from),
             },
         }
     }
@@ -4714,7 +4724,7 @@ impl Workspace {
         // If this pane is in a dock, preserve that dock when dismissing zoomed items.
         // This prevents the dock from closing when focus events fire during window activation.
         // We also preserve any dock whose active panel itself has focus — this covers
-        // panels like AgentPanel that don't implement `pane()` but can still be zoomed.
+        // panels like AiWorkspace that don't implement `pane()` but can still be zoomed.
         let dock_to_preserve = self.all_docks().iter().find_map(|dock| {
             let dock_read = dock.read(cx);
             if let Some(panel) = dock_read.active_panel() {
@@ -5985,6 +5995,29 @@ impl Workspace {
         self.database_id
     }
 
+    pub fn orchestration_state(&self) -> &OrchestrationState {
+        &self.orchestration_state
+    }
+
+    pub fn set_orchestration_state(
+        &mut self,
+        orchestration_state: OrchestrationState,
+        cx: &mut Context<Self>,
+    ) {
+        self.orchestration_state = orchestration_state;
+        cx.notify();
+
+        if let Some(database_id) = self.database_id {
+            let orchestration_state = self.orchestration_state.clone();
+            cx.background_spawn(async move {
+                persistence::DB
+                    .save_orchestration_state(database_id, orchestration_state)
+                    .await
+            })
+            .detach_and_log_err(cx);
+        }
+    }
+
     pub(crate) fn set_database_id(&mut self, id: WorkspaceId) {
         self.database_id = Some(id);
     }
@@ -6193,6 +6226,7 @@ impl Workspace {
                 let center_group = build_serialized_pane_group(&self.center.root, window, cx);
                 let docks = build_serialized_docks(self, window, cx);
                 let window_bounds = Some(SerializedWindowBounds(window.window_bounds()));
+                let orchestration_state = self.orchestration_state.clone();
 
                 let serialized_workspace = SerializedWorkspace {
                     id: database_id,
@@ -6211,6 +6245,10 @@ impl Workspace {
 
                 window.spawn(cx, async move |_| {
                     persistence::DB.save_workspace(serialized_workspace).await;
+                    persistence::DB
+                        .save_orchestration_state(database_id, orchestration_state)
+                        .await
+                        .log_err();
                 })
             }
             WorkspaceLocation::DetachFromSession => {
@@ -6218,6 +6256,7 @@ impl Workspace {
                 let display = window.display(cx).and_then(|d| d.uuid().ok());
                 // Save dock state for empty local workspaces
                 let docks = build_serialized_docks(self, window, cx);
+                let orchestration_state = self.orchestration_state.clone();
                 window.spawn(cx, async move |_| {
                     persistence::DB
                         .set_window_open_status(
@@ -6231,13 +6270,22 @@ impl Workspace {
                         .set_session_id(database_id, None)
                         .await
                         .log_err();
+                    persistence::DB
+                        .save_orchestration_state(database_id, orchestration_state)
+                        .await
+                        .log_err();
                     persistence::write_default_dock_state(docks).await.log_err();
                 })
             }
             WorkspaceLocation::None => {
                 // Save dock state for empty non-local workspaces
                 let docks = build_serialized_docks(self, window, cx);
+                let orchestration_state = self.orchestration_state.clone();
                 window.spawn(cx, async move |_| {
+                    persistence::DB
+                        .save_orchestration_state(database_id, orchestration_state)
+                        .await
+                        .log_err();
                     persistence::write_default_dock_state(docks).await.log_err();
                 })
             }
@@ -6687,12 +6735,10 @@ impl Workspace {
                 |workspace: &mut Workspace, _: &ResetActiveDockSize, window, cx| {
                     for dock in workspace.all_docks() {
                         if dock.focus_handle(cx).contains_focused(window, cx) {
-                            let Some(panel) = dock.read(cx).active_panel() else {
+                            if dock.read(cx).active_panel().is_none() {
                                 return;
-                            };
-
-                            // Set to `None`, then the size will fall back to the default.
-                            panel.clone().set_size(None, window, cx);
+                            }
+                            dock.update(cx, |dock, cx| dock.reset_size(cx));
 
                             return;
                         }
@@ -6700,11 +6746,10 @@ impl Workspace {
                 },
             ))
             .on_action(cx.listener(
-                |workspace: &mut Workspace, _: &ResetOpenDocksSize, window, cx| {
+                |workspace: &mut Workspace, _: &ResetOpenDocksSize, _window, cx| {
                     for dock in workspace.all_docks() {
-                        if let Some(panel) = dock.read(cx).visible_panel() {
-                            // Set to `None`, then the size will fall back to the default.
-                            panel.clone().set_size(None, window, cx);
+                        if dock.read(cx).visible_panel().is_some() {
+                            dock.update(cx, |dock, cx| dock.reset_size(cx));
                         }
                     }
                 },
@@ -7111,14 +7156,7 @@ impl Workspace {
         });
 
         self.left_dock.update(cx, |left_dock, cx| {
-            if WorkspaceSettings::get_global(cx)
-                .resize_all_panels_in_dock
-                .contains(&DockPosition::Left)
-            {
-                left_dock.resize_all_panels(Some(size), window, cx);
-            } else {
-                left_dock.resize_active_panel(Some(size), window, cx);
-            }
+            left_dock.set_size(Some(size), cx);
         });
     }
 
@@ -7134,28 +7172,14 @@ impl Workspace {
             }
         });
         self.right_dock.update(cx, |right_dock, cx| {
-            if WorkspaceSettings::get_global(cx)
-                .resize_all_panels_in_dock
-                .contains(&DockPosition::Right)
-            {
-                right_dock.resize_all_panels(Some(size), window, cx);
-            } else {
-                right_dock.resize_active_panel(Some(size), window, cx);
-            }
+            right_dock.set_size(Some(size), cx);
         });
     }
 
-    fn resize_bottom_dock(&mut self, new_size: Pixels, window: &mut Window, cx: &mut App) {
+    fn resize_bottom_dock(&mut self, new_size: Pixels, _window: &mut Window, cx: &mut App) {
         let size = new_size.min(self.bounds.bottom() - RESIZE_HANDLE_SIZE - self.bounds.top());
         self.bottom_dock.update(cx, |bottom_dock, cx| {
-            if WorkspaceSettings::get_global(cx)
-                .resize_all_panels_in_dock
-                .contains(&DockPosition::Bottom)
-            {
-                bottom_dock.resize_all_panels(Some(size), window, cx);
-            } else {
-                bottom_dock.resize_active_panel(Some(size), window, cx);
-            }
+            bottom_dock.set_size(Some(size), cx);
         });
     }
 
@@ -8831,6 +8855,9 @@ pub fn open_workspace_by_id(
             .with_context(|| format!("Workspace {workspace_id:?} not found"))?;
 
         let centered_layout = serialized_workspace.centered_layout;
+        let orchestration_state = persistence::DB
+            .orchestration_state(workspace_id)?
+            .unwrap_or_default();
 
         let (window, workspace) = if let Some(window) = requesting_window {
             let workspace = window.update(cx, |multi_workspace, window, cx| {
@@ -8843,6 +8870,7 @@ pub fn open_workspace_by_id(
                         cx,
                     );
                     workspace.centered_layout = centered_layout;
+                    workspace.orchestration_state = orchestration_state.clone();
                     workspace
                 });
                 multi_workspace.add_workspace(workspace.clone(), cx);
@@ -8883,6 +8911,7 @@ pub fn open_workspace_by_id(
                             cx,
                         );
                         workspace.centered_layout = centered_layout;
+                        workspace.orchestration_state = orchestration_state.clone();
                         workspace
                     });
                     cx.new(|cx| MultiWorkspace::new(workspace, window, cx))
@@ -9227,6 +9256,7 @@ async fn open_remote_project_inner(
     cx: &mut AsyncApp,
 ) -> Result<Vec<Option<Box<dyn ItemHandle>>>> {
     let toolchains = DB.toolchains(workspace_id).await?;
+    let orchestration_state = DB.orchestration_state(workspace_id)?.unwrap_or_default();
     for (toolchain, worktree_path, path) in toolchains {
         project
             .update(cx, |this, cx| {
@@ -9279,6 +9309,7 @@ async fn open_remote_project_inner(
             if let Some(ref serialized) = serialized_workspace {
                 workspace.centered_layout = serialized.centered_layout;
             }
+            workspace.orchestration_state = orchestration_state.clone();
 
             workspace
         });
@@ -11847,12 +11878,10 @@ mod tests {
             );
             assert_eq!(
                 left_dock.read(cx).active_panel_size(window, cx).unwrap(),
-                panel_1.size(window, cx)
+                DockPosition::Left.default_size()
             );
 
-            left_dock.update(cx, |left_dock, cx| {
-                left_dock.resize_active_panel(Some(px(1337.)), window, cx)
-            });
+            left_dock.update(cx, |left_dock, cx| left_dock.set_size(Some(px(1337.)), cx));
             assert_eq!(
                 workspace
                     .right_dock()
@@ -11883,7 +11912,7 @@ mod tests {
             );
             assert_eq!(
                 right_dock.read(cx).active_panel_size(window, cx).unwrap(),
-                px(1337.)
+                DockPosition::Right.default_size()
             );
 
             // Now we move panel_2 to the left
@@ -11933,12 +11962,11 @@ mod tests {
         workspace.update_in(cx, |workspace, window, cx| {
             // Since panel_1 was visible on the left, we close the left dock.
             assert!(!workspace.left_dock().read(cx).is_open());
-            // The bottom dock is sized based on the panel's default size,
-            // since the panel orientation changed from vertical to horizontal.
+            // Moving to a dock without a current size falls back to the dock-owned default.
             let bottom_dock = workspace.bottom_dock();
             assert_eq!(
                 bottom_dock.read(cx).active_panel_size(window, cx).unwrap(),
-                panel_1.size(window, cx),
+                DockPosition::Bottom.default_size(),
             );
             // Close bottom dock and move panel_1 back to the left.
             bottom_dock.update(cx, |bottom_dock, cx| {
@@ -12055,6 +12083,57 @@ mod tests {
         workspace.update(cx, |workspace, cx| {
             let right_dock = workspace.right_dock();
             assert!(!right_dock.read(cx).is_open());
+        });
+    }
+
+    #[gpui::test]
+    async fn test_switching_panels_preserves_dock_size(cx: &mut gpui::TestAppContext) {
+        init_test(cx);
+        let fs = FakeFs::new(cx.executor());
+
+        let project = Project::test(fs, [], cx).await;
+        let (multi_workspace, cx) =
+            cx.add_window_view(|window, cx| MultiWorkspace::test_new(project, window, cx));
+        let workspace = multi_workspace.read_with(cx, |mw, _| mw.workspace().clone());
+
+        let panel_2 = workspace.update_in(cx, |workspace, window, cx| {
+            let panel_1 = cx.new(|cx| TestPanel::new(DockPosition::Right, 100, cx));
+            let panel_2 = cx.new(|cx| TestPanel::new(DockPosition::Right, 101, cx));
+            workspace.add_panel(panel_1, window, cx);
+            workspace.add_panel(panel_2.clone(), window, cx);
+            workspace.toggle_dock(DockPosition::Right, window, cx);
+            workspace.right_dock.update(cx, |dock, cx| {
+                dock.set_size(Some(px(777.)), cx);
+            });
+            panel_2
+        });
+
+        panel_2.update(cx, |_, cx| cx.emit(PanelEvent::Activate));
+
+        workspace.update_in(cx, |workspace, window, cx| {
+            let right_dock = workspace.right_dock();
+            assert_eq!(
+                right_dock.read(cx).visible_panel().unwrap().panel_id(),
+                panel_2.panel_id()
+            );
+            assert_eq!(
+                right_dock.read(cx).active_panel_size(window, cx).unwrap(),
+                px(777.)
+            );
+        });
+
+        cx.dispatch_action(ResetActiveDockSize);
+
+        workspace.update_in(cx, |workspace, window, cx| {
+            let right_dock = workspace.right_dock();
+            assert_eq!(
+                right_dock.read(cx).active_panel_size(window, cx).unwrap(),
+                DockPosition::Right.default_size()
+            );
+            assert_eq!(
+                right_dock.read(cx).visible_panel().unwrap().panel_id(),
+                panel_2.panel_id()
+            );
         });
     }
 

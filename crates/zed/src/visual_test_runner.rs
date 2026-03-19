@@ -1983,7 +1983,7 @@ fn run_agent_thread_view_test(
     update_baseline: bool,
 ) -> Result<TestResult> {
     use agent::{AgentTool, ToolInput};
-    use agent_ui::AgentPanel;
+    use agent_ui::{AiWorkspace, attach_workspace_controller, focus_ai_surface};
 
     // Create a temporary directory with the test image
     // Canonicalize to resolve symlinks (on macOS, /var -> /private/var)
@@ -2098,7 +2098,7 @@ fn run_agent_thread_view_test(
 
     let stub_agent: Rc<dyn AgentServer> = Rc::new(StubAgentServer::new(connection));
 
-    // Create a window sized for the agent panel
+    // Create a window sized for the AI workspace
     let window_size = size(px(500.0), px(900.0));
     let bounds = Bounds {
         origin: point(px(0.0), px(0.0)),
@@ -2125,7 +2125,7 @@ fn run_agent_thread_view_test(
 
     cx.run_until_parked();
 
-    // Load the AgentPanel
+    // Load the AiWorkspace
     let (weak_workspace, async_window_cx) = workspace_window
         .update(cx, |workspace, window, cx| {
             (workspace.weak_handle(), window.to_async(cx))
@@ -2137,19 +2137,19 @@ fn run_agent_thread_view_test(
     cx.background_executor.allow_parking();
     let panel = cx
         .foreground_executor
-        .block_test(AgentPanel::load(
+        .block_test(AiWorkspace::load(
             weak_workspace,
             prompt_builder,
             async_window_cx,
         ))
-        .context("Failed to load AgentPanel")?;
+        .context("Failed to load AiWorkspace")?;
     cx.background_executor.forbid_parking();
 
     cx.update_window(workspace_window.into(), |_, _window, cx| {
         workspace_window
             .update(cx, |workspace, window, cx| {
-                workspace.add_panel(panel.clone(), window, cx);
-                workspace.open_panel::<AgentPanel>(window, cx);
+                attach_workspace_controller(workspace, panel.clone(), window, cx);
+                focus_ai_surface(workspace, window, cx);
             })
             .log_err();
     })?;
@@ -3078,7 +3078,10 @@ fn run_start_thread_in_selector_visual_tests(
     cx: &mut VisualTestAppContext,
     update_baseline: bool,
 ) -> Result<TestResult> {
-    use agent_ui::{AgentPanel, StartThreadIn, WorktreeCreationStatus};
+    use agent_ui::{
+        AiWorkspace, StartThreadIn, WorktreeCreationStatus, attach_workspace_controller,
+        focus_ai_surface,
+    };
 
     // Enable feature flags so the thread target selector renders
     cx.update(|cx| {
@@ -3154,7 +3157,7 @@ edition = "2021"
         )
     });
 
-    // Use a wide window so we see project panel + editor + agent panel
+    // Use a wide window so we see project panel + editor + AI workspace
     let window_size = size(px(1280.0), px(800.0));
     let bounds = Bounds {
         origin: point(px(0.0), px(0.0)),
@@ -3285,21 +3288,21 @@ edition = "2021"
 
     cx.run_until_parked();
 
-    // Load the AgentPanel
+    // Load the AiWorkspace
     let (weak_workspace, async_window_cx) = workspace_window
         .update(cx, |multi_workspace, window, cx| {
             let workspace = &multi_workspace.workspaces()[0];
             (workspace.read(cx).weak_handle(), window.to_async(cx))
         })
-        .context("Failed to get workspace handle for agent panel")?;
+        .context("Failed to get workspace handle for AI workspace")?;
 
     let prompt_builder =
         cx.update(|cx| prompt_store::PromptBuilder::load(app_state.fs.clone(), false, cx));
 
     // Register an observer so that workspaces created by the worktree creation
-    // flow get AgentPanel and ProjectPanel loaded automatically. Without this,
-    // `workspace.panel::<AgentPanel>(cx)` returns None in the new workspace and
-    // the creation flow's `focus_panel::<AgentPanel>` call is a no-op.
+    // flow get AiWorkspace and ProjectPanel loaded automatically. Without this,
+    // the new workspace needs an attached AI controller so the center-first
+    // creation flow can open a surface there.
     let _workspace_observer = cx.update({
         let prompt_builder = prompt_builder.clone();
         |cx| {
@@ -3308,8 +3311,8 @@ edition = "2021"
                 let prompt_builder = prompt_builder.clone();
                 let panels_task = cx.spawn_in(window, async move |workspace_handle, cx| {
                     let project_panel = ProjectPanel::load(workspace_handle.clone(), cx.clone());
-                    let agent_panel =
-                        AgentPanel::load(workspace_handle.clone(), prompt_builder, cx.clone());
+                    let ai_workspace =
+                        AiWorkspace::load(workspace_handle.clone(), prompt_builder, cx.clone());
                     if let Ok(panel) = project_panel.await {
                         workspace_handle
                             .update_in(cx, |workspace, window, cx| {
@@ -3317,10 +3320,10 @@ edition = "2021"
                             })
                             .log_err();
                     }
-                    if let Ok(panel) = agent_panel.await {
+                    if let Ok(panel) = ai_workspace.await {
                         workspace_handle
                             .update_in(cx, |workspace, window, cx| {
-                                workspace.add_panel(panel, window, cx);
+                                attach_workspace_controller(workspace, panel, window, cx);
                             })
                             .log_err();
                     }
@@ -3334,23 +3337,23 @@ edition = "2021"
     cx.background_executor.allow_parking();
     let panel = cx
         .foreground_executor
-        .block_test(AgentPanel::load(
+        .block_test(AiWorkspace::load(
             weak_workspace,
             prompt_builder,
             async_window_cx,
         ))
-        .context("Failed to load AgentPanel")?;
+        .context("Failed to load AiWorkspace")?;
     cx.background_executor.forbid_parking();
 
     workspace_window
         .update(cx, |multi_workspace, window, cx| {
             let workspace = &multi_workspace.workspaces()[0];
             workspace.update(cx, |workspace, cx| {
-                workspace.add_panel(panel.clone(), window, cx);
-                workspace.open_panel::<AgentPanel>(window, cx);
+                attach_workspace_controller(workspace, panel.clone(), window, cx);
+                focus_ai_surface(workspace, window, cx);
             });
         })
-        .context("Failed to add and open AgentPanel")?;
+        .context("Failed to attach and focus AI surface")?;
 
     cx.run_until_parked();
 
@@ -3509,7 +3512,7 @@ edition = "2021"
 
     // Wait for the full worktree creation flow to complete. The creation status
     // is cleared to `None` at the very end of the async task, after panels are
-    // loaded, the agent panel is focused, and the new workspace is activated.
+    // loaded, the AI workspace is focused, and the new workspace is activated.
     cx.background_executor.allow_parking();
     let mut creation_complete = false;
     for _ in 0..120 {
@@ -3542,7 +3545,7 @@ edition = "2021"
     workspace_window.update(cx, |multi_workspace, window, cx| {
         let new_workspace = &multi_workspace.workspaces()[1];
         new_workspace.update(cx, |workspace, cx| {
-            if let Some(new_panel) = workspace.panel::<AgentPanel>(cx) {
+            if let Some(new_panel) = agent_ui::workspace_controller(workspace, cx) {
                 new_panel.update(cx, |panel, cx| {
                     panel.set_size(Some(px(480.0)), window, cx);
                     panel.open_external_thread_with_server(stub_agent.clone(), window, cx);
@@ -3555,7 +3558,7 @@ edition = "2021"
     // Type and send a message so the thread target dropdown disappears.
     let new_panel = workspace_window.update(cx, |multi_workspace, _window, cx| {
         let new_workspace = &multi_workspace.workspaces()[1];
-        new_workspace.read(cx).panel::<AgentPanel>(cx)
+        agent_ui::workspace_controller(&new_workspace.read(cx), cx)
     })?;
     if let Some(new_panel) = new_panel {
         let new_thread_view = cx.read(|cx| new_panel.read(cx).active_thread_view(cx));

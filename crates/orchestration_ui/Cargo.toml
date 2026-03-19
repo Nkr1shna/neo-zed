@@ -1,0 +1,21 @@
+[package]
+name = "orchestration_ui"
+version = "0.1.0"
+edition.workspace = true
+publish.workspace = true
+license = "GPL-3.0-or-later"
+
+[lints]
+workspace = true
+
+[lib]
+path = "src/orchestration_ui.rs"
+doctest = false
+
+[dependencies]
+gpui.workspace = true
+gpui_util.workspace = true
+orchestration.workspace = true
+ui.workspace = true
+util.workspace = true
+workspace.workspace = true

@@ -260,7 +260,7 @@ impl ProjectDiff {
         window: &mut Window,
         cx: &mut Context<Workspace>,
     ) {
-        telemetry::event!("Git Diff Opened", source = "Agent Panel");
+        telemetry::event!("Git Diff Opened", source = "AI Workspace");
         let existing = workspace
             .items_of_type::<Self>(cx)
             .find(|item| matches!(item.read(cx).diff_base(cx), DiffBase::Head));

@@ -6,7 +6,7 @@ The sidebar currently only shows **Zed-native agent threads** (from `ThreadStore
 
 ## Root Cause
 
-`ThreadStore` and `ThreadsDatabase` only persist metadata for native threads. When `rebuild_contents` populates the sidebar, it reads from `ThreadStore` for historical threads and overlays live info from the `AgentPanel` — but non-native threads never get written to `ThreadStore`, so once they stop being live, they disappear.
+`ThreadStore` and `ThreadsDatabase` only persist metadata for native threads. When `rebuild_contents` populates the sidebar, it reads from `ThreadStore` for historical threads and overlays live info from the AI workspace controller — but non-native threads never get written to `ThreadStore`, so once they stop being live, they disappear.
 
 ## Solution Overview (Revised)
 
@@ -337,7 +337,7 @@ fn rebuild_contents(&mut self, cx: &App) {
 
 - `rebuild_contents` reads from `SIDEBAR_DB` instead of `ThreadStore`.
 - The `ThreadEntry.agent` field now carries `Agent::Custom { name }` for ACP threads, enabling correct routing in `activate_thread`.
-- The live thread overlay logic (from `all_thread_infos_for_workspace`) is **unchanged** — it still reads from `AgentPanel` to get real-time status of running threads.
+- The live thread overlay logic (from `all_thread_infos_for_workspace`) is **unchanged** — it still reads from the AI workspace controller to get real-time status of running threads.
 
 ### What Stays the Same
 
@@ -350,7 +350,7 @@ fn rebuild_contents(&mut self, cx: &App) {
 
 ## Step 3: Write Native Thread Metadata to `SidebarDb`
 
-**File:** `crates/agent_ui/src/sidebar.rs` and/or `crates/agent_ui/src/agent_panel.rs`
+**File:** `crates/agent_ui/src/sidebar.rs` and/or `crates/agent_ui/src/ai_workspace.rs`
 
 When a native thread is saved (after conversation, on title update, etc.), we also write its metadata to `SidebarDb`. There are two approaches:
 
@@ -381,7 +381,7 @@ fn sync_native_threads_to_sidebar_db(&self, cx: &App) {
 
 ### Option B: Write at the Point of Save
 
-In `AgentPanel` or wherever `thread_store.save_thread()` is called, also call `SIDEBAR_DB.save(...)`. This is more direct but requires touching more call sites.
+In `AiWorkspace` or wherever `thread_store.save_thread()` is called, also call `SIDEBAR_DB.save(...)`. This is more direct but requires touching more call sites.
 
 **Recommendation:** Option A is simpler for the initial implementation. We observe `ThreadStore` changes, diff against `SidebarDb`, and sync. Later, if we want to remove `ThreadStore` entirely from the write path for native threads, we can switch to Option B.
 
@@ -389,7 +389,7 @@ In `AgentPanel` or wherever `thread_store.save_thread()` is called, also call `S
 
 ## Step 4: Write ACP Thread Metadata to `SidebarDb`
 
-**File:** `crates/agent_ui/src/connection_view.rs` (or `agent_panel.rs`)
+**File:** `crates/agent_ui/src/connection_view.rs` (or `ai_workspace.rs`)
 
 When ACP sessions are created, updated, or listed, write metadata directly to `SidebarDb`:
 
@@ -403,11 +403,11 @@ After any write, call `cx.notify()` on the `Sidebar` entity (or use a channel/ev
 
 Since the sidebar no longer observes `ThreadStore`, we need a mechanism to trigger `rebuild_contents` after DB writes. Options:
 
-1. **Emit an event from `AgentPanel`** — The sidebar already subscribes to `AgentPanelEvent`. Add a new variant like `AgentPanelEvent::ThreadMetadataChanged` and emit it after saving to `SidebarDb`.
+1. **Emit an event from `AiWorkspace`** — The sidebar already subscribes to `AiWorkspaceEvent`. Add a new variant like `AiWorkspaceEvent::ThreadMetadataChanged` and emit it after saving to `SidebarDb`.
 2. **Use `cx.notify()` directly** — If the save happens within a `Sidebar` method, just call `self.update_entries(cx)`.
 3. **Observe a lightweight signal entity** — A simple `Entity<()>` that gets notified after DB writes.
 
-**Recommendation:** Option 1 (emit from `AgentPanel`) is cleanest since the sidebar already subscribes to panel events.
+**Recommendation:** Option 1 (emit from `AiWorkspace`) is cleanest since the sidebar already subscribes to workspace AI events.
 
 ---
 
@@ -456,7 +456,7 @@ thread_store.delete_threads(cx);
 
 ## Step 7: Handle `activate_thread` Routing
 
-**File:** `crates/agent_ui/src/sidebar.rs`, `crates/agent_ui/src/agent_panel.rs`
+**File:** `crates/agent_ui/src/sidebar.rs`, `crates/agent_ui/src/ai_workspace.rs`
 
 In `activate_thread`, branch on the `Agent` variant:
 
@@ -541,7 +541,7 @@ fn backfill_native_threads_if_needed(cx: &App) {
 | ---------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | `crates/agent_ui/Cargo.toml`             | Add `db.workspace = true`, `sqlez.workspace = true`, `sqlez_macros.workspace = true`, `chrono.workspace = true` dependencies                                                                                                                                   |
 | `crates/agent_ui/src/sidebar.rs`         | **Main changes.** Add `SidebarDb` domain + `SIDEBAR_DB` static + `SidebarThreadRow`. Replace all `ThreadStore` reads in `rebuild_contents` with `SidebarDb` reads. Update `activate_archived_thread`. Add native thread sync logic. Add backfill on first run. |
-| `crates/agent_ui/src/agent_panel.rs`     | Emit `AgentPanelEvent::ThreadMetadataChanged` after thread saves. Potentially write ACP metadata to `SidebarDb` here.                                                                                                                                          |
+| `crates/agent_ui/src/ai_workspace.rs`    | Emit `AiWorkspaceEvent::ThreadMetadataChanged` after thread saves. Potentially write ACP metadata to `SidebarDb` here.                                                                                                                                         |
 | `crates/agent_ui/src/connection_view.rs` | Write ACP metadata to `SidebarDb` on session creation, title updates, and session list refreshes.                                                                                                                                                              |
 
 ## What Is NOT Changed

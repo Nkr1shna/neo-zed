@@ -38,7 +38,6 @@ use util::truncate_and_remove_front;
 use workspace::Workspace;
 use workspace::dock::DockPosition;
 
-use crate::AgentPanel;
 use crate::mention_set::MentionSet;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -1096,9 +1095,7 @@ impl<T: PromptCompletionProviderDelegate> PromptCompletionProvider<T> {
         let project = workspace.project().read(cx);
         let include_root_name = workspace.visible_worktrees(cx).count() > 1;
 
-        if let Some(agent_panel) = workspace.panel::<AgentPanel>(cx)
-            && let Some(thread) = agent_panel.read(cx).active_agent_thread(cx)
-        {
+        if let Some(thread) = crate::agent_workspace_surface::active_agent_thread(&workspace, cx) {
             let thread = thread.read(cx);
             mentions.insert(MentionUri::Thread {
                 id: thread.session_id().clone(),

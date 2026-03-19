@@ -1,14 +1,14 @@
 mod agent_api_keys_onboarding;
-mod agent_panel_onboarding_card;
-mod agent_panel_onboarding_content;
+mod ai_workspace_onboarding_card;
+mod ai_workspace_onboarding_content;
 mod ai_upsell_card;
 mod edit_prediction_onboarding_content;
 mod plan_definitions;
 mod young_account_banner;
 
 pub use agent_api_keys_onboarding::{ApiKeysWithProviders, ApiKeysWithoutProviders};
-pub use agent_panel_onboarding_card::AgentPanelOnboardingCard;
-pub use agent_panel_onboarding_content::AgentPanelOnboarding;
+pub use ai_workspace_onboarding_card::AiWorkspaceOnboardingCard;
+pub use ai_workspace_onboarding_content::AiWorkspaceOnboarding;
 pub use ai_upsell_card::AiUpsellCard;
 use cloud_api_types::Plan;
 pub use edit_prediction_onboarding_content::EditPredictionOnboarding;
@@ -318,11 +318,11 @@ impl Component for ZedAiOnboarding {
     }
 
     fn name() -> &'static str {
-        "Agent Panel Banners"
+        "AI Workspace Banners"
     }
 
     fn sort_name() -> &'static str {
-        "Agent Panel Banners"
+        "AI Workspace Banners"
     }
 
     fn preview(_window: &mut Window, _cx: &mut App) -> Option<AnyElement> {

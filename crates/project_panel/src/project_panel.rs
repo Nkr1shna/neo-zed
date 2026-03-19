@@ -148,7 +148,6 @@ pub struct ProjectPanel {
     _dragged_entry_destination: Option<Arc<Path>>,
     workspace: WeakEntity<Workspace>,
     width: Option<Pixels>,
-    pending_serialization: Task<Option<()>>,
     diagnostics: HashMap<(WorktreeId, Arc<RelPath>), DiagnosticSeverity>,
     diagnostic_counts: HashMap<(WorktreeId, Arc<RelPath>), DiagnosticCount>,
     diagnostic_summary_update: Task<()>,
@@ -875,7 +874,6 @@ impl ProjectPanel {
                 _dragged_entry_destination: None,
                 workspace: workspace.weak_handle(),
                 width: None,
-                pending_serialization: Task::ready(None),
                 diagnostics: Default::default(),
                 diagnostic_counts: Default::default(),
                 diagnostic_summary_update: Task::ready(()),
@@ -1103,32 +1101,6 @@ impl ProjectPanel {
             .map(|id| i64::from(id).to_string())
             .or(workspace.session_id())
             .map(|id| format!("{}-{:?}", PROJECT_PANEL_KEY, id))
-    }
-
-    fn serialize(&mut self, cx: &mut Context<Self>) {
-        let Some(serialization_key) = self
-            .workspace
-            .read_with(cx, |workspace, _| {
-                ProjectPanel::serialization_key(workspace)
-            })
-            .ok()
-            .flatten()
-        else {
-            return;
-        };
-        let width = self.width;
-        self.pending_serialization = cx.background_spawn(
-            async move {
-                KEY_VALUE_STORE
-                    .write_kvp(
-                        serialization_key,
-                        serde_json::to_string(&SerializedProjectPanel { width })?,
-                    )
-                    .await?;
-                anyhow::Ok(())
-            }
-            .log_err(),
-        );
     }
 
     fn focus_in(&mut self, window: &mut Window, cx: &mut Context<Self>) {
@@ -7067,17 +7039,8 @@ impl Panel for ProjectPanel {
         });
     }
 
-    fn size(&self, _: &Window, cx: &App) -> Pixels {
+    fn legacy_dock_size(&self, _: &Window, _cx: &App) -> Option<Pixels> {
         self.width
-            .unwrap_or_else(|| ProjectPanelSettings::get_global(cx).default_width)
-    }
-
-    fn set_size(&mut self, size: Option<Pixels>, window: &mut Window, cx: &mut Context<Self>) {
-        self.width = size;
-        cx.notify();
-        cx.defer_in(window, |this, _, cx| {
-            this.serialize(cx);
-        });
     }
 
     fn icon(&self, _: &Window, cx: &App) -> Option<IconName> {

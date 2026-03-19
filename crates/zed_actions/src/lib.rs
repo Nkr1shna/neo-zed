@@ -173,7 +173,7 @@ pub struct ResetUiFontSize {
     pub persist: bool,
 }
 
-/// Resets all zoom levels (UI and buffer font sizes, including in the agent panel) to their default values.
+/// Resets all zoom levels (UI and buffer font sizes, including in the AI workspace) to their default values.
 #[derive(PartialEq, Clone, Default, Debug, Deserialize, JsonSchema, Action)]
 #[action(namespace = zed)]
 #[serde(deny_unknown_fields)]
@@ -455,10 +455,10 @@ pub mod agent {
             ToggleModelSelector,
             /// Triggers re-authentication on Gemini
             ReauthenticateAgent,
-            /// Add the current selection as context for threads in the agent panel.
+            /// Add the current selection as context for threads in the AI workspace.
             #[action(deprecated_aliases = ["assistant::QuoteSelection", "agent::QuoteSelection"])]
             AddSelectionToThread,
-            /// Resets the agent panel zoom levels (agent UI and buffer font sizes).
+            /// Resets the AI workspace zoom levels (agent UI and buffer font sizes).
             ResetAgentZoom,
             /// Pastes clipboard content without any formatting.
             PasteRaw,
@@ -513,7 +513,8 @@ pub mod assistant {
     actions!(
         agent,
         [
-            /// Toggles the agent panel.
+            /// Toggles the AI workspace.
+            #[action(deprecated_aliases = ["assistant::Toggle"])]
             Toggle,
             #[action(deprecated_aliases = ["assistant::ToggleFocus"])]
             ToggleFocus

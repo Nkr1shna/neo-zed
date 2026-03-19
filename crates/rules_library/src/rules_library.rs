@@ -58,8 +58,8 @@ pub trait InlineAssistDelegate {
         cx: &mut Context<RulesLibrary>,
     );
 
-    /// Returns whether the Agent panel was focused.
-    fn focus_agent_panel(
+    /// Returns whether the AI workspace was focused.
+    fn focus_ai_workspace(
         &self,
         workspace: &mut Workspace,
         window: &mut Window,
@@ -974,7 +974,7 @@ impl RulesLibrary {
                             window.activate_window();
                             multi_workspace.workspace().update(cx, |workspace, cx| {
                                 self.inline_assist_delegate
-                                    .focus_agent_panel(workspace, window, cx)
+                                    .focus_ai_workspace(workspace, window, cx)
                             })
                         })
                         .ok();

@@ -927,8 +927,6 @@ impl TerminalPanel {
     }
 
     fn serialize(&mut self, cx: &mut Context<Self>) {
-        let height = self.height;
-        let width = self.width;
         let Some(serialization_key) = self
             .workspace
             .read_with(cx, |workspace, _| {
@@ -959,8 +957,8 @@ impl TerminalPanel {
                             serde_json::to_string(&SerializedTerminalPanel {
                                 items,
                                 active_item_id: None,
-                                height,
-                                width,
+                                height: None,
+                                width: None,
                             })?,
                         )
                         .await?;
@@ -1552,25 +1550,11 @@ impl Panel for TerminalPanel {
         });
     }
 
-    fn size(&self, window: &Window, cx: &App) -> Pixels {
-        let settings = TerminalSettings::get_global(cx);
+    fn legacy_dock_size(&self, window: &Window, cx: &App) -> Option<Pixels> {
         match self.position(window, cx) {
-            DockPosition::Left | DockPosition::Right => {
-                self.width.unwrap_or(settings.default_width)
-            }
-            DockPosition::Bottom => self.height.unwrap_or(settings.default_height),
+            DockPosition::Left | DockPosition::Right => self.width,
+            DockPosition::Bottom => self.height,
         }
-    }
-
-    fn set_size(&mut self, size: Option<Pixels>, window: &mut Window, cx: &mut Context<Self>) {
-        match self.position(window, cx) {
-            DockPosition::Left | DockPosition::Right => self.width = size,
-            DockPosition::Bottom => self.height = size,
-        }
-        cx.notify();
-        cx.defer_in(window, |this, _, cx| {
-            this.serialize(cx);
-        })
     }
 
     fn is_zoomed(&self, _window: &Window, cx: &App) -> bool {
