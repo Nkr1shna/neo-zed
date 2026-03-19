@@ -108,8 +108,9 @@ const DEFAULT_THREAD_TITLE: &str = "New Thread";
 
 fn read_serialized_ai_workspace(
     workspace_id: workspace::WorkspaceId,
+    kvp: &KeyValueStore,
 ) -> Option<SerializedAiWorkspace> {
-    let scope = KEY_VALUE_STORE.scoped(LEGACY_AI_WORKSPACE_KEY);
+    let scope = kvp.scoped(LEGACY_AI_WORKSPACE_KEY);
     let key = i64::from(workspace_id).to_string();
     scope
         .read(&key)
@@ -121,8 +122,9 @@ fn read_serialized_ai_workspace(
 async fn save_serialized_ai_workspace(
     workspace_id: workspace::WorkspaceId,
     workspace_state: SerializedAiWorkspace,
+    kvp: KeyValueStore,
 ) -> Result<()> {
-    let scope = KEY_VALUE_STORE.scoped(LEGACY_AI_WORKSPACE_KEY);
+    let scope = kvp.scoped(LEGACY_AI_WORKSPACE_KEY);
     let key = i64::from(workspace_id).to_string();
     scope
         .write(key, serde_json::to_string(&workspace_state)?)
@@ -132,9 +134,8 @@ async fn save_serialized_ai_workspace(
 
 /// Migration: reads the original AI workspace format stored under the legacy
 /// `"agent_panel"` KVP key before per-workspace keying was introduced.
-fn read_legacy_serialized_ai_workspace() -> Option<SerializedAiWorkspace> {
-    KEY_VALUE_STORE
-        .read_kvp(LEGACY_AI_WORKSPACE_KEY)
+fn read_legacy_serialized_ai_workspace(kvp: &KeyValueStore) -> Option<SerializedAiWorkspace> {
+    kvp.read_kvp(LEGACY_AI_WORKSPACE_KEY)
         .log_err()
         .flatten()
         .and_then(|json| serde_json::from_str::<SerializedAiWorkspace>(&json).log_err())
@@ -712,9 +713,11 @@ impl AiWorkspace {
 
             let serialized_workspace = cx
                 .background_spawn(async move {
-                    workspace_id
-                        .and_then(read_serialized_ai_workspace)
-                        .or_else(read_legacy_serialized_ai_workspace)
+                    kvp.as_ref().and_then(|kvp| {
+                        workspace_id
+                            .and_then(|workspace_id| read_serialized_ai_workspace(workspace_id, kvp))
+                            .or_else(|| read_legacy_serialized_ai_workspace(kvp))
+                    })
                 })
                 .await;
 
@@ -1261,8 +1264,7 @@ impl AiWorkspace {
                     if let Some(serialized) =
                         serde_json::to_string(&LastUsedExternalAgent { agent }).log_err()
                     {
-                        KEY_VALUE_STORE
-                            .write_kvp(LEGACY_LAST_USED_EXTERNAL_AGENT_KEY.to_string(), serialized)
+                        kvp.write_kvp(LEGACY_LAST_USED_EXTERNAL_AGENT_KEY.to_string(), serialized)
                             .await
                             .log_err();
                     }
@@ -1289,9 +1291,9 @@ impl AiWorkspace {
                 let ext_agent = if is_via_collab {
                     Agent::NativeAgent
                 } else {
-                    cx.background_spawn(async move {
-                        KEY_VALUE_STORE.read_kvp(LEGACY_LAST_USED_EXTERNAL_AGENT_KEY)
-                    })
+                    cx.background_spawn(
+                        async move { kvp.read_kvp(LEGACY_LAST_USED_EXTERNAL_AGENT_KEY) },
+                    )
                     .await
                     .log_err()
                     .flatten()

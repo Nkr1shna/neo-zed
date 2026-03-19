@@ -1826,7 +1826,7 @@ impl Workspace {
             } else {
                 db.next_id().await.unwrap_or_else(|_| Default::default())
             };
-            let orchestration_state = DB.orchestration_state(workspace_id)?.unwrap_or_default();
+            let orchestration_state = db.orchestration_state(workspace_id)?.unwrap_or_default();
 
             let toolchains = db.toolchains(workspace_id).await?;
 
@@ -6067,10 +6067,10 @@ impl Workspace {
         cx.notify();
 
         if let Some(database_id) = self.database_id {
+            let db = WorkspaceDb::global(cx);
             let orchestration_state = self.orchestration_state.clone();
             cx.background_spawn(async move {
-                persistence::DB
-                    .save_orchestration_state(database_id, orchestration_state)
+                db.save_orchestration_state(database_id, orchestration_state)
                     .await
             })
             .detach_and_log_err(cx);
@@ -8932,9 +8932,7 @@ pub fn open_workspace_by_id(
             .with_context(|| format!("Workspace {workspace_id:?} not found"))?;
 
         let centered_layout = serialized_workspace.centered_layout;
-        let orchestration_state = persistence::DB
-            .orchestration_state(workspace_id)?
-            .unwrap_or_default();
+        let orchestration_state = db.orchestration_state(workspace_id)?.unwrap_or_default();
 
         let (window, workspace) = if let Some(window) = requesting_window {
             let workspace = window.update(cx, |multi_workspace, window, cx| {

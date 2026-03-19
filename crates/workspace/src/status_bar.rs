@@ -63,7 +63,12 @@ impl Render for StatusBar {
                     .border_b(px(1.0))
                     .border_color(cx.theme().colors().status_bar_background),
             })
-            .child(h_flex().flex_1().min_w_0().child(self.render_left_tools()))
+            .child(
+                h_flex()
+                    .flex_1()
+                    .min_w_0()
+                    .child(self.render_left_tools(cx)),
+            )
             .child(
                 h_flex()
                     .flex_1()
