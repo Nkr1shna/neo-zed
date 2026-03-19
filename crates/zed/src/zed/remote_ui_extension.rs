@@ -774,32 +774,41 @@ impl RemoteUiPanel {
             }
             .await;
 
-            this.update(cx, |panel, cx| {
-                panel.loading = false;
-                match result {
-                    Ok((instance_id, tree)) => {
-                        panel.instance_id = Some(instance_id);
-                        panel.tree = Some(tree.clone());
-                        panel.error_message = None;
-                        let workspace_id = panel.workspace_id;
-                        let qualified_panel_id = panel.descriptor.qualified_panel_id.clone();
-                        cx.background_spawn(async move {
-                            save_remote_ui_panel_snapshot(workspace_id, qualified_panel_id, tree)
+            let Some(()) = this
+                .update(cx, |panel, cx| {
+                    panel.loading = false;
+                    match result {
+                        Ok((instance_id, tree)) => {
+                            panel.instance_id = Some(instance_id);
+                            panel.tree = Some(tree.clone());
+                            panel.error_message = None;
+                            let workspace_id = panel.workspace_id;
+                            let qualified_panel_id = panel.descriptor.qualified_panel_id.clone();
+                            cx.background_spawn(async move {
+                                save_remote_ui_panel_snapshot(
+                                    workspace_id,
+                                    qualified_panel_id,
+                                    tree,
+                                )
                                 .log_err();
-                        })
-                        .detach();
+                            })
+                            .detach();
+                        }
+                        Err(error) => {
+                            let message = format!(
+                                "Extension panel `{}` reload failed: {error}",
+                                descriptor.qualified_panel_id
+                            );
+                            log::error!("{message}");
+                            panel.error_message = Some(message.into());
+                        }
                     }
-                    Err(error) => {
-                        let message = format!(
-                            "Extension panel `{}` reload failed: {error}",
-                            descriptor.qualified_panel_id
-                        );
-                        log::error!("{message}");
-                        panel.error_message = Some(message.into());
-                    }
-                }
-                cx.notify();
-            })?;
+                    cx.notify();
+                })
+                .ok()
+            else {
+                return Ok(());
+            };
 
             Ok::<(), anyhow::Error>(())
         })
@@ -1346,7 +1355,8 @@ impl RemoteUiWidget {
             }
             .await;
 
-            this.update(cx, |widget, cx| {
+            let Some(()) = this
+                .update(cx, |widget, cx| {
                 widget.loading = false;
                 match result {
                     Ok((instance_id, tree, open_duration, render_duration, total_duration)) => {
@@ -1391,7 +1401,11 @@ impl RemoteUiWidget {
                     }
                 }
                 cx.notify();
-            })?;
+                })
+                .ok()
+            else {
+                return Ok(());
+            };
 
             Ok::<(), anyhow::Error>(())
         })

@@ -35,6 +35,7 @@ use wasmtime::{
     component::{Component, Linker, Resource},
 };
 
+pub use latest::MAX_VERSION as LATEST_WASM_API_VERSION;
 pub use latest::{
     CodeLabel, CodeLabelSpan, Command, DebugAdapterBinary, ExtensionProject, Range, SlashCommand,
     zed::extension::context_server::ContextServerConfiguration,

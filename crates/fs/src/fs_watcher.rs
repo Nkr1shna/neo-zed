@@ -221,8 +221,13 @@ struct WatcherRegistrationState {
 
 struct WatcherState {
     watchers: HashMap<WatcherRegistrationId, WatcherRegistrationState>,
-    path_registrations: HashMap<Arc<std::path::Path>, u32>,
+    path_registrations: HashMap<Arc<std::path::Path>, PathRegistrationState>,
     last_registration: WatcherRegistrationId,
+}
+
+struct PathRegistrationState {
+    count: u32,
+    is_watched: bool,
 }
 
 pub struct GlobalWatcher {
@@ -263,7 +268,9 @@ impl GlobalWatcher {
         #[cfg(not(any(target_os = "windows", target_os = "macos")))]
         let path_already_covered = false;
 
-        if !path_already_covered && !state.path_registrations.contains_key(&path) {
+        let should_watch_path =
+            !path_already_covered && !state.path_registrations.contains_key(&path);
+        if should_watch_path {
             drop(state);
             self.watcher.lock().watch(&path, mode)?;
             state = self.state.lock();
@@ -277,7 +284,14 @@ impl GlobalWatcher {
             path: path.clone(),
         };
         state.watchers.insert(id, registration_state);
-        *state.path_registrations.entry(path).or_insert(0) += 1;
+        state
+            .path_registrations
+            .entry(path)
+            .and_modify(|registration| registration.count += 1)
+            .or_insert(PathRegistrationState {
+                count: 1,
+                is_watched: should_watch_path,
+            });
 
         Ok(id)
     }
@@ -289,18 +303,21 @@ impl GlobalWatcher {
             return;
         };
 
-        let Some(count) = state.path_registrations.get_mut(&registration_state.path) else {
+        let Some(registration) = state.path_registrations.get_mut(&registration_state.path) else {
             return;
         };
-        *count -= 1;
-        if *count == 0 {
+        registration.count -= 1;
+        if registration.count == 0 {
+            let was_watched = registration.is_watched;
             state.path_registrations.remove(&registration_state.path);
 
-            drop(state);
-            self.watcher
-                .lock()
-                .unwatch(&registration_state.path)
-                .log_err();
+            if was_watched {
+                drop(state);
+                self.watcher
+                    .lock()
+                    .unwatch(&registration_state.path)
+                    .log_err();
+            }
         }
     }
 }

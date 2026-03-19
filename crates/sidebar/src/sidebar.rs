@@ -767,9 +767,7 @@ impl Sidebar {
 
                 // Merge live info into threads and update notification state
                 // in a single pass.
-                let is_active_workspace = active_workspace
-                    .as_ref()
-                    .is_some_and(|active| active == workspace);
+                let is_active_workspace = self.is_active_workspace(workspace, cx);
 
                 for thread in &mut threads {
                     let session_id = &thread.session_info.session_id;

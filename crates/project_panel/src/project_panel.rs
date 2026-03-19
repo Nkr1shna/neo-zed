@@ -162,7 +162,6 @@ pub struct ProjectPanel {
     sticky_items_count: usize,
     last_reported_update: Instant,
     update_visible_entries_task: UpdateVisibleEntriesTask,
-    pending_serialization: Task<Option<()>>,
     undo_manager: UndoManager,
     state: State,
 }
@@ -901,7 +900,6 @@ impl ProjectPanel {
                     unfolded_dir_ids: Default::default(),
                 },
                 update_visible_entries_task: Default::default(),
-                pending_serialization: Task::ready(None),
                 undo_manager: UndoManager::new(workspace.weak_handle()),
             };
             this.update_visible_entries(None, false, false, window, cx);
@@ -1114,30 +1112,6 @@ impl ProjectPanel {
             .map(|id| format!("{}-{:?}", PROJECT_PANEL_KEY, id))
     }
 
-    fn serialize(&mut self, cx: &mut Context<Self>) {
-        let Some(serialization_key) = self
-            .workspace
-            .read_with(cx, |workspace, _| {
-                ProjectPanel::serialization_key(workspace)
-            })
-            .ok()
-            .flatten()
-        else {
-            return;
-        };
-        let kvp = KeyValueStore::global(cx);
-        self.pending_serialization = cx.background_spawn(
-            async move {
-                kvp.write_kvp(
-                    serialization_key,
-                    serde_json::to_string(&SerializedProjectPanel { width: None })?,
-                )
-                .await?;
-                anyhow::Ok(())
-            }
-            .log_err(),
-        );
-    }
     fn focus_in(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         if !self.focus_handle.contains_focused(window, cx) {
             cx.emit(Event::Focus);

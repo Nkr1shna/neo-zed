@@ -4,7 +4,10 @@ set -euo pipefail
 
 repo_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 extension_id="remote-ui-example"
-install_root="${HOME}/Library/Application Support/Zed/extensions/installed/${extension_id}"
+cargo_target_dir="${CARGO_TARGET_DIR:-${repo_root}/target}"
+user_data_dir="${repo_root}/target/remote-ui-example-user-data"
+config_root="${user_data_dir}/config"
+install_root="${user_data_dir}/extensions/installed/${extension_id}"
 icon_root="${install_root}/icons"
 
 cd "${repo_root}"
@@ -15,7 +18,15 @@ pkill -f 'target/debug/zed' || true
 cargo build -p zed
 cargo build --manifest-path "${repo_root}/extensions/remote-ui-example/Cargo.toml" --target wasm32-wasip2
 
-mkdir -p "${icon_root}"
+rm -rf "${user_data_dir}"
+mkdir -p "${config_root}" "${icon_root}"
+
+printf '%s\n' \
+    '{' \
+    '  "audio": {' \
+    '    "denoise": false' \
+    '  }' \
+    '}' > "${config_root}/settings.json"
 
 copy_if_distinct() {
     local source="$1"
@@ -29,11 +40,11 @@ copy_if_distinct() {
 }
 
 copy_if_distinct "${repo_root}/extensions/remote-ui-example/extension.toml" "${install_root}/extension.toml"
-copy_if_distinct "${repo_root}/target/wasm32-wasip2/debug/remote_ui_example.wasm" "${install_root}/extension.wasm"
+copy_if_distinct "${cargo_target_dir}/wasm32-wasip2/debug/remote_ui_example.wasm" "${install_root}/extension.wasm"
 copy_if_distinct "${repo_root}/extensions/remote-ui-example/sidecar.js" "${install_root}/sidecar.js"
 copy_if_distinct "${repo_root}/extensions/remote-ui-example/icons/ai_open_ai.svg" "${icon_root}/ai_open_ai.svg"
 
-rm -f "${HOME}/Library/Application Support/Zed/extensions/index.json"
+rm -f "${user_data_dir}/extensions/index.json"
 
 RUST_LOG="${RUST_LOG:-extension_host=info,zed::zed::remote_ui_extension=info}" \
-    "${repo_root}/target/debug/zed" "${repo_root}"
+    "${cargo_target_dir}/debug/zed" --user-data-dir "${user_data_dir}" "${repo_root}"

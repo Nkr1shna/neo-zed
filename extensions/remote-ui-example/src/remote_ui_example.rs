@@ -23,7 +23,6 @@ struct SidecarSnapshot {
     auth_status: String,
     plan_type: Option<String>,
     primary_used_percent: u32,
-    secondary_used_percent: u32,
     usage_limits: Vec<UsageLimitCard>,
     credits_summary: CreditsSummary,
 }
@@ -48,7 +47,6 @@ impl SidecarSnapshot {
             auth_status: "signed-out".to_string(),
             plan_type: None,
             primary_used_percent: 0,
-            secondary_used_percent: 0,
             usage_limits: Vec::new(),
             credits_summary: CreditsSummary {
                 balance_label: "0".to_string(),
@@ -479,9 +477,6 @@ fn parse_sidecar_snapshot(value: zed::serde_json::Value) -> zed::Result<SidecarS
         primary_used_percent: optional_u32(object, "primary_used_percent")
             .unwrap_or(0)
             .min(100),
-        secondary_used_percent: optional_u32(object, "secondary_used_percent")
-            .unwrap_or(0)
-            .min(100),
         usage_limits: parse_usage_limits(object.get("usage_limits")),
         credits_summary: parse_credits_summary(object.get("credits_summary")),
     })
@@ -598,7 +593,6 @@ mod tests {
                 auth_status: "authenticated".to_string(),
                 plan_type: Some("pro".to_string()),
                 primary_used_percent: 6,
-                secondary_used_percent: 71,
                 usage_limits: vec![
                     UsageLimitCard {
                         id: "codex-primary".to_string(),
@@ -646,7 +640,6 @@ mod tests {
             "auth_status": "authenticated",
             "plan_type": "pro",
             "primary_used_percent": 106,
-            "secondary_used_percent": 71,
             "usage_limits": [
                 {
                     "id": "codex-primary",
@@ -673,7 +666,6 @@ mod tests {
         assert_eq!(snapshot.auth_status, "authenticated");
         assert_eq!(snapshot.plan_type.as_deref(), Some("pro"));
         assert_eq!(snapshot.primary_used_percent, 100);
-        assert_eq!(snapshot.secondary_used_percent, 71);
         assert_eq!(snapshot.usage_limits.len(), 2);
         assert_eq!(snapshot.usage_limits[0].remaining_percent, 94);
         assert_eq!(snapshot.credits_summary.balance_label, "0");
