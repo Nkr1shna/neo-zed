@@ -4752,6 +4752,9 @@ mod tests {
         cx.run_until_parked();
 
         sidebar.read_with(cx, |sidebar, _cx| {
+            let active_entry = sidebar
+                .selection
+                .and_then(|selection| sidebar.contents.entries.get(selection));
             assert_eq!(
                 sidebar.focused_thread.as_ref(),
                 Some(&session_id_a),

@@ -5,9 +5,12 @@ set -euo pipefail
 repo_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 extension_id="remote-ui-example"
 cargo_target_dir="${CARGO_TARGET_DIR:-${repo_root}/target}"
-user_data_dir="${repo_root}/target/remote-ui-example-user-data"
-config_root="${user_data_dir}/config"
-install_root="${user_data_dir}/extensions/installed/${extension_id}"
+user_data_dir="${REMOTE_UI_EXAMPLE_USER_DATA_DIR:-}"
+if [[ -n "${user_data_dir}" ]]; then
+    install_root="${user_data_dir}/extensions/installed/${extension_id}"
+else
+    install_root="${HOME}/Library/Application Support/Zed/extensions/installed/${extension_id}"
+fi
 icon_root="${install_root}/icons"
 
 cd "${repo_root}"
@@ -18,15 +21,20 @@ pkill -f 'target/debug/zed' || true
 cargo build -p zed
 cargo build --manifest-path "${repo_root}/extensions/remote-ui-example/Cargo.toml" --target wasm32-wasip2
 
-rm -rf "${user_data_dir}"
-mkdir -p "${config_root}" "${icon_root}"
+if [[ -n "${user_data_dir}" ]]; then
+    config_root="${user_data_dir}/config"
+    rm -rf "${user_data_dir}"
+    mkdir -p "${config_root}" "${icon_root}"
 
-printf '%s\n' \
-    '{' \
-    '  "audio": {' \
-    '    "denoise": false' \
-    '  }' \
-    '}' > "${config_root}/settings.json"
+    printf '%s\n' \
+        '{' \
+        '  "audio": {' \
+        '    "denoise": false' \
+        '  }' \
+        '}' > "${config_root}/settings.json"
+else
+    mkdir -p "${icon_root}"
+fi
 
 copy_if_distinct() {
     local source="$1"
@@ -44,7 +52,12 @@ copy_if_distinct "${cargo_target_dir}/wasm32-wasip2/debug/remote_ui_example.wasm
 copy_if_distinct "${repo_root}/extensions/remote-ui-example/sidecar.js" "${install_root}/sidecar.js"
 copy_if_distinct "${repo_root}/extensions/remote-ui-example/icons/ai_open_ai.svg" "${icon_root}/ai_open_ai.svg"
 
-rm -f "${user_data_dir}/extensions/index.json"
-
-RUST_LOG="${RUST_LOG:-extension_host=info,zed::zed::remote_ui_extension=info}" \
-    "${cargo_target_dir}/debug/zed" --user-data-dir "${user_data_dir}" "${repo_root}"
+if [[ -n "${user_data_dir}" ]]; then
+    rm -f "${user_data_dir}/extensions/index.json"
+    RUST_LOG="${RUST_LOG:-extension_host=info,zed::zed::remote_ui_extension=info}" \
+        "${cargo_target_dir}/debug/zed" --user-data-dir "${user_data_dir}" "${repo_root}"
+else
+    rm -f "${HOME}/Library/Application Support/Zed/extensions/index.json"
+    RUST_LOG="${RUST_LOG:-extension_host=info,zed::zed::remote_ui_extension=info}" \
+        "${cargo_target_dir}/debug/zed" "${repo_root}"
+fi

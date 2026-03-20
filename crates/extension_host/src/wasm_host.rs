@@ -41,7 +41,7 @@ use std::{
         Arc, LazyLock, Mutex, OnceLock,
         atomic::{AtomicU64, Ordering::SeqCst},
     },
-    time::Duration,
+    time::{Duration, Instant},
 };
 use task::{DebugScenario, SpawnInTerminal, TaskTemplate, ZedDebugConfig};
 use util::paths::SanitizedPath;
@@ -458,12 +458,36 @@ impl extension::Extension for WasmExtension {
     }
 
     async fn open_view(&self, contribution_id: Arc<str>, context: MountContext) -> Result<u64> {
+        let requested_at = Instant::now();
+        let extension_id = self.manifest.id.clone();
+        let contribution_id_for_log = contribution_id.clone();
+        let workspace_id = context.workspace_id;
+        let mount_kind = context.mount_kind;
         self.call(move |extension, store| {
+            let enqueued_at = requested_at;
+            let extension_id = extension_id.clone();
+            let contribution_id_for_log = contribution_id_for_log.clone();
             async move {
-                extension
+                let dequeued_at = Instant::now();
+                let guest_call_started_at = Instant::now();
+                let result = extension
                     .call_open_view(store, contribution_id, context)
                     .await?
-                    .map_err(|err| store.data().extension_error(err))
+                    .map_err(|err| store.data().extension_error(err));
+                let guest_call_elapsed = guest_call_started_at.elapsed();
+                let total_elapsed = enqueued_at.elapsed();
+                if total_elapsed >= Duration::from_millis(100) {
+                    log::info!(
+                        "extension host open_view extension_id={} contribution_id={} workspace_id={} mount_kind={mount_kind:?} queue_ms={} guest_call_ms={} total_ms={}",
+                        extension_id,
+                        contribution_id_for_log,
+                        workspace_id,
+                        dequeued_at.duration_since(enqueued_at).as_millis(),
+                        guest_call_elapsed.as_millis(),
+                        total_elapsed.as_millis(),
+                    );
+                }
+                result
             }
             .boxed()
         })
@@ -476,12 +500,35 @@ impl extension::Extension for WasmExtension {
         context: MountContext,
         reason: RenderReason,
     ) -> Result<RemoteViewTree> {
+        let requested_at = Instant::now();
+        let extension_id = self.manifest.id.clone();
+        let workspace_id = context.workspace_id;
+        let mount_kind = context.mount_kind;
         self.call(move |extension, store| {
+            let enqueued_at = requested_at;
+            let extension_id = extension_id.clone();
             async move {
-                extension
+                let dequeued_at = Instant::now();
+                let guest_call_started_at = Instant::now();
+                let result = extension
                     .call_render_view(store, instance_id, context, reason)
                     .await?
-                    .map_err(|err| store.data().extension_error(err))
+                    .map_err(|err| store.data().extension_error(err));
+                let guest_call_elapsed = guest_call_started_at.elapsed();
+                let total_elapsed = enqueued_at.elapsed();
+                if matches!(reason, RenderReason::Initial) || total_elapsed >= Duration::from_millis(100)
+                {
+                    log::info!(
+                        "extension host render_view extension_id={} instance_id={} workspace_id={} mount_kind={mount_kind:?} reason={reason:?} queue_ms={} guest_call_ms={} total_ms={}",
+                        extension_id,
+                        instance_id,
+                        workspace_id,
+                        dequeued_at.duration_since(enqueued_at).as_millis(),
+                        guest_call_elapsed.as_millis(),
+                        total_elapsed.as_millis(),
+                    );
+                }
+                result
             }
             .boxed()
         })

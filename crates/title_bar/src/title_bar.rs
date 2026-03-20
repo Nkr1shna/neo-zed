@@ -259,13 +259,13 @@ impl Render for TitleBar {
                 .children(self.render_call_controls(window, cx))
                 .children(self.render_connection_status(status, cx))
                 .child(self.update_version.clone())
+                .when_some(self.extension_right_item.clone(), |this, item| {
+                    this.child(item)
+                })
                 .when(
                     user.is_none() && TitleBarSettings::get_global(cx).show_sign_in,
                     |this| this.child(self.render_sign_in_button(cx)),
                 )
-                .when_some(self.extension_right_item.clone(), |this, item| {
-                    this.child(item)
-                })
                 .child(self.render_organization_menu_button(cx))
                 .when(TitleBarSettings::get_global(cx).show_user_menu, |this| {
                     this.child(self.render_user_menu_button(cx))

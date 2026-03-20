@@ -14,16 +14,11 @@ const OAUTH_SCOPE = "openid profile email offline_access";
 const ACCOUNT_ID_CLAIM = "https://api.openai.com/auth";
 const USAGE_URL = "https://chatgpt.com/backend-api/wham/usage";
 const STATE_PATH = path.join(process.cwd(), "codex-chatgpt-auth.json");
-const SUCCESS_HTML =
-  "<!doctype html><html><body><p>Authentication successful. Return to Zed.</p></body></html>";
-const USAGE_CACHE_MS = 5 * 60 * 1000;
+const SUCCESS_HTML = "<!doctype html><html><body><p>Authentication successful. Return to Zed.</p></body></html>";
 
 const runtime = {
   loginPromise: null,
-  tokens: loadTokens(),
-  lastSnapshot: null,
-  lastFetchedAt: 0,
-  lastError: null,
+  ...loadPersistedState(),
 };
 
 process.stdin.setEncoding("utf8");
@@ -110,36 +105,58 @@ function writeMessage(message) {
   process.stdout.write(`${JSON.stringify(message)}\n`);
 }
 
-function loadTokens() {
+function loadPersistedState() {
   try {
     const raw = fs.readFileSync(STATE_PATH, "utf8");
     const parsed = JSON.parse(raw);
     if (!parsed || typeof parsed !== "object") {
-      return null;
+      return defaultPersistedState();
     }
 
+    const tokens =
+      typeof parsed.access_token === "string" && typeof parsed.refresh_token === "string"
+        ? {
+            accessToken: parsed.access_token,
+            refreshToken: parsed.refresh_token,
+            accountId: typeof parsed.account_id === "string" ? parsed.account_id : null,
+            expiresAt: typeof parsed.expires_at === "number" ? parsed.expires_at : 0,
+            lastRefreshAt: typeof parsed.last_refresh_at === "number" ? parsed.last_refresh_at : 0,
+          }
+        : null;
+
     return {
-      accessToken: typeof parsed.access_token === "string" ? parsed.access_token : null,
-      refreshToken: typeof parsed.refresh_token === "string" ? parsed.refresh_token : null,
-      accountId: typeof parsed.account_id === "string" ? parsed.account_id : null,
-      expiresAt: typeof parsed.expires_at === "number" ? parsed.expires_at : 0,
-      lastRefreshAt: typeof parsed.last_refresh_at === "number" ? parsed.last_refresh_at : 0,
+      tokens,
+      lastSnapshot: parsed.last_snapshot && typeof parsed.last_snapshot === "object" ? parsed.last_snapshot : null,
+      lastFetchedAt: typeof parsed.last_fetched_at === "number" ? parsed.last_fetched_at : 0,
+      lastError: typeof parsed.last_error === "string" ? parsed.last_error : null,
     };
   } catch {
-    return null;
+    return defaultPersistedState();
   }
 }
 
-function persistTokens(tokens) {
+function defaultPersistedState() {
+  return {
+    tokens: null,
+    lastSnapshot: null,
+    lastFetchedAt: 0,
+    lastError: null,
+  };
+}
+
+function persistState() {
   fs.writeFileSync(
     STATE_PATH,
     JSON.stringify(
       {
-        access_token: tokens.accessToken,
-        refresh_token: tokens.refreshToken,
-        account_id: tokens.accountId,
-        expires_at: tokens.expiresAt,
-        last_refresh_at: Date.now(),
+        access_token: runtime.tokens?.accessToken ?? null,
+        refresh_token: runtime.tokens?.refreshToken ?? null,
+        account_id: runtime.tokens?.accountId ?? null,
+        expires_at: runtime.tokens?.expiresAt ?? 0,
+        last_refresh_at: runtime.tokens?.lastRefreshAt ?? 0,
+        last_snapshot: runtime.lastSnapshot,
+        last_fetched_at: runtime.lastFetchedAt,
+        last_error: runtime.lastError,
       },
       null,
       2,
@@ -148,32 +165,24 @@ function persistTokens(tokens) {
   );
 }
 
-function clearPersistedTokens() {
-  if (fs.existsSync(STATE_PATH)) {
-    fs.unlinkSync(STATE_PATH);
-  }
-}
-
 async function snapshotUsage(forceRefresh) {
   if (runtime.loginPromise) {
     return pendingSnapshot("Waiting for the ChatGPT OAuth callback.");
   }
 
   if (!runtime.tokens?.refreshToken) {
-    return signedOutSnapshot();
+    return runtime.lastSnapshot || signedOutSnapshot();
   }
 
-  if (
-    !forceRefresh &&
-    runtime.lastSnapshot &&
-    Date.now() - runtime.lastFetchedAt < USAGE_CACHE_MS
-  ) {
+  if (!forceRefresh && runtime.lastSnapshot) {
     return runtime.lastSnapshot;
   }
 
   const snapshot = await fetchUsageSnapshot(forceRefresh);
   runtime.lastSnapshot = snapshot;
   runtime.lastFetchedAt = Date.now();
+  runtime.lastError = null;
+  persistState();
   return snapshot;
 }
 
@@ -187,11 +196,13 @@ async function beginLogin() {
       runtime.lastSnapshot = await fetchUsageSnapshot(true);
       runtime.lastFetchedAt = Date.now();
       runtime.lastError = null;
+      persistState();
     })
     .catch((error) => {
       runtime.lastError = error instanceof Error ? error.message : String(error);
       runtime.lastSnapshot = errorSnapshot(runtime.lastError);
       runtime.lastFetchedAt = Date.now();
+      persistState();
     })
     .finally(() => {
       runtime.loginPromise = null;
@@ -205,7 +216,7 @@ async function logout() {
   runtime.lastSnapshot = signedOutSnapshot();
   runtime.lastFetchedAt = Date.now();
   runtime.lastError = null;
-  clearPersistedTokens();
+  persistState();
   return runtime.lastSnapshot;
 }
 
@@ -236,7 +247,7 @@ async function runLoginFlow() {
 
     const tokenResponse = await exchangeAuthorizationCode(code, verifier);
     runtime.tokens = tokenResponse;
-    persistTokens(tokenResponse);
+    persistState();
   } finally {
     oauthServer.close();
   }
@@ -321,9 +332,7 @@ async function exchangeAuthorizationCode(code, verifier) {
   if (!response.ok) {
     const responseBody = await response.text().catch(() => "");
     throw new Error(
-      `authorization code exchange failed with HTTP ${response.status}${
-        responseBody ? `: ${responseBody}` : ""
-      }`,
+      `authorization code exchange failed with HTTP ${response.status}${responseBody ? `: ${responseBody}` : ""}`,
     );
   }
 
@@ -348,11 +357,7 @@ async function refreshAccessToken() {
 
   if (!response.ok) {
     const responseBody = await response.text().catch(() => "");
-    throw new Error(
-      `token refresh failed with HTTP ${response.status}${
-        responseBody ? `: ${responseBody}` : ""
-      }`,
-    );
+    throw new Error(`token refresh failed with HTTP ${response.status}${responseBody ? `: ${responseBody}` : ""}`);
   }
 
   const json = await response.json();
@@ -361,7 +366,7 @@ async function refreshAccessToken() {
     refresh_token: json.refresh_token || runtime.tokens.refreshToken,
   });
   runtime.tokens = tokens;
-  persistTokens(tokens);
+  persistState();
   return tokens;
 }
 
@@ -375,8 +380,7 @@ function normalizeTokens(json) {
   }
 
   const expiresIn = typeof json.expires_in === "number" ? json.expires_in : 3600;
-  const accountId =
-    extractAccountId(json.access_token) || extractAccountId(json.id_token) || null;
+  const accountId = extractAccountId(json.access_token) || extractAccountId(json.id_token) || null;
 
   return {
     accessToken: json.access_token,
@@ -436,9 +440,7 @@ async function fetchUsage(accessToken) {
 function normalizeUsageSnapshot(json) {
   const rateLimit = asObject(json.rate_limit);
   const codeReviewRateLimit = asObject(json.code_review_rate_limit);
-  const additionalRateLimits = Array.isArray(json.additional_rate_limits)
-    ? json.additional_rate_limits
-    : [];
+  const additionalRateLimits = Array.isArray(json.additional_rate_limits) ? json.additional_rate_limits : [];
   const planType = typeof json.plan_type === "string" ? json.plan_type : null;
   const credits = asObject(json.credits);
   const primaryWindow = asObject(rateLimit.primary_window);
@@ -466,8 +468,7 @@ function normalizeUsageSnapshot(json) {
         fallbackPrimaryTitle: `${limitName} 5 hour usage limit`,
         fallbackSecondaryTitle: `${limitName} Weekly usage limit`,
         category: "additional",
-        meteredFeature:
-          typeof entry?.metered_feature === "string" ? entry.metered_feature : null,
+        meteredFeature: typeof entry?.metered_feature === "string" ? entry.metered_feature : null,
         limitName,
       });
     }),
@@ -487,9 +488,7 @@ function normalizeUsageSnapshot(json) {
     status_label: "ChatGPT connected",
     detail,
     plan_type: planType,
-    account_label: runtime.tokens?.accountId
-      ? `Account ${runtime.tokens.accountId.slice(-8)}`
-      : null,
+    account_label: runtime.tokens?.accountId ? `Account ${runtime.tokens.accountId.slice(-8)}` : null,
     primary_window_label: usageLimits[0]?.title || "5h Codex window",
     secondary_window_label: usageLimits[1]?.title || "7d Codex window",
     primary_used_percent: primaryUsedPercent,
@@ -579,9 +578,7 @@ function normalizeCreditsSummary(credits) {
     cloud_messages_used: approxCloudMessages.used,
     cloud_messages_limit: approxCloudMessages.limit,
     detail:
-      credits.unlimited === true
-        ? "Credits are unlimited."
-        : "Use credits to send messages beyond your plan limit.",
+      credits.unlimited === true ? "Credits are unlimited." : "Use credits to send messages beyond your plan limit.",
   };
 }
 
@@ -729,11 +726,7 @@ function asObject(value) {
 }
 
 function base64Url(buffer) {
-  return buffer
-    .toString("base64")
-    .replace(/\+/g, "-")
-    .replace(/\//g, "_")
-    .replace(/=+$/g, "");
+  return buffer.toString("base64").replace(/\+/g, "-").replace(/\//g, "_").replace(/=+$/g, "");
 }
 
 function openBrowser(url) {

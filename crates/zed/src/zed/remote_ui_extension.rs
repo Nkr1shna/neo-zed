@@ -21,8 +21,8 @@ use extension::{
 };
 use extension_host::ExtensionStore;
 use gpui::{
-    Action, AnyElement, App, AppContext as _, BorrowAppContext as _, ClipboardItem, Context,
-    Entity, EventEmitter, FocusHandle, Focusable, Global, InteractiveElement, IntoElement,
+    Action, AnyElement, App, AppContext as _, AsyncApp, BorrowAppContext as _, ClipboardItem,
+    Context, Entity, EventEmitter, FocusHandle, Focusable, Global, InteractiveElement, IntoElement,
     MouseButton, Pixels, Render, SharedString, Styled, Task, WeakEntity, Window, prelude::*, px,
 };
 use project_panel::ProjectPanelContextMenuHooks;
@@ -116,11 +116,30 @@ enum WidgetSurface {
     Footer,
 }
 
+impl WidgetSurface {
+    fn log_label(self) -> &'static str {
+        match self {
+            Self::Titlebar => "titlebar",
+            Self::Footer => "footer",
+        }
+    }
+}
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 enum StripSide {
     Left,
     Center,
     Right,
+}
+
+impl StripSide {
+    fn log_label(self) -> &'static str {
+        match self {
+            Self::Left => "left",
+            Self::Center => "center",
+            Self::Right => "right",
+        }
+    }
 }
 
 #[derive(Clone)]
@@ -216,6 +235,33 @@ fn save_remote_ui_panel_snapshot(
     Ok(())
 }
 
+#[derive(Clone)]
+struct CachedRemoteViewTree {
+    tree: RemoteViewTree,
+    nodes: HashMap<String, RemoteViewNode>,
+    children_by_parent: HashMap<Option<String>, Vec<String>>,
+}
+
+impl CachedRemoteViewTree {
+    fn new(tree: RemoteViewTree) -> Self {
+        let mut nodes = HashMap::default();
+        let mut children_by_parent: HashMap<Option<String>, Vec<String>> = HashMap::default();
+        for node in &tree.nodes {
+            children_by_parent
+                .entry(node.parent_id.clone())
+                .or_default()
+                .push(node.node_id.clone());
+            nodes.insert(node.node_id.clone(), node.clone());
+        }
+
+        Self {
+            tree,
+            nodes,
+            children_by_parent,
+        }
+    }
+}
+
 pub fn init(cx: &mut App) {
     let proxy = ExtensionHostProxy::default_global(cx);
     proxy.register_remote_ui_proxy(RemoteUiProxy);
@@ -238,8 +284,8 @@ pub fn init(cx: &mut App) {
             return;
         };
 
-        mount_registered_panels_for_workspace(workspace, window, cx);
         mount_remote_ui_widget_strips_for_workspace(workspace, window, cx);
+        mount_registered_panels_for_workspace(workspace, window, cx);
 
         workspace.register_action(|workspace, action: &RunRegisteredCommand, _window, cx| {
             let Some(workspace_id) = workspace.database_id().and_then(WorkspaceId::to_u64) else {
@@ -560,8 +606,8 @@ impl ExtensionRemoteUiProxy for RemoteUiProxy {
             registry.register_extension(extension_id, remote_ui)
         });
         cx.defer(move |cx| {
-            mount_remote_ui_panels_in_all_workspaces(panels, cx);
             refresh_remote_ui_widget_strips_in_all_workspaces(cx);
+            mount_remote_ui_panels_in_all_workspaces(panels, cx);
         });
     }
 
@@ -689,10 +735,11 @@ struct RemoteUiPanel {
     workspace_id: u64,
     focus_handle: FocusHandle,
     instance_id: Option<u64>,
-    tree: Option<RemoteViewTree>,
+    tree: Option<CachedRemoteViewTree>,
     loading: bool,
     error_message: Option<SharedString>,
     position: DockPosition,
+    active: bool,
 }
 
 impl EventEmitter<PanelEvent> for RemoteUiPanel {}
@@ -705,18 +752,19 @@ impl RemoteUiPanel {
         cx: &mut Context<Self>,
     ) -> Self {
         let qualified_panel_id = descriptor.qualified_panel_id.clone();
-        let mut this = Self {
+        let this = Self {
             position: descriptor.default_dock,
             descriptor,
             workspace,
             workspace_id,
             focus_handle: cx.focus_handle(),
             instance_id: None,
-            tree: load_remote_ui_panel_snapshot(workspace_id, qualified_panel_id.as_ref()),
+            tree: load_remote_ui_panel_snapshot(workspace_id, qualified_panel_id.as_ref())
+                .map(CachedRemoteViewTree::new),
             loading: false,
             error_message: None,
+            active: false,
         };
-        this.reload(RenderReason::Initial, cx);
         this
     }
 
@@ -732,26 +780,9 @@ impl RemoteUiPanel {
 
     fn reload(&mut self, reason: RenderReason, cx: &mut Context<Self>) {
         let descriptor = self.descriptor.clone();
-        let extension = match extension_for_id(descriptor.extension_id.as_ref(), cx) {
-            Ok(extension) => extension,
-            Err(error) => {
-                self.loading = false;
-                if is_extension_not_loaded_error(&error) {
-                    self.error_message = None;
-                } else {
-                    let message = format!(
-                        "Extension panel `{}` reload failed: {error}",
-                        descriptor.qualified_panel_id
-                    );
-                    log::error!("{message}");
-                    self.error_message = Some(message.into());
-                }
-                cx.notify();
-                return;
-            }
-        };
         let mount_context = self.mount_context();
         let existing_instance_id = self.instance_id;
+        let extension_id = descriptor.extension_id.clone();
 
         self.loading = true;
         self.error_message = None;
@@ -759,6 +790,7 @@ impl RemoteUiPanel {
 
         cx.spawn(async move |this, cx| {
             let result = async {
+                let extension = load_extension_for_id(extension_id, cx).await?;
                 let instance_id = match existing_instance_id {
                     Some(instance_id) => instance_id,
                     None => {
@@ -780,7 +812,7 @@ impl RemoteUiPanel {
                     match result {
                         Ok((instance_id, tree)) => {
                             panel.instance_id = Some(instance_id);
-                            panel.tree = Some(tree.clone());
+                            panel.tree = Some(CachedRemoteViewTree::new(tree.clone()));
                             panel.error_message = None;
                             let workspace_id = panel.workspace_id;
                             let qualified_panel_id = panel.descriptor.qualified_panel_id.clone();
@@ -826,23 +858,12 @@ impl RemoteUiPanel {
         };
 
         let descriptor = self.descriptor.clone();
-        let extension = match extension_for_id(descriptor.extension_id.as_ref(), cx) {
-            Ok(extension) => extension,
-            Err(error) => {
-                let message = format!(
-                    "Extension panel `{}` event setup failed: {error}",
-                    descriptor.qualified_panel_id
-                );
-                log::error!("{message}");
-                self.error_message = Some(message.into());
-                cx.notify();
-                return;
-            }
-        };
         let mount_context = self.mount_context();
         let workspace = self.workspace.clone();
+        let extension_id = descriptor.extension_id.clone();
 
         cx.spawn_in(window, async move |this, cx| {
+            let extension = load_extension_for_id(extension_id, cx).await?;
             let result = extension
                 .handle_view_event(instance_id, mount_context.clone(), event)
                 .await;
@@ -898,7 +919,7 @@ impl RemoteUiPanel {
                 .child("Loading extension panel...")
                 .into_any_element()
         } else {
-            let Some(tree) = self.tree.clone() else {
+            let Some(tree) = self.tree.take() else {
                 return self.render_panel_frame(
                     "Extension panel has no content.".into_any_element(),
                     window,
@@ -906,25 +927,16 @@ impl RemoteUiPanel {
                 );
             };
 
-            let mut nodes = HashMap::default();
-            let mut children_by_parent: HashMap<Option<String>, Vec<String>> = HashMap::default();
-            for node in tree.nodes {
-                let node_id = node.node_id.clone();
-                children_by_parent
-                    .entry(node.parent_id.clone())
-                    .or_default()
-                    .push(node_id.clone());
-                nodes.insert(node_id, node);
-            }
-
-            self.render_remote_view_node(
-                tree.root_id.as_str(),
-                &nodes,
-                &children_by_parent,
+            let body = self.render_remote_view_node(
+                tree.tree.root_id.as_str(),
+                &tree.nodes,
+                &tree.children_by_parent,
                 false,
                 window,
                 cx,
-            )
+            );
+            self.tree = Some(tree);
+            body
         };
 
         self.render_panel_frame(body, window, cx)
@@ -1251,6 +1263,16 @@ impl Panel for RemoteUiPanel {
     fn activation_priority(&self) -> u32 {
         self.descriptor.activation_priority
     }
+
+    fn set_active(&mut self, active: bool, _window: &mut Window, cx: &mut Context<Self>) {
+        self.active = active;
+        if active
+            && !self.loading
+            && (self.instance_id.is_none() || self.tree.is_none() || self.error_message.is_some())
+        {
+            self.reload(RenderReason::Initial, cx);
+        }
+    }
 }
 
 struct RemoteUiWidget {
@@ -1258,10 +1280,15 @@ struct RemoteUiWidget {
     workspace: WeakEntity<Workspace>,
     workspace_id: u64,
     instance_id: Option<u64>,
-    tree: Option<RemoteViewTree>,
+    tree: Option<CachedRemoteViewTree>,
     loading: bool,
     error_message: Option<SharedString>,
     refresh_task: Option<Task<anyhow::Result<()>>>,
+    created_at: Instant,
+    last_reload_started_at: Option<Instant>,
+    last_tree_ready_at: Option<Instant>,
+    has_logged_placeholder_render: bool,
+    has_logged_ready_render: bool,
 }
 
 impl RemoteUiWidget {
@@ -1280,8 +1307,12 @@ impl RemoteUiWidget {
             loading: false,
             error_message: None,
             refresh_task: None,
+            created_at: Instant::now(),
+            last_reload_started_at: None,
+            last_tree_ready_at: None,
+            has_logged_placeholder_render: false,
+            has_logged_ready_render: false,
         };
-        this.reload(RenderReason::Initial, cx);
         this.schedule_auto_refresh(cx);
         this
     }
@@ -1301,34 +1332,30 @@ impl RemoteUiWidget {
 
     fn reload(&mut self, reason: RenderReason, cx: &mut Context<Self>) {
         let descriptor = self.descriptor.clone();
-        let extension = match extension_for_id(descriptor.extension_id.as_ref(), cx) {
-            Ok(extension) => extension,
-            Err(error) => {
-                self.loading = false;
-                if is_extension_not_loaded_error(&error) {
-                    self.error_message = None;
-                } else {
-                    let message = format!(
-                        "Extension widget `{}` reload failed: {error}",
-                        descriptor.qualified_widget_id
-                    );
-                    log::error!("{message}");
-                    self.error_message = Some(message.into());
-                }
-                cx.notify();
-                return;
-            }
-        };
         let mount_context = self.mount_context();
         let existing_instance_id = self.instance_id;
+        let extension_id = descriptor.extension_id.clone();
+        self.last_reload_started_at = Some(Instant::now());
 
         self.loading = true;
         self.error_message = None;
         cx.notify();
 
+        if matches!(reason, RenderReason::Initial) || existing_instance_id.is_none() {
+            log::info!(
+                "remote ui widget reload start widget_id={} surface={} side={} reason={reason:?} workspace_id={} instance_present={}",
+                descriptor.qualified_widget_id,
+                descriptor.surface.log_label(),
+                descriptor.side.log_label(),
+                self.workspace_id,
+                existing_instance_id.is_some(),
+            );
+        }
+
         cx.spawn(async move |this, cx| {
             let total_start = Instant::now();
             let result = async {
+                let extension = load_extension_for_id(extension_id, cx).await?;
                 let mut open_duration = None;
                 let instance_id = match existing_instance_id {
                     Some(instance_id) => instance_id,
@@ -1361,14 +1388,15 @@ impl RemoteUiWidget {
                 match result {
                     Ok((instance_id, tree, open_duration, render_duration, total_duration)) => {
                         widget.instance_id = Some(instance_id);
+                        widget.last_tree_ready_at = Some(Instant::now());
                         if matches!(reason, RenderReason::Initial)
                             || total_duration >= Duration::from_millis(100)
                         {
                             log::info!(
-                                "remote ui widget ready widget_id={} surface={:?} side={:?} reason={reason:?} total_ms={} open_ms={} render_ms={} reused_instance={}",
+                                "remote ui widget ready widget_id={} surface={} side={} reason={reason:?} total_ms={} open_ms={} render_ms={} reused_instance={}",
                                 widget.descriptor.qualified_widget_id,
-                                widget.descriptor.surface,
-                                widget.descriptor.side,
+                                widget.descriptor.surface.log_label(),
+                                widget.descriptor.side.log_label(),
                                 total_duration.as_millis(),
                                 open_duration.map_or(0, |duration| duration.as_millis()),
                                 render_duration.as_millis(),
@@ -1377,7 +1405,7 @@ impl RemoteUiWidget {
                         }
                         match validate_widget_tree(&widget.descriptor, &tree) {
                             Ok(()) => {
-                                widget.tree = Some(tree);
+                                widget.tree = Some(CachedRemoteViewTree::new(tree));
                                 widget.error_message = None;
                             }
                             Err(error) => {
@@ -1452,23 +1480,12 @@ impl RemoteUiWidget {
         };
 
         let descriptor = self.descriptor.clone();
-        let extension = match extension_for_id(descriptor.extension_id.as_ref(), cx) {
-            Ok(extension) => extension,
-            Err(error) => {
-                let message = format!(
-                    "Extension widget `{}` event setup failed: {error}",
-                    descriptor.qualified_widget_id
-                );
-                log::error!("{message}");
-                self.error_message = Some(message.into());
-                cx.notify();
-                return;
-            }
-        };
         let mount_context = self.mount_context();
         let workspace = self.workspace.clone();
+        let extension_id = descriptor.extension_id.clone();
 
         cx.spawn_in(window, async move |this, cx| {
+            let extension = load_extension_for_id(extension_id, cx).await?;
             let result = extension
                 .handle_view_event(instance_id, mount_context.clone(), event)
                 .await;
@@ -1517,33 +1534,59 @@ impl RemoteUiWidget {
             return error_message.clone().into_any_element();
         }
 
-        if self.loading && self.tree.is_none() {
+        if !self.loading && self.tree.is_none() {
+            self.reload(RenderReason::Initial, cx);
             return "…".into_any_element();
         }
 
-        let Some(tree) = self.tree.clone() else {
+        if self.loading && self.tree.is_none() {
+            if !self.has_logged_placeholder_render {
+                self.has_logged_placeholder_render = true;
+                log::info!(
+                    "remote ui widget placeholder render widget_id={} surface={} side={} workspace_id={} since_create_ms={} since_reload_start_ms={}",
+                    self.descriptor.qualified_widget_id,
+                    self.descriptor.surface.log_label(),
+                    self.descriptor.side.log_label(),
+                    self.workspace_id,
+                    self.created_at.elapsed().as_millis(),
+                    self.last_reload_started_at
+                        .map_or(0, |started_at| started_at.elapsed().as_millis()),
+                );
+            }
+            return "…".into_any_element();
+        }
+
+        let Some(tree) = self.tree.take() else {
             return gpui::div().into_any_element();
         };
 
-        let mut nodes = HashMap::default();
-        let mut children_by_parent: HashMap<Option<String>, Vec<String>> = HashMap::default();
-        for node in tree.nodes {
-            let node_id = node.node_id.clone();
-            children_by_parent
-                .entry(node.parent_id.clone())
-                .or_default()
-                .push(node_id.clone());
-            nodes.insert(node_id, node);
+        if !self.has_logged_ready_render {
+            self.has_logged_ready_render = true;
+            log::info!(
+                "remote ui widget first ready render widget_id={} surface={} side={} workspace_id={} since_create_ms={} since_ready_ms={} since_reload_start_ms={} node_count={}",
+                self.descriptor.qualified_widget_id,
+                self.descriptor.surface.log_label(),
+                self.descriptor.side.log_label(),
+                self.workspace_id,
+                self.created_at.elapsed().as_millis(),
+                self.last_tree_ready_at
+                    .map_or(0, |ready_at| ready_at.elapsed().as_millis()),
+                self.last_reload_started_at
+                    .map_or(0, |started_at| started_at.elapsed().as_millis()),
+                tree.tree.nodes.len(),
+            );
         }
 
-        self.render_remote_view_node(
-            tree.root_id.as_str(),
-            &nodes,
-            &children_by_parent,
+        let body = self.render_remote_view_node(
+            tree.tree.root_id.as_str(),
+            &tree.nodes,
+            &tree.children_by_parent,
             false,
             window,
             cx,
-        )
+        );
+        self.tree = Some(tree);
+        body
     }
 
     fn render_remote_view_node(
@@ -1817,6 +1860,8 @@ struct RemoteUiWidgetStrip {
     workspace: WeakEntity<Workspace>,
     workspace_id: u64,
     items: Vec<MountedRemoteUiWidget>,
+    created_at: Instant,
+    has_logged_initial_render: bool,
 }
 
 impl RemoteUiWidgetStrip {
@@ -1833,12 +1878,15 @@ impl RemoteUiWidgetStrip {
             workspace,
             workspace_id,
             items: Vec::new(),
+            created_at: Instant::now(),
+            has_logged_initial_render: false,
         };
         this.refresh(cx);
         this
     }
 
     fn refresh(&mut self, cx: &mut Context<Self>) {
+        let refresh_start = Instant::now();
         let descriptors = RemoteUiRegistry::read_global(cx)
             .map(|registry| registry.widget_descriptors(self.surface, self.side))
             .unwrap_or_default();
@@ -1847,14 +1895,28 @@ impl RemoteUiWidgetStrip {
             .map(|item| (item.descriptor.qualified_widget_id.clone(), item))
             .collect::<HashMap<_, _>>();
         let mut next_items = Vec::with_capacity(descriptors.len());
+        let existing_count = existing.len();
+        let mut reused_count = 0usize;
+        let mut created_count = 0usize;
 
         for descriptor in descriptors {
             let mounted = if let Some(item) = existing.remove(&descriptor.qualified_widget_id) {
+                reused_count += 1;
                 let entity = item.entity.clone();
                 entity.update(cx, |widget, cx| {
                     let root_view_changed = widget.descriptor.root_view != descriptor.root_view;
+                    let stale_instance_id =
+                        root_view_changed.then_some(widget.instance_id).flatten();
                     widget.descriptor = descriptor.clone();
                     if root_view_changed {
+                        if let Some(instance_id) = stale_instance_id {
+                            close_remote_ui_view(
+                                widget.descriptor.extension_id.clone(),
+                                instance_id,
+                                "widget",
+                                cx,
+                            );
+                        }
                         widget.instance_id = None;
                         widget.tree = None;
                         widget.error_message = None;
@@ -1873,6 +1935,7 @@ impl RemoteUiWidgetStrip {
                     entity,
                 }
             } else {
+                created_count += 1;
                 let entity = cx.new(|cx| {
                     RemoteUiWidget::new(
                         descriptor.clone(),
@@ -1894,12 +1957,19 @@ impl RemoteUiWidgetStrip {
         }
 
         self.items = next_items;
+        log::info!(
+            "remote ui widget strip refresh surface={} side={} workspace_id={} descriptors={} reused={} created={} removed={} total_ms={}",
+            self.surface.log_label(),
+            self.side.log_label(),
+            self.workspace_id,
+            self.items.len(),
+            reused_count,
+            created_count,
+            existing_count.saturating_sub(reused_count),
+            refresh_start.elapsed().as_millis(),
+        );
         cx.notify();
     }
-}
-
-fn is_extension_not_loaded_error(error: &anyhow::Error) -> bool {
-    error.to_string().contains("is not loaded")
 }
 
 fn node_is_clickable(node: &RemoteViewNode) -> bool {
@@ -2058,6 +2128,17 @@ fn validate_widget_tree(widget: &RegisteredRemoteUiWidget, tree: &RemoteViewTree
 
 impl Render for RemoteUiWidgetStrip {
     fn render(&mut self, window: &mut Window, _cx: &mut Context<Self>) -> impl IntoElement {
+        if !self.has_logged_initial_render {
+            self.has_logged_initial_render = true;
+            log::info!(
+                "remote ui widget strip first render surface={} side={} workspace_id={} item_count={} since_create_ms={}",
+                self.surface.log_label(),
+                self.side.log_label(),
+                self.workspace_id,
+                self.items.len(),
+                self.created_at.elapsed().as_millis(),
+            );
+        }
         let host_height = match self.surface {
             WidgetSurface::Titlebar => platform_title_bar_height(window),
             WidgetSurface::Footer => window.line_height(),
@@ -2101,14 +2182,15 @@ fn dispatch_registered_command_from_workspace(
     let command = RemoteUiRegistry::read_global(cx)
         .and_then(|registry| registry.commands.get(command_id).cloned())
         .with_context(|| format!("unknown extension command `{command_id}`"))?;
-    let extension = extension_for_id(command.extension_id.as_ref(), cx)?;
     let command_context = CommandContext {
         workspace_id,
         trusted: false,
         active_item_kind: None,
     };
+    let extension_id = command.extension_id.clone();
 
     cx.spawn(async move |cx| {
+        let extension = load_extension_for_id(extension_id, cx).await?;
         if let Err(error) = extension
             .run_command(
                 command.local_command_id.clone(),
@@ -2137,17 +2219,18 @@ fn dispatch_registered_command_from_workspace(
     Ok(())
 }
 
-fn extension_for_id(extension_id: &str, cx: &App) -> Result<Arc<dyn Extension>> {
-    let store = ExtensionStore::try_global(cx).context("missing extension store")?;
-    store
-        .read_with(cx, |store, _cx| {
-            store
-                .wasm_extensions
-                .iter()
-                .find(|(manifest, _)| manifest.id.as_ref() == extension_id)
-                .map(|(_, extension)| Arc::new(extension.clone()) as Arc<dyn Extension>)
+async fn load_extension_for_id(
+    extension_id: Arc<str>,
+    cx: &mut AsyncApp,
+) -> Result<Arc<dyn Extension>> {
+    let store = cx
+        .update(|cx| ExtensionStore::try_global(cx))
+        .context("missing extension store")?;
+    Ok(store
+        .update(cx, |store, cx| {
+            store.ensure_wasm_extension_loaded(extension_id.clone(), cx)
         })
-        .with_context(|| format!("extension `{extension_id}` is not loaded"))
+        .await?)
 }
 
 fn workspace_for_id(
@@ -2221,6 +2304,11 @@ fn mount_remote_ui_widget_strips_for_workspace(
                     cx,
                 )
             });
+            log::info!(
+                "remote ui widget strip mount surface=footer side={} workspace_id={} attach=status_bar",
+                side.log_label(),
+                workspace_id,
+            );
             workspace
                 .status_bar()
                 .update(cx, |status_bar, cx| match side {
@@ -2259,6 +2347,11 @@ fn mount_remote_ui_widget_strips_for_workspace(
                     cx,
                 )
             });
+            log::info!(
+                "remote ui widget strip mount surface=titlebar side={} workspace_id={} attach=title_bar",
+                side.log_label(),
+                workspace_id,
+            );
             RemoteUiRegistry::update_global(cx, |registry| {
                 registry.remember_widget_strip(titlebar_key, strip.downgrade());
             });
@@ -2357,12 +2450,21 @@ fn mount_remote_ui_panels_for_workspace(
         if let Some(panel) = existing_panel {
             panel.update(cx, |panel, cx| {
                 if panel.descriptor.root_view != descriptor.root_view {
+                    if let Some(instance_id) = panel.instance_id {
+                        close_remote_ui_view(
+                            panel.descriptor.extension_id.clone(),
+                            instance_id,
+                            "panel",
+                            cx,
+                        );
+                    }
                     panel.descriptor = descriptor.clone();
                     panel.instance_id = None;
                     panel.tree = None;
                     panel.error_message = None;
                 }
-                if !panel.loading
+                if panel.active
+                    && !panel.loading
                     && (panel.instance_id.is_none()
                         || panel.tree.is_none()
                         || panel.error_message.is_some())
@@ -2497,16 +2599,7 @@ fn close_remote_ui_panel(panel: Entity<RemoteUiPanel>, cx: &mut App) {
     let Some(instance_id) = instance_id else {
         return;
     };
-    let extension = match extension_for_id(extension_id.as_ref(), cx) {
-        Ok(extension) => extension,
-        Err(error) => {
-            log::error!("Failed to close extension panel view: {error}");
-            return;
-        }
-    };
-
-    cx.spawn(async move |_cx| extension.close_view(instance_id).await)
-        .detach_and_log_err(cx);
+    close_remote_ui_view(extension_id, instance_id, "panel", cx);
 }
 
 fn close_remote_ui_widget(widget: Entity<RemoteUiWidget>, cx: &mut App) {
@@ -2516,16 +2609,24 @@ fn close_remote_ui_widget(widget: Entity<RemoteUiWidget>, cx: &mut App) {
     let Some(instance_id) = instance_id else {
         return;
     };
-    let extension = match extension_for_id(extension_id.as_ref(), cx) {
-        Ok(extension) => extension,
-        Err(error) => {
-            log::error!("Failed to close extension widget view: {error}");
-            return;
-        }
-    };
+    close_remote_ui_view(extension_id, instance_id, "widget", cx);
+}
 
-    cx.spawn(async move |_cx| extension.close_view(instance_id).await)
-        .detach_and_log_err(cx);
+fn close_remote_ui_view(
+    extension_id: Arc<str>,
+    instance_id: u64,
+    surface: &'static str,
+    cx: &mut App,
+) {
+    cx.spawn(async move |cx| {
+        let extension = load_extension_for_id(extension_id, cx).await?;
+        extension
+            .close_view(instance_id)
+            .await
+            .with_context(|| format!("closing remote ui {surface} view instance {instance_id}"))?;
+        Ok::<(), anyhow::Error>(())
+    })
+    .detach_and_log_err(cx);
 }
 
 fn update_workspace_titlebar_widget_strips(workspace: &mut Workspace, cx: &mut Context<Workspace>) {
@@ -2559,6 +2660,13 @@ fn update_workspace_titlebar_widget_strips(workspace: &mut Workspace, cx: &mut C
         })
         .and_then(|strip| strip.upgrade())
         .map(Into::into);
+
+    log::info!(
+        "remote ui titlebar widget strips update workspace_id={} left_present={} right_present={}",
+        workspace_id,
+        left_strip.is_some(),
+        right_strip.is_some(),
+    );
 
     titlebar.update(cx, |titlebar, cx| {
         titlebar.set_extension_items(left_strip, right_strip, cx);

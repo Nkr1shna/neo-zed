@@ -443,6 +443,63 @@ impl ExtensionStore {
         self.installed_dir.clone()
     }
 
+    fn register_loaded_wasm_extension(
+        &mut self,
+        manifest: &Arc<ExtensionManifest>,
+        extension: Arc<dyn extension::Extension>,
+        root_dir: &Path,
+        cx: &mut Context<Self>,
+    ) {
+        for (language_server_id, language_server_config) in &manifest.language_servers {
+            for language in language_server_config.languages() {
+                self.proxy.register_language_server(
+                    extension.clone(),
+                    language_server_id.clone(),
+                    language.clone(),
+                );
+            }
+        }
+
+        for (slash_command_name, slash_command) in &manifest.slash_commands {
+            self.proxy.register_slash_command(
+                extension.clone(),
+                extension::SlashCommand {
+                    name: slash_command_name.to_string(),
+                    description: slash_command.description.to_string(),
+                    // We don't currently expose this as a configurable option, as it currently drives
+                    // the `menu_text` on the `SlashCommand` trait, which is not used for slash commands
+                    // defined in extensions, as they are not able to be added to the menu.
+                    tooltip_text: String::new(),
+                    requires_argument: slash_command.requires_argument,
+                },
+            );
+        }
+
+        for id in manifest.context_servers.keys() {
+            self.proxy
+                .register_context_server(extension.clone(), id.clone(), cx);
+        }
+
+        for (debug_adapter, meta) in &manifest.debug_adapters {
+            let mut path = root_dir.to_path_buf();
+            path.push(Path::new(manifest.id.as_ref()));
+            if let Some(schema_path) = &meta.schema_path {
+                path.push(schema_path);
+            } else {
+                path.push("debug_adapter_schemas");
+                path.push(Path::new(debug_adapter.as_ref()).with_extension("json"));
+            }
+
+            self.proxy
+                .register_debug_adapter(extension.clone(), debug_adapter.clone(), &path);
+        }
+
+        for debug_adapter in manifest.debug_locators.keys() {
+            self.proxy
+                .register_debug_locator(extension.clone(), debug_adapter.clone());
+        }
+    }
+
     pub fn outstanding_operations(&self) -> &BTreeMap<Arc<str>, ExtensionOperation> {
         &self.outstanding_operations
     }
@@ -463,6 +520,69 @@ impl ExtensionStore {
             .extensions
             .get(extension_id)
             .map(|extension| &extension.manifest)
+    }
+
+    pub fn ensure_wasm_extension_loaded(
+        &mut self,
+        extension_id: Arc<str>,
+        cx: &mut Context<Self>,
+    ) -> Task<Result<Arc<dyn extension::Extension>>> {
+        if let Some(extension) = self
+            .wasm_extensions
+            .iter()
+            .find(|(manifest, _)| manifest.id.as_ref() == extension_id.as_ref())
+            .map(|(_, extension)| Arc::new(extension.clone()) as Arc<dyn extension::Extension>)
+        {
+            return Task::ready(Ok(extension));
+        }
+
+        let Some(extension_entry) = self
+            .extension_index
+            .extensions
+            .get(extension_id.as_ref())
+            .cloned()
+        else {
+            return Task::ready(Err(anyhow!("extension `{extension_id}` is not installed")));
+        };
+        if extension_entry.manifest.lib.kind.is_none() {
+            return Task::ready(Err(anyhow!(
+                "extension `{extension_id}` does not provide a wasm entrypoint"
+            )));
+        }
+
+        let wasm_host = self.wasm_host.clone();
+        let root_dir = self.installed_dir.clone();
+        cx.spawn(async move |this, cx| {
+            let extension_path = root_dir.join(extension_entry.manifest.id.as_ref());
+            let wasm_extension =
+                WasmExtension::load(&extension_path, &extension_entry.manifest, wasm_host, cx)
+                    .await
+                    .with_context(|| format!("Loading extension from {extension_path:?}"))?;
+
+            this.update(cx, |this, cx| {
+                if let Some(extension) = this
+                    .wasm_extensions
+                    .iter()
+                    .find(|(manifest, _)| manifest.id == extension_entry.manifest.id)
+                    .map(|(_, extension)| {
+                        Arc::new(extension.clone()) as Arc<dyn extension::Extension>
+                    })
+                {
+                    return Ok(extension);
+                }
+
+                let extension = Arc::new(wasm_extension.clone()) as Arc<dyn extension::Extension>;
+                this.register_loaded_wasm_extension(
+                    &extension_entry.manifest,
+                    extension.clone(),
+                    &root_dir,
+                    cx,
+                );
+                this.wasm_extensions
+                    .push((extension_entry.manifest.clone(), wasm_extension));
+                Ok(extension)
+            })?
+        })
     }
 
     /// Returns the names of themes provided by extensions.
@@ -1360,11 +1480,29 @@ impl ExtensionStore {
         let wasm_host = self.wasm_host.clone();
         let root_dir = self.installed_dir.clone();
         let proxy = self.proxy.clone();
-        let extension_entries = extensions_to_load
+        let remote_ui_extensions_to_register = extensions_to_load
+            .iter()
+            .filter_map(|extension_id| {
+                let extension = new_index.extensions.get(extension_id)?;
+                (!extension.remote_ui.is_empty())
+                    .then_some((extension.manifest.id.clone(), extension.remote_ui.clone()))
+            })
+            .collect::<Vec<_>>();
+        let mut extension_entries = extensions_to_load
             .iter()
             .filter_map(|name| new_index.extensions.get(name).cloned())
             .collect::<Vec<_>>();
+        extension_entries.sort_by(|left, right| {
+            left.remote_ui
+                .is_empty()
+                .cmp(&right.remote_ui.is_empty())
+                .then_with(|| left.manifest.id.cmp(&right.manifest.id))
+        });
         self.extension_index = new_index;
+        for (extension_id, remote_ui) in remote_ui_extensions_to_register {
+            self.proxy
+                .register_remote_ui_extension(extension_id, remote_ui, cx);
+        }
         cx.notify();
         cx.emit(Event::ExtensionsUpdated);
 
@@ -1410,8 +1548,17 @@ impl ExtensionStore {
                 if extension.manifest.lib.kind.is_none() {
                     continue;
                 };
+                if should_defer_wasm_extension_load(&extension) {
+                    continue;
+                }
 
                 let extension_path = root_dir.join(extension.manifest.id.as_ref());
+                let load_start = Instant::now();
+                log::info!(
+                    "extension host load extension start extension_id={} has_remote_ui={}",
+                    extension.manifest.id,
+                    !extension.remote_ui.is_empty(),
+                );
                 let wasm_extension = WasmExtension::load(
                     &extension_path,
                     &extension.manifest,
@@ -1422,7 +1569,16 @@ impl ExtensionStore {
                 .with_context(|| format!("Loading extension from {extension_path:?}"));
 
                 match wasm_extension {
-                    Ok(wasm_extension) => wasm_extensions.push((extension, wasm_extension)),
+                    Ok(wasm_extension) => {
+                        log::info!(
+                            "extension host load extension done extension_id={} has_remote_ui={} total_ms={}",
+                            extension.manifest.id,
+                            !extension.remote_ui.is_empty(),
+                            load_start.elapsed().as_millis(),
+                        );
+
+                        wasm_extensions.push((extension, wasm_extension));
+                    }
                     Err(e) => {
                         log::error!(
                             "Failed to load extension: {}, {:#}",
@@ -1443,66 +1599,7 @@ impl ExtensionStore {
                 for (extension_entry, wasm_extension) in &wasm_extensions {
                     let manifest = &extension_entry.manifest;
                     let extension = Arc::new(wasm_extension.clone());
-
-                    for (language_server_id, language_server_config) in &manifest.language_servers {
-                        for language in language_server_config.languages() {
-                            this.proxy.register_language_server(
-                                extension.clone(),
-                                language_server_id.clone(),
-                                language.clone(),
-                            );
-                        }
-                    }
-
-                    for (slash_command_name, slash_command) in &manifest.slash_commands {
-                        this.proxy.register_slash_command(
-                            extension.clone(),
-                            extension::SlashCommand {
-                                name: slash_command_name.to_string(),
-                                description: slash_command.description.to_string(),
-                                // We don't currently expose this as a configurable option, as it currently drives
-                                // the `menu_text` on the `SlashCommand` trait, which is not used for slash commands
-                                // defined in extensions, as they are not able to be added to the menu.
-                                tooltip_text: String::new(),
-                                requires_argument: slash_command.requires_argument,
-                            },
-                        );
-                    }
-
-                    for id in manifest.context_servers.keys() {
-                        this.proxy
-                            .register_context_server(extension.clone(), id.clone(), cx);
-                    }
-
-                    for (debug_adapter, meta) in &manifest.debug_adapters {
-                        let mut path = root_dir.clone();
-                        path.push(Path::new(manifest.id.as_ref()));
-                        if let Some(schema_path) = &meta.schema_path {
-                            path.push(schema_path);
-                        } else {
-                            path.push("debug_adapter_schemas");
-                            path.push(Path::new(debug_adapter.as_ref()).with_extension("json"));
-                        }
-
-                        this.proxy.register_debug_adapter(
-                            extension.clone(),
-                            debug_adapter.clone(),
-                            &path,
-                        );
-                    }
-
-                    for debug_adapter in manifest.debug_locators.keys() {
-                        this.proxy
-                            .register_debug_locator(extension.clone(), debug_adapter.clone());
-                    }
-
-                    if !extension_entry.remote_ui.is_empty() {
-                        this.proxy.register_remote_ui_extension(
-                            manifest.id.clone(),
-                            extension_entry.remote_ui.clone(),
-                            cx,
-                        );
-                    }
+                    this.register_loaded_wasm_extension(manifest, extension, &root_dir, cx);
                 }
 
                 this.wasm_extensions.extend(wasm_extensions.into_iter().map(
@@ -1967,6 +2064,15 @@ impl ExtensionStore {
         self.remote_clients.push(client.downgrade());
         self.ssh_registered_tx.unbounded_send(()).ok();
     }
+}
+
+fn should_defer_wasm_extension_load(extension: &ExtensionIndexEntry) -> bool {
+    !extension.remote_ui.is_empty()
+        && extension.manifest.language_servers.is_empty()
+        && extension.manifest.slash_commands.is_empty()
+        && extension.manifest.context_servers.is_empty()
+        && extension.manifest.debug_adapters.is_empty()
+        && extension.manifest.debug_locators.is_empty()
 }
 
 async fn cached_index_is_missing_remote_ui(

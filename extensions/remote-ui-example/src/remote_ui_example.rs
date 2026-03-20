@@ -1,4 +1,4 @@
-use std::collections::HashMap;
+use std::{collections::HashMap, time::Instant};
 
 use zed_extension_api::{
     self as zed, CommandContext, EventOutcome, HostMutation, MountContext, ProgressBarProps,
@@ -157,9 +157,23 @@ impl zed::Extension for RemoteUiExampleExtension {
     fn open_view(&mut self, contribution_id: String, _context: MountContext) -> zed::Result<u64> {
         match contribution_id.as_str() {
             "demo.panel" | "demo.titlebar" | "demo.footer" => {
+                let open_started_at = Instant::now();
                 let instance_id = self.next_instance_id;
                 self.next_instance_id += 1;
+                let contribution_id_for_log = contribution_id.clone();
+                println!(
+                    "remote-ui-example open_view start contribution_id={} instance_id={}",
+                    contribution_id_for_log, instance_id
+                );
+                let snapshot_started_at = Instant::now();
                 let (snapshot, sidecar_error) = load_sidecar_snapshot(false);
+                println!(
+                    "remote-ui-example open_view snapshot contribution_id={} instance_id={} snapshot_ms={} sidecar_error={}",
+                    contribution_id_for_log,
+                    instance_id,
+                    snapshot_started_at.elapsed().as_millis(),
+                    sidecar_error.as_deref().unwrap_or("none"),
+                );
                 self.views.insert(
                     instance_id,
                     DemoViewState {
@@ -168,6 +182,12 @@ impl zed::Extension for RemoteUiExampleExtension {
                         snapshot,
                         sidecar_error,
                     },
+                );
+                println!(
+                    "remote-ui-example open_view done contribution_id={} instance_id={} total_ms={}",
+                    contribution_id_for_log,
+                    instance_id,
+                    open_started_at.elapsed().as_millis(),
                 );
                 Ok(instance_id)
             }
@@ -179,19 +199,39 @@ impl zed::Extension for RemoteUiExampleExtension {
         &mut self,
         instance_id: u64,
         _context: MountContext,
-        _reason: RenderReason,
+        reason: RenderReason,
     ) -> zed::Result<RemoteViewTree, String> {
+        let render_started_at = Instant::now();
         let Some(view) = self.views.get_mut(&instance_id) else {
             return Err(format!("unknown view instance `{instance_id}`"));
         };
+        let snapshot_started_at = Instant::now();
         sync_sidecar_snapshot(view, false);
+        println!(
+            "remote-ui-example render_view snapshot contribution_id={} instance_id={} reason={} snapshot_ms={} revision={} sidecar_error={}",
+            view.contribution_id,
+            instance_id,
+            render_reason_label(reason),
+            snapshot_started_at.elapsed().as_millis(),
+            view.revision,
+            view.sidecar_error.as_deref().unwrap_or("none"),
+        );
 
-        match view.contribution_id.as_str() {
+        let tree = match view.contribution_id.as_str() {
             "demo.titlebar" => Ok(render_titlebar_view(view)),
             "demo.footer" => Ok(render_footer_view(view)),
             "demo.panel" => Ok(render_panel_view(view)),
             unknown => Err(format!("unknown view `{unknown}`")),
-        }
+        }?;
+        println!(
+            "remote-ui-example render_view done contribution_id={} instance_id={} reason={} total_ms={} node_count={}",
+            view.contribution_id,
+            instance_id,
+            render_reason_label(reason),
+            render_started_at.elapsed().as_millis(),
+            tree.nodes.len(),
+        );
+        Ok(tree)
     }
 
     fn handle_view_event(
@@ -429,10 +469,19 @@ fn render_panel_view(view: &DemoViewState) -> RemoteViewTree {
 }
 
 fn sync_sidecar_snapshot(view: &mut DemoViewState, force_refresh: bool) {
+    let sync_started_at = Instant::now();
     let (snapshot, sidecar_error) = load_sidecar_snapshot(force_refresh);
     view.snapshot = snapshot;
     view.sidecar_error = sidecar_error;
     view.revision = view.revision.saturating_add(1);
+    println!(
+        "remote-ui-example sync_sidecar_snapshot contribution_id={} force_refresh={} total_ms={} revision={} sidecar_error={}",
+        view.contribution_id,
+        force_refresh,
+        sync_started_at.elapsed().as_millis(),
+        view.revision,
+        view.sidecar_error.as_deref().unwrap_or("none"),
+    );
 }
 
 fn begin_sidecar_login() -> zed::Result<(), String> {
@@ -453,10 +502,40 @@ fn load_sidecar_snapshot(force_refresh: bool) -> (SidecarSnapshot, Option<String
     } else {
         "usage.snapshot"
     };
+    let call_started_at = Instant::now();
+    println!(
+        "remote-ui-example load_sidecar_snapshot start method={} force_refresh={}",
+        method, force_refresh
+    );
 
     match zed::sidecar::call(method, None, Some(15_000)).and_then(parse_sidecar_snapshot) {
-        Ok(snapshot) => (snapshot, None),
-        Err(error) => (SidecarSnapshot::signed_out(), Some(error)),
+        Ok(snapshot) => {
+            println!(
+                "remote-ui-example load_sidecar_snapshot done method={} total_ms={} outcome=ok",
+                method,
+                call_started_at.elapsed().as_millis(),
+            );
+            (snapshot, None)
+        }
+        Err(error) => {
+            println!(
+                "remote-ui-example load_sidecar_snapshot done method={} total_ms={} outcome=error error={}",
+                method,
+                call_started_at.elapsed().as_millis(),
+                error,
+            );
+            (SidecarSnapshot::signed_out(), Some(error))
+        }
+    }
+}
+
+fn render_reason_label(reason: RenderReason) -> &'static str {
+    match reason {
+        RenderReason::Initial => "initial",
+        RenderReason::Event => "event",
+        RenderReason::HostContextChanged => "host-context-changed",
+        RenderReason::VirtualRangeChanged => "virtual-range-changed",
+        RenderReason::ExplicitRefresh => "explicit-refresh",
     }
 }
 

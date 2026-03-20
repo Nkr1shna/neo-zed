@@ -4243,7 +4243,8 @@ mod tests {
             cx.add_window_view(|window, cx| MultiWorkspace::test_new(project.clone(), window, cx));
 
         let workspace = multi_workspace.read_with(cx, |mw, _| mw.workspace().clone());
-        let workspace_id = DB.next_id().await.unwrap();
+        let db = cx.update(|_, cx| WorkspaceDb::global(cx));
+        let workspace_id = db.next_id().await.unwrap();
         let orchestration_state = OrchestrationState {
             projects: vec![OrchestrationProject {
                 id: OrchestrationProjectId("project-alpha".to_string()),
@@ -4266,7 +4267,7 @@ mod tests {
         task.await;
 
         assert_eq!(
-            DB.orchestration_state(workspace_id).unwrap(),
+            db.orchestration_state(workspace_id).unwrap(),
             Some(orchestration_state)
         );
     }
