@@ -29,8 +29,8 @@ pub use crate::notifications::NotificationFrame;
 pub use context_menu_hooks::{ItemTabContextMenuHooks, PanelOverflowContextMenuHooks};
 pub use dock::Panel;
 pub use multi_workspace::{
-    DraggedSidebar, FocusWorkspaceSidebar, MultiWorkspace, MultiWorkspaceEvent, Sidebar,
-    SidebarHandle, ToggleWorkspaceSidebar,
+    CloseWorkspaceSidebar, DraggedSidebar, FocusWorkspaceSidebar, MultiWorkspace,
+    MultiWorkspaceEvent, Sidebar, SidebarHandle, ToggleWorkspaceSidebar,
 };
 pub use path_list::{PathList, SerializedPathList};
 pub use toast_layer::{ToastAction, ToastLayer, ToastView};
@@ -1428,7 +1428,13 @@ impl Workspace {
                     this.collaborator_left(*peer_id, window, cx);
                 }
 
-                &project::Event::WorktreeRemoved(id) | &project::Event::WorktreeAdded(id) => {
+                &project::Event::WorktreeRemoved(_) => {
+                    this.update_window_title(window, cx);
+                    this.serialize_workspace(window, cx);
+                    this.update_history(cx);
+                }
+
+                &project::Event::WorktreeAdded(id) => {
                     this.update_window_title(window, cx);
                     if this
                         .project()
@@ -3382,7 +3388,7 @@ impl Workspace {
             .map(|wt| wt.read(cx).abs_path().as_ref().to_path_buf())
     }
 
-    fn add_folder_to_project(
+    pub fn add_folder_to_project(
         &mut self,
         _: &AddFolderToProject,
         window: &mut Window,
@@ -7045,6 +7051,12 @@ impl Workspace {
 
     pub fn has_active_modal(&self, _: &mut Window, cx: &mut App) -> bool {
         self.modal_layer.read(cx).has_active_modal()
+    }
+
+    pub fn is_active_modal_command_palette(&self, cx: &mut App) -> bool {
+        self.modal_layer
+            .read(cx)
+            .is_active_modal_command_palette(cx)
     }
 
     pub fn active_modal<V: ManagedView + 'static>(&self, cx: &App) -> Option<Entity<V>> {
