@@ -687,6 +687,7 @@ fn main() {
             cx,
         );
         orchestration_ui::init(cx);
+        workflow_ui::init(cx);
 
         repl::init(app_state.fs.clone(), cx);
         recent_projects::init(cx);
