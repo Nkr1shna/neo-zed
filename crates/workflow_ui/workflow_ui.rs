@@ -13,11 +13,17 @@ pub use client::{
 use gpui::App;
 use workspace::Workspace;
 
-pub fn init(_cx: &mut App) {}
+pub fn init(cx: &mut App) {
+    cx.observe_new(|workspace: &mut Workspace, window, cx| {
+        register(workspace, window, cx);
+    })
+    .detach();
+}
 
 pub fn register(
     _workspace: &mut Workspace,
-    _window: &mut gpui::Window,
+    _window: Option<&mut gpui::Window>,
     _cx: &mut gpui::Context<Workspace>,
 ) {
+    // Panel and action registration — filled in by Workstreams 2, 3, 4
 }
