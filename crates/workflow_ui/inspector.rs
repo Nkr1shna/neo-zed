@@ -1002,7 +1002,6 @@ impl NodeInspectorPanel {
             return;
         };
 
-        self.runtime_fields = node_type.runtime_fields.clone();
         for field in node_type.configure_time_fields {
             let editor = cx.new(|cx| {
                 let mut editor = Editor::single_line(window, cx);
@@ -1356,31 +1355,6 @@ impl Render for NodeInspectorPanel {
                             )),
                     )
                 })
-                .when(!self.runtime_fields.is_empty(), |this| {
-                    this.child(
-                        v_flex()
-                            .gap_1()
-                            .child(
-                                Label::new("Runtime Fields")
-                                    .size(LabelSize::Small)
-                                    .color(Color::Muted),
-                            )
-                            .children(self.runtime_fields.iter().map(|field| {
-                                let field_label = if field.required {
-                                    format!(
-                                        "{} ({})*",
-                                        field.label,
-                                        field.field_type.display_name()
-                                    )
-                                } else {
-                                    format!("{} ({})", field.label, field.field_type.display_name())
-                                };
-                                Label::new(field_label)
-                                    .size(LabelSize::Small)
-                                    .color(Color::Muted)
-                            })),
-                    )
-                })
                 .child(
                     v_flex()
                         .gap_1()
@@ -1617,6 +1591,10 @@ mod tests {
         });
 
         panel.update_in(cx, |panel, window, cx| {
+            assert!(
+                panel.runtime_fields.is_empty(),
+                "runtime fields should not be surfaced in the node inspector"
+            );
             panel.label_editor.update(cx, |editor, cx| {
                 editor.set_text("Saved Label", window, cx);
             });
