@@ -21,16 +21,23 @@ use util::path_list::PathList;
 use uuid::Uuid;
 use workspace::{MultiWorkspace, Toast, Workspace, notifications::NotificationId};
 
-const NODE_WIDTH_F: f32 = 200.0;
-const NODE_HEIGHT_F: f32 = 72.0;
-const NODE_H_GAP: f32 = 80.0;
-const NODE_V_GAP: f32 = 60.0;
+const NODE_WIDTH_F: f32 = 300.0;
+const NODE_HEIGHT_F: f32 = 156.0;
+const NODE_H_GAP: f32 = 96.0;
+const NODE_V_GAP: f32 = 84.0;
 const EDGE_STROKE: Pixels = px(2.0);
 const NODE_CORNER_RADIUS: Pixels = px(8.0);
+const NODE_HEADER_X_INSET_F: f32 = 14.0;
+const NODE_HEADER_Y_F: f32 = 14.0;
+const NODE_KIND_Y_F: f32 = 34.0;
+const NODE_PORTS_TOP_INSET_F: f32 = 46.0;
+const NODE_PORTS_BOTTOM_INSET_F: f32 = 10.0;
 const BORDER_WIDTH_NORMAL: Pixels = px(1.5);
 const BORDER_WIDTH_SELECTED: Pixels = px(3.0);
 const PORT_RADIUS_F: f32 = 7.0;
 const PORT_HIT_RADIUS_F: f32 = 12.0;
+const PORT_LABEL_FONT_SIZE_F: f32 = 10.0;
+const PORT_LABEL_X_INSET_F: f32 = 16.0;
 
 #[derive(Clone, Copy, Debug, serde::Serialize, serde::Deserialize)]
 pub struct NodePos {
@@ -1150,6 +1157,8 @@ fn paint_node(
 
     paint_ports(layout, pos, input_ports, true, origin, window);
     paint_ports(layout, pos, output_ports, false, origin, window);
+    paint_port_labels(layout, pos, input_ports, true, origin, window, cx);
+    paint_port_labels(layout, pos, output_ports, false, origin, window, cx);
     paint_label(layout, node, node_type_label, pos, origin, window, cx);
 }
 
@@ -1178,6 +1187,59 @@ fn paint_ports(
             gpui::BorderStyle::Solid,
         );
         window.paint_quad(paint_quad);
+    }
+}
+
+fn paint_port_labels(
+    layout: &CanvasLayout,
+    pos: &NodePos,
+    ports: &[crate::client::WorkflowNodePort],
+    input_side: bool,
+    origin: Point<Pixels>,
+    window: &mut Window,
+    cx: &mut App,
+) {
+    let font_size = scaled(layout, PORT_LABEL_FONT_SIZE_F);
+    let font = gpui::Font::default();
+    let text_color = cx.theme().colors().text_muted;
+
+    for (index, port) in ports.iter().enumerate() {
+        let (_, port_y) = port_canvas_position(pos, input_side, index, ports.len());
+        let label_text: gpui::SharedString = port.label.clone().into();
+        let run = gpui::TextRun {
+            len: label_text.len(),
+            font: font.clone(),
+            color: text_color,
+            background_color: None,
+            underline: None,
+            strikethrough: None,
+        };
+        let shaped = window
+            .text_system()
+            .shape_line(label_text, font_size, &[run], None);
+        let label_x = if input_side {
+            pos.x + PORT_LABEL_X_INSET_F
+        } else {
+            pos.x + NODE_WIDTH_F - PORT_LABEL_X_INSET_F
+        };
+        let label_y = port_y - font_size.as_f32() / layout.zoom / 2.0;
+        let label_origin = to_screen_point(layout, label_x, label_y, origin);
+        let line_height = font_size * 1.4;
+
+        shaped
+            .paint(
+                label_origin,
+                line_height,
+                if input_side {
+                    gpui::TextAlign::Left
+                } else {
+                    gpui::TextAlign::Right
+                },
+                None,
+                window,
+                cx,
+            )
+            .log_err();
     }
 }
 
@@ -1268,8 +1330,8 @@ fn paint_label(
     let shaped = window
         .text_system()
         .shape_line(label_text, font_size, &[run], None);
-    let label_x = pos.x + 12.0;
-    let label_y = pos.y + NODE_HEIGHT_F / 2.0 - 8.0;
+    let label_x = pos.x + NODE_HEADER_X_INSET_F;
+    let label_y = pos.y + NODE_HEADER_Y_F;
     let label_origin = to_screen_point(layout, label_x, label_y, origin);
     let line_height = font_size * 1.5;
     shaped
@@ -1298,7 +1360,7 @@ fn paint_label(
     let kind_shaped = window
         .text_system()
         .shape_line(kind_text, kind_font_size, &[kind_run], None);
-    let kind_y = pos.y + NODE_HEIGHT_F / 2.0 + 8.0;
+    let kind_y = pos.y + NODE_KIND_Y_F;
     let kind_origin = to_screen_point(layout, label_x, kind_y, origin);
     let kind_line_height = kind_font_size * 1.5;
     kind_shaped
@@ -1473,8 +1535,10 @@ fn port_canvas_position(
     port_count: usize,
 ) -> (f32, f32) {
     let port_count = port_count.max(1);
-    let spacing = NODE_HEIGHT_F / (port_count as f32 + 1.0);
-    let port_y = pos.y + spacing * (index as f32 + 1.0);
+    let usable_height =
+        (NODE_HEIGHT_F - NODE_PORTS_TOP_INSET_F - NODE_PORTS_BOTTOM_INSET_F).max(1.0);
+    let spacing = usable_height / (port_count as f32 + 1.0);
+    let port_y = pos.y + NODE_PORTS_TOP_INSET_F + spacing * (index as f32 + 1.0);
     let port_x = if input_side {
         pos.x
     } else {
@@ -2750,6 +2814,22 @@ mod tests {
     }
 
     #[test]
+    fn test_canvas_nodes_are_sized_for_visible_port_contracts() {
+        assert!(NODE_WIDTH_F >= 280.0);
+        assert!(NODE_HEIGHT_F >= 120.0);
+    }
+
+    #[test]
+    fn test_port_canvas_position_reserves_vertical_room_for_contract_labels() {
+        let pos = NodePos { x: 0.0, y: 0.0 };
+        let first = port_canvas_position(&pos, true, 0, 3);
+        let second = port_canvas_position(&pos, true, 1, 3);
+
+        assert!(first.1 >= 48.0);
+        assert!(second.1 - first.1 >= 24.0);
+    }
+
+    #[test]
     fn test_legacy_node_category_falls_back_to_primitive_palette() {
         assert_eq!(
             default_primitive_for_node("legacy-task", Some(&WorkflowNodeTypeCategory::Task),),
@@ -3007,7 +3087,7 @@ mod tests {
             canvas
                 .layout
                 .node_positions
-                .insert("node-2".into(), NodePos { x: 320.0, y: 40.0 });
+                .insert("node-2".into(), NodePos { x: 460.0, y: 40.0 });
 
             let output_port = port_canvas_position(
                 canvas.layout.node_positions.get("node-1").unwrap(),
@@ -3173,7 +3253,7 @@ mod tests {
             canvas
                 .layout
                 .node_positions
-                .insert("node-2".into(), NodePos { x: 320.0, y: 40.0 });
+                .insert("node-2".into(), NodePos { x: 460.0, y: 40.0 });
 
             let output_port = port_canvas_position(
                 canvas.layout.node_positions.get("node-1").unwrap(),
@@ -3423,7 +3503,7 @@ mod tests {
             canvas
                 .layout
                 .node_positions
-                .insert("node-2".into(), NodePos { x: 320.0, y: 40.0 });
+                .insert("node-2".into(), NodePos { x: 520.0, y: 40.0 });
 
             let from = port_position_for_node(
                 &canvas.layout,
