@@ -7,17 +7,17 @@ use crate::inspector::{NodeInspectorPanel, upsert_workflow_def_cache};
 use editor::Editor;
 use gpui::{
     App, AppContext, Context, Corner, DismissEvent, FocusHandle, Focusable, Pixels, Point,
-    Subscription, Task, Window, px,
+    Subscription, Task, Window, WindowHandle, px,
 };
 use multi_buffer::MultiBuffer;
 use std::collections::HashMap;
 use std::path::PathBuf;
 use std::sync::Arc;
 use ui::{ActiveTheme, ContextMenu};
-use util::path_list::PathList;
 use util::ResultExt;
+use util::path_list::PathList;
 use uuid::Uuid;
-use workspace::{Toast, Workspace, notifications::NotificationId};
+use workspace::{MultiWorkspace, Toast, Workspace, notifications::NotificationId};
 
 const NODE_WIDTH_F: f32 = 200.0;
 const NODE_HEIGHT_F: f32 = 72.0;
@@ -1944,16 +1944,14 @@ fn open_run_node_conversation(
                         let work_dirs =
                             conversation_work_dirs(conversation.workspace_path.as_deref());
 
-                        if try_open_run_node_in_center(&conversation.session_id, |session_id| {
-                            agent_ui::open_thread_in_center(
-                                workspace,
-                                agent_client_protocol::SessionId::new(session_id.to_string()),
-                                work_dirs.clone(),
-                                Some(title.clone().into()),
-                                window,
-                                cx,
-                            )
-                        }) {
+                        if try_open_run_node_in_center(
+                            cx.entity(),
+                            &conversation.session_id,
+                            work_dirs.clone(),
+                            title.clone().into(),
+                            window,
+                            cx,
+                        ) {
                             return;
                         }
 
@@ -1991,15 +1989,221 @@ fn open_run_node_conversation(
 }
 
 fn try_open_run_node_in_center(
+    current_workspace: gpui::Entity<Workspace>,
     session_id: &str,
-    open_thread_in_center: impl FnOnce(&str) -> bool,
+    work_dirs: Option<PathList>,
+    title: gpui::SharedString,
+    window: &mut Window,
+    cx: &mut Context<Workspace>,
 ) -> bool {
-    let session_id = session_id.trim();
-    if session_id.is_empty() {
+    let Some(session_id) = normalized_session_id(session_id) else {
         return false;
+    };
+    let session_id = session_id.to_string();
+    let current_window = window.window_handle().downcast::<MultiWorkspace>();
+
+    if let Some(target) =
+        find_run_node_workspace_target(&current_workspace, work_dirs.as_ref(), window, cx)
+    {
+        return open_run_node_session_in_target(
+            target,
+            session_id,
+            work_dirs,
+            title,
+            current_window,
+            cx,
+        );
     }
 
-    open_thread_in_center(session_id)
+    if let (Some(current_window), Some(work_dirs)) = (current_window, work_dirs) {
+        return open_run_node_session_in_new_workspace(
+            current_workspace.downgrade(),
+            current_window,
+            session_id,
+            work_dirs,
+            title,
+            window,
+            cx,
+        );
+    }
+
+    false
+}
+
+fn normalized_session_id(session_id: &str) -> Option<&str> {
+    let session_id = session_id.trim();
+    if session_id.is_empty() {
+        return None;
+    }
+
+    Some(session_id)
+}
+
+#[derive(Clone)]
+struct RunNodeWorkspaceTarget {
+    window: WindowHandle<MultiWorkspace>,
+    workspace: gpui::Entity<Workspace>,
+}
+
+fn find_run_node_workspace_target(
+    current_workspace: &gpui::Entity<Workspace>,
+    work_dirs: Option<&PathList>,
+    window: &mut Window,
+    cx: &App,
+) -> Option<RunNodeWorkspaceTarget> {
+    let current_window = window.window_handle().downcast::<MultiWorkspace>()?;
+    let Some(work_dirs) = work_dirs else {
+        return Some(RunNodeWorkspaceTarget {
+            window: current_window,
+            workspace: current_workspace.clone(),
+        });
+    };
+
+    if workspace_path_list(current_workspace, cx).paths() == work_dirs.paths() {
+        return Some(RunNodeWorkspaceTarget {
+            window: current_window,
+            workspace: current_workspace.clone(),
+        });
+    }
+
+    if let Some(workspace) = find_workspace_in_window(&current_window, work_dirs, cx) {
+        return Some(RunNodeWorkspaceTarget {
+            window: current_window,
+            workspace,
+        });
+    }
+
+    find_workspace_across_windows(work_dirs, cx).map(|(target_window, workspace)| {
+        RunNodeWorkspaceTarget {
+            window: target_window,
+            workspace,
+        }
+    })
+}
+
+fn open_run_node_session_in_target(
+    target: RunNodeWorkspaceTarget,
+    session_id: String,
+    work_dirs: Option<PathList>,
+    title: gpui::SharedString,
+    current_window: Option<WindowHandle<MultiWorkspace>>,
+    cx: &mut Context<Workspace>,
+) -> bool {
+    let target_window = target.window;
+    let target_workspace = target.workspace;
+    let session_work_dirs = work_dirs.clone();
+
+    target_window
+        .update(cx, move |multi_workspace, window, cx| {
+            if current_window.as_ref() != Some(&target_window) {
+                window.activate_window();
+            }
+            multi_workspace.activate(target_workspace.clone(), cx);
+            target_workspace.update(cx, |workspace, cx| {
+                agent_ui::open_thread_in_center(
+                    workspace,
+                    agent_client_protocol::SessionId::new(session_id.clone()),
+                    session_work_dirs.clone(),
+                    Some(title.clone()),
+                    window,
+                    cx,
+                );
+            })
+        })
+        .log_err()
+        .is_some()
+}
+
+fn open_run_node_session_in_new_workspace(
+    current_workspace: gpui::WeakEntity<Workspace>,
+    current_window: WindowHandle<MultiWorkspace>,
+    session_id: String,
+    work_dirs: PathList,
+    title: gpui::SharedString,
+    window: &mut Window,
+    cx: &mut Context<Workspace>,
+) -> bool {
+    let paths: Vec<PathBuf> = work_dirs
+        .paths()
+        .iter()
+        .map(|path| path.to_path_buf())
+        .collect();
+    let Some(open_task) = current_window
+        .update(cx, |multi_workspace, window, cx| {
+            multi_workspace.open_project(paths, window, cx)
+        })
+        .log_err()
+    else {
+        return false;
+    };
+
+    cx.spawn_in(window, async move |_, cx| {
+        match open_task.await {
+            Ok(workspace) => {
+                current_window.update(cx, |multi_workspace, window, cx| {
+                    multi_workspace.activate(workspace.clone(), cx);
+                    workspace.update(cx, |workspace, cx| {
+                        agent_ui::open_thread_in_center(
+                            workspace,
+                            agent_client_protocol::SessionId::new(session_id.clone()),
+                            Some(work_dirs.clone()),
+                            Some(title.clone()),
+                            window,
+                            cx,
+                        );
+                    })
+                })?;
+            }
+            Err(error) => {
+                current_workspace.update(cx, |workspace, cx| {
+                    workspace.show_toast(
+                        Toast::new(
+                            NotificationId::composite::<WorkflowRunConversationToast>(format!(
+                                "workspace-open:{session_id}"
+                            )),
+                            format!("Failed to open run workspace: {error}"),
+                        )
+                        .autohide(),
+                        cx,
+                    );
+                })?;
+            }
+        }
+
+        anyhow::Ok(())
+    })
+    .detach_and_log_err(cx);
+
+    true
+}
+
+fn workspace_path_list(workspace: &gpui::Entity<Workspace>, cx: &App) -> PathList {
+    PathList::new(&workspace.read(cx).root_paths(cx))
+}
+
+fn find_workspace_in_window(
+    target_window: &WindowHandle<MultiWorkspace>,
+    path_list: &PathList,
+    cx: &App,
+) -> Option<gpui::Entity<Workspace>> {
+    let multi_workspace = target_window.read(cx).ok()?;
+    multi_workspace
+        .workspaces()
+        .iter()
+        .find(|workspace| workspace_path_list(workspace, cx).paths() == path_list.paths())
+        .cloned()
+}
+
+fn find_workspace_across_windows(
+    path_list: &PathList,
+    cx: &App,
+) -> Option<(WindowHandle<MultiWorkspace>, gpui::Entity<Workspace>)> {
+    cx.windows()
+        .into_iter()
+        .filter_map(|window| window.downcast::<MultiWorkspace>())
+        .find_map(|window| {
+            find_workspace_in_window(&window, path_list, cx).map(|workspace| (window, workspace))
+        })
 }
 
 fn conversation_work_dirs(workspace_path: Option<&str>) -> Option<PathList> {
@@ -2356,29 +2560,12 @@ mod tests {
 
     #[test]
     fn test_try_open_run_node_in_center_skips_blank_session_id() {
-        let mut open_attempted = false;
-
-        let opened = try_open_run_node_in_center("   ", |session_id| {
-            open_attempted = true;
-            assert_eq!(session_id, "session-1");
-            true
-        });
-
-        assert!(!opened);
-        assert!(!open_attempted);
+        assert_eq!(normalized_session_id("   "), None);
     }
 
     #[test]
     fn test_try_open_run_node_in_center_passes_trimmed_session_id_to_opener() {
-        let mut received_session_id = None;
-
-        let opened = try_open_run_node_in_center(" session-1 ", |session_id| {
-            received_session_id = Some(session_id.to_string());
-            true
-        });
-
-        assert!(opened);
-        assert_eq!(received_session_id.as_deref(), Some("session-1"));
+        assert_eq!(normalized_session_id(" session-1 "), Some("session-1"));
     }
 
     #[test]
