@@ -21500,6 +21500,7 @@ dependencies = [
  "paths",
  "picker",
  "project",
+ "schemars",
  "serde",
  "serde_json",
  "settings",

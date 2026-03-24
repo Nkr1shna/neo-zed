@@ -5,6 +5,7 @@ mod picker;
 mod runs;
 
 pub use canvas::{open_run, open_workflow, CanvasSelection, WorkflowCanvas, WorkflowCanvasEvent};
+pub use inspector::{NodeInspectorPanel, OpenWorkflowDef, WorkflowDefsView};
 pub use client::{
     NodePolicy, RetryBehavior, TaskLifecycleStatus, TaskNodeStatus, TaskRecord, TaskStatusResponse,
     WorkflowClient, WorkflowDefinitionRecord, WorkflowDefinitionRequest, WorkflowEdge,
@@ -22,9 +23,9 @@ pub fn init(cx: &mut App) {
 }
 
 pub fn register(
-    _workspace: &mut Workspace,
-    _window: Option<&mut gpui::Window>,
-    _cx: &mut gpui::Context<Workspace>,
+    workspace: &mut Workspace,
+    window: Option<&mut gpui::Window>,
+    cx: &mut gpui::Context<Workspace>,
 ) {
-    // Panel and action registration — filled in by Workstreams 2, 3, 4
+    inspector::register(workspace, window, cx);
 }
