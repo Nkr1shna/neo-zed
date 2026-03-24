@@ -668,11 +668,9 @@ impl AiWorkspace {
             SerializedActiveThread {
                 session_id: thread.session_id().0.to_string(),
                 agent_type: self.selected_agent_type.clone(),
-                title: if title.as_ref() != DEFAULT_THREAD_TITLE {
-                    Some(title.to_string())
-                } else {
-                    None
-                },
+                title: title
+                    .filter(|title| title.as_ref() != DEFAULT_THREAD_TITLE)
+                    .map(|title| title.to_string()),
                 work_dirs: work_dirs.map(|dirs| dirs.serialize()),
             }
         });
@@ -1917,13 +1915,13 @@ impl AiWorkspace {
         let mut views = Vec::new();
 
         if let Some(server_view) = self.active_conversation_view() {
-            if let Some(thread_view) = server_view.read(cx).parent_thread(cx) {
+            if let Some(thread_view) = server_view.read(cx).root_thread(cx) {
                 views.push(thread_view);
             }
         }
 
         for server_view in self.background_threads.values() {
-            if let Some(thread_view) = server_view.read(cx).parent_thread(cx) {
+            if let Some(thread_view) = server_view.read(cx).root_thread(cx) {
                 views.push(thread_view);
             }
         }
@@ -1936,7 +1934,7 @@ impl AiWorkspace {
             return;
         };
 
-        let Some(thread_view) = conversation_view.read(cx).parent_thread(cx) else {
+        let Some(thread_view) = conversation_view.read(cx).root_thread(cx) else {
             return;
         };
 
@@ -3065,12 +3063,12 @@ impl AiWorkspace {
             ActiveView::AgentThread { conversation_view } => {
                 let server_view_ref = conversation_view.read(cx);
                 let is_generating_title = server_view_ref.as_native_thread(cx).is_some()
-                    && server_view_ref.parent_thread(cx).map_or(false, |tv| {
+                    && server_view_ref.root_thread(cx).map_or(false, |tv| {
                         tv.read(cx).thread.read(cx).has_provisional_title()
                     });
 
                 if let Some(title_editor) = server_view_ref
-                    .parent_thread(cx)
+                    .root_thread(cx)
                     .map(|r| r.read(cx).title_editor.clone())
                 {
                     if is_generating_title {

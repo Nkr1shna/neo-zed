@@ -120,6 +120,7 @@ use std::{
     borrow::Cow,
     collections::BTreeMap,
     ffi::OsString,
+    future::Future,
     ops::{Not as _, Range},
     path::{Path, PathBuf},
     pin::pin,
@@ -306,7 +307,7 @@ enum ProjectClientState {
     /// Multi-player mode but still a local project.
     Shared { remote_id: u64 },
     /// Multi-player mode but working on a remote project.
-    Remote {
+    Collab {
         sharing_has_stopped: bool,
         capability: Capability,
         remote_id: u64,
@@ -1815,7 +1816,7 @@ impl Project {
                 client_subscriptions: Default::default(),
                 _subscriptions: vec![cx.on_release(Self::release)],
                 collab_client: client.clone(),
-                client_state: ProjectClientState::Remote {
+                client_state: ProjectClientState::Collab {
                     sharing_has_stopped: false,
                     capability: Capability::ReadWrite,
                     remote_id,
@@ -1933,7 +1934,7 @@ impl Project {
             ProjectClientState::Shared { .. } => {
                 let _ = self.unshare_internal(cx);
             }
-            ProjectClientState::Remote { remote_id, .. } => {
+            ProjectClientState::Collab { remote_id, .. } => {
                 let _ = self.collab_client.send(proto::LeaveProject {
                     project_id: *remote_id,
                 });
@@ -2078,6 +2079,12 @@ impl Project {
         self.worktree_store.clone()
     }
 
+    /// Returns a future that resolves when all visible worktrees have completed
+    /// their initial scan.
+    pub fn wait_for_initial_scan(&self, cx: &App) -> impl Future<Output = ()> + use<> {
+        self.worktree_store.read(cx).wait_for_initial_scan()
+    }
+
     #[inline]
     pub fn context_server_store(&self) -> Entity<ContextServerStore> {
         self.context_server_store.clone()
@@ -2159,7 +2166,7 @@ impl Project {
         match self.client_state {
             ProjectClientState::Local => None,
             ProjectClientState::Shared { remote_id, .. }
-            | ProjectClientState::Remote { remote_id, .. } => Some(remote_id),
+            | ProjectClientState::Collab { remote_id, .. } => Some(remote_id),
         }
     }
 
@@ -2213,7 +2220,7 @@ impl Project {
     #[inline]
     pub fn replica_id(&self) -> ReplicaId {
         match self.client_state {
-            ProjectClientState::Remote { replica_id, .. } => replica_id,
+            ProjectClientState::Collab { replica_id, .. } => replica_id,
             _ => {
                 if self.remote_client.is_some() {
                     ReplicaId::REMOTE_SERVER
@@ -2753,7 +2760,7 @@ impl Project {
             } else {
                 Capability::ReadOnly
             };
-        if let ProjectClientState::Remote { capability, .. } = &mut self.client_state {
+        if let ProjectClientState::Collab { capability, .. } = &mut self.client_state {
             if *capability == new_capability {
                 return;
             }
@@ -2766,7 +2773,7 @@ impl Project {
     }
 
     fn disconnected_from_host_internal(&mut self, cx: &mut App) {
-        if let ProjectClientState::Remote {
+        if let ProjectClientState::Collab {
             sharing_has_stopped,
             ..
         } = &mut self.client_state
@@ -2793,7 +2800,7 @@ impl Project {
     #[inline]
     pub fn is_disconnected(&self, cx: &App) -> bool {
         match &self.client_state {
-            ProjectClientState::Remote {
+            ProjectClientState::Collab {
                 sharing_has_stopped,
                 ..
             } => *sharing_has_stopped,
@@ -2815,7 +2822,7 @@ impl Project {
     #[inline]
     pub fn capability(&self) -> Capability {
         match &self.client_state {
-            ProjectClientState::Remote { capability, .. } => *capability,
+            ProjectClientState::Collab { capability, .. } => *capability,
             ProjectClientState::Shared { .. } | ProjectClientState::Local => Capability::ReadWrite,
         }
     }
@@ -2831,7 +2838,7 @@ impl Project {
             ProjectClientState::Local | ProjectClientState::Shared { .. } => {
                 self.remote_client.is_none()
             }
-            ProjectClientState::Remote { .. } => false,
+            ProjectClientState::Collab { .. } => false,
         }
     }
 
@@ -2842,7 +2849,7 @@ impl Project {
             ProjectClientState::Local | ProjectClientState::Shared { .. } => {
                 self.remote_client.is_some()
             }
-            ProjectClientState::Remote { .. } => false,
+            ProjectClientState::Collab { .. } => false,
         }
     }
 
@@ -2851,7 +2858,7 @@ impl Project {
     pub fn is_via_collab(&self) -> bool {
         match &self.client_state {
             ProjectClientState::Local | ProjectClientState::Shared { .. } => false,
-            ProjectClientState::Remote { .. } => true,
+            ProjectClientState::Collab { .. } => true,
         }
     }
 
@@ -4524,7 +4531,7 @@ impl Project {
         match &self.client_state {
             ProjectClientState::Shared { .. } => true,
             ProjectClientState::Local => false,
-            ProjectClientState::Remote { .. } => true,
+            ProjectClientState::Collab { .. } => true,
         }
     }
 
@@ -5649,7 +5656,7 @@ impl Project {
 
     fn synchronize_remote_buffers(&mut self, cx: &mut Context<Self>) -> Task<Result<()>> {
         let project_id = match self.client_state {
-            ProjectClientState::Remote {
+            ProjectClientState::Collab {
                 sharing_has_stopped,
                 remote_id,
                 ..

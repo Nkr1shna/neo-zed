@@ -1171,7 +1171,6 @@ impl Sidebar {
                         )
                     }),
             )
-            .end_hover_gradient_overlay(true)
             .end_slot({
                 h_flex()
                     .when(self.project_header_menu_ix != Some(ix), |this| {
@@ -2275,7 +2274,7 @@ impl Sidebar {
             .when_some(timestamp, |this, ts| this.timestamp(ts))
             .highlight_positions(thread.highlight_positions.to_vec())
             .status(thread.status)
-            .generating_title(thread.is_title_generating)
+            .title_generating(thread.is_title_generating)
             .notified(has_notification)
             .when(thread.diff_stats.lines_added > 0, |this| {
                 this.added(thread.diff_stats.lines_added as usize)

@@ -632,7 +632,9 @@ pub fn thread_summaries(workspace: &Workspace, cx: &gpui::App) -> Vec<AgentThrea
 
             AgentThreadSummary {
                 session_id,
-                title: thread.title(),
+                title: thread
+                    .title()
+                    .unwrap_or_else(|| crate::DEFAULT_THREAD_TITLE.into()),
                 status,
                 icon: thread_view_ref.agent_icon,
                 icon_from_external_svg: thread_view_ref.agent_icon_from_external_svg.clone(),

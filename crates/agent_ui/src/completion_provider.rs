@@ -4,6 +4,7 @@ use std::path::PathBuf;
 use std::sync::Arc;
 use std::sync::atomic::AtomicBool;
 
+use crate::DEFAULT_THREAD_TITLE;
 use crate::ThreadHistory;
 use acp_thread::MentionUri;
 use agent_client_protocol as acp;
@@ -1097,9 +1098,13 @@ impl<T: PromptCompletionProviderDelegate> PromptCompletionProvider<T> {
 
         if let Some(thread) = crate::agent_workspace_surface::active_agent_thread(&workspace, cx) {
             let thread = thread.read(cx);
+            let title = thread
+                .title()
+                .unwrap_or_else(|| DEFAULT_THREAD_TITLE.into())
+                .to_string();
             mentions.insert(MentionUri::Thread {
                 id: thread.session_id().clone(),
-                name: thread.title().into(),
+                name: title,
             });
         }
 
