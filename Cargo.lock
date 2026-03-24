@@ -21541,6 +21541,8 @@ dependencies = [
  "paths",
  "picker",
  "project",
+ "recent_projects",
+ "remote",
  "reqwest_client",
  "schemars",
  "serde",

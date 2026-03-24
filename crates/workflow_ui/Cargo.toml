@@ -20,6 +20,7 @@ workspace.workspace = true
 editor.workspace = true
 picker.workspace = true
 project.workspace = true
+recent_projects.workspace = true
 multi_buffer.workspace = true
 theme.workspace = true
 settings.workspace = true
@@ -29,6 +30,7 @@ paths.workspace = true
 log.workspace = true
 http_client.workspace = true
 reqwest_client.workspace = true
+remote.workspace = true
 
 anyhow.workspace = true
 schemars.workspace = true

@@ -314,6 +314,7 @@ fn fallback_task_status(
         task,
         workflow: Some(workflow),
         workspace_path: None,
+        remote_target: None,
         nodes: Vec::new(),
         outcome: None,
         agent: None,

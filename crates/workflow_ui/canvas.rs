@@ -1,7 +1,7 @@
 use crate::client::{
-    TaskLifecycleStatus, TaskStatusResponse, WorkflowClient, WorkflowDefinitionRecord,
-    WorkflowEdge, WorkflowNode, WorkflowNodePrimitive, WorkflowNodeType, WorkflowNodeTypeCategory,
-    infer_workflow_node_primitive,
+    TaskLifecycleStatus, TaskRemoteTarget, TaskStatusResponse, WorkflowClient,
+    WorkflowDefinitionRecord, WorkflowEdge, WorkflowNode, WorkflowNodePrimitive, WorkflowNodeType,
+    WorkflowNodeTypeCategory, infer_workflow_node_primitive,
 };
 use crate::inspector::{NodeInspectorPanel, upsert_workflow_def_cache};
 use editor::Editor;
@@ -10,6 +10,8 @@ use gpui::{
     Subscription, Task, Window, WindowHandle, px,
 };
 use multi_buffer::MultiBuffer;
+use recent_projects::open_remote_project;
+use remote::{DockerConnectionOptions, RemoteConnectionOptions};
 use std::collections::HashMap;
 use std::path::PathBuf;
 use std::sync::Arc;
@@ -1948,6 +1950,7 @@ fn open_run_node_conversation(
                             cx.entity(),
                             &conversation.session_id,
                             work_dirs.clone(),
+                            conversation.remote_target.clone(),
                             title.clone().into(),
                             window,
                             cx,
@@ -1992,6 +1995,7 @@ fn try_open_run_node_in_center(
     current_workspace: gpui::Entity<Workspace>,
     session_id: &str,
     work_dirs: Option<PathList>,
+    remote_target: Option<TaskRemoteTarget>,
     title: gpui::SharedString,
     window: &mut Window,
     cx: &mut Context<Workspace>,
@@ -2011,6 +2015,22 @@ fn try_open_run_node_in_center(
             work_dirs,
             title,
             current_window,
+            cx,
+        );
+    }
+
+    if let Some(remote_attachment) =
+        run_node_remote_attachment(remote_target.as_ref(), work_dirs.as_ref())
+    {
+        return open_run_node_session_in_remote_workspace(
+            current_workspace.downgrade(),
+            current_workspace.read(cx).app_state().clone(),
+            current_window,
+            session_id,
+            work_dirs.expect("remote attachment requires work dirs"),
+            remote_attachment,
+            title,
+            window,
             cx,
         );
     }
@@ -2043,6 +2063,12 @@ fn normalized_session_id(session_id: &str) -> Option<&str> {
 struct RunNodeWorkspaceTarget {
     window: WindowHandle<MultiWorkspace>,
     workspace: gpui::Entity<Workspace>,
+}
+
+#[derive(Clone)]
+struct RunNodeRemoteAttachment {
+    connection_options: RemoteConnectionOptions,
+    paths: Vec<PathBuf>,
 }
 
 fn find_run_node_workspace_target(
@@ -2175,6 +2201,118 @@ fn open_run_node_session_in_new_workspace(
     .detach_and_log_err(cx);
 
     true
+}
+
+fn open_run_node_session_in_remote_workspace(
+    current_workspace: gpui::WeakEntity<Workspace>,
+    app_state: Arc<workspace::AppState>,
+    current_window: Option<WindowHandle<MultiWorkspace>>,
+    session_id: String,
+    work_dirs: PathList,
+    remote_attachment: RunNodeRemoteAttachment,
+    title: gpui::SharedString,
+    window: &mut Window,
+    cx: &mut Context<Workspace>,
+) -> bool {
+    cx.spawn_in(window, async move |_, cx| {
+        if let Err(error) = open_remote_project(
+            remote_attachment.connection_options,
+            remote_attachment.paths,
+            app_state,
+            workspace::OpenOptions::default(),
+            cx,
+        )
+        .await
+        {
+            show_run_node_workspace_error(
+                &current_workspace,
+                format!("remote-attach:{session_id}"),
+                format!("Failed to attach remote workspace: {error}"),
+                cx,
+            )?;
+            return anyhow::Ok(());
+        }
+
+        let target = cx.update(|_window, cx| find_workspace_across_windows(&work_dirs, cx))?;
+        if let Some((target_window, target_workspace)) = target {
+            target_window.update(cx, |multi_workspace, window, cx| {
+                if current_window.as_ref() != Some(&target_window) {
+                    window.activate_window();
+                }
+                multi_workspace.activate(target_workspace.clone(), cx);
+                target_workspace.update(cx, |workspace, cx| {
+                    agent_ui::open_thread_in_center(
+                        workspace,
+                        agent_client_protocol::SessionId::new(session_id.clone()),
+                        Some(work_dirs.clone()),
+                        Some(title.clone()),
+                        window,
+                        cx,
+                    );
+                })
+            })?;
+        } else {
+            show_run_node_workspace_error(
+                &current_workspace,
+                format!("remote-workspace-missing:{session_id}"),
+                "Attached the remote runtime, but could not locate the workspace in Neo Zed"
+                    .to_string(),
+                cx,
+            )?;
+        }
+
+        anyhow::Ok(())
+    })
+    .detach_and_log_err(cx);
+
+    true
+}
+
+fn run_node_remote_attachment(
+    remote_target: Option<&TaskRemoteTarget>,
+    work_dirs: Option<&PathList>,
+) -> Option<RunNodeRemoteAttachment> {
+    let remote_target = remote_target?;
+    let paths: Vec<PathBuf> = work_dirs?.ordered_paths().cloned().collect();
+    if paths.is_empty() {
+        return None;
+    }
+
+    let connection_options = match remote_target {
+        TaskRemoteTarget::Docker(target) => {
+            RemoteConnectionOptions::Docker(DockerConnectionOptions {
+                name: target.name.clone(),
+                container_id: target.container_id.clone(),
+                remote_user: target.remote_user.clone(),
+                upload_binary_over_docker_exec: false,
+                use_podman: target.use_podman,
+            })
+        }
+    };
+
+    Some(RunNodeRemoteAttachment {
+        connection_options,
+        paths,
+    })
+}
+
+fn show_run_node_workspace_error(
+    workspace: &gpui::WeakEntity<Workspace>,
+    id: String,
+    message: String,
+    cx: &mut gpui::AsyncApp,
+) -> anyhow::Result<()> {
+    workspace.update(cx, |workspace, cx| {
+        workspace.show_toast(
+            Toast::new(
+                NotificationId::composite::<WorkflowRunConversationToast>(id),
+                message,
+            )
+            .autohide(),
+            cx,
+        );
+    })?;
+    Ok(())
 }
 
 fn workspace_path_list(workspace: &gpui::Entity<Workspace>, cx: &App) -> PathList {
@@ -2319,6 +2457,7 @@ mod tests {
                 trigger_metadata: Default::default(),
             }),
             workspace_path: Some("/tmp/demo".into()),
+            remote_target: None,
             nodes: vec![crate::client::TaskNodeStatus {
                 id: "node-1".into(),
                 node_type: "task".into(),
@@ -2480,6 +2619,7 @@ mod tests {
             },
             workflow: None,
             workspace_path: Some("/tmp/demo".into()),
+            remote_target: None,
             nodes: vec![crate::client::TaskNodeStatus {
                 id: "node-1".into(),
                 node_type: "task".into(),
@@ -2519,6 +2659,7 @@ mod tests {
             },
             workflow: None,
             workspace_path: Some("/tmp/demo".into()),
+            remote_target: None,
             nodes: vec![crate::client::TaskNodeStatus {
                 id: "node-1".into(),
                 node_type: "task".into(),
@@ -2576,6 +2717,36 @@ mod tests {
             work_dirs.unwrap().ordered_paths().collect::<Vec<_>>(),
             vec![&std::path::PathBuf::from("/workspaces/task-1/workspace")]
         );
+    }
+
+    #[test]
+    fn test_run_node_remote_attachment_builds_docker_connection_options() {
+        let work_dirs = PathList::new(&[PathBuf::from("/workspaces/demo/runtime-task")]);
+        let attachment = run_node_remote_attachment(
+            Some(&TaskRemoteTarget::Docker(
+                crate::client::TaskDockerRemoteTarget {
+                    name: "runtime-dev-container".to_string(),
+                    container_id: "runtime-dev-container".to_string(),
+                    remote_user: "root".to_string(),
+                    use_podman: false,
+                },
+            )),
+            Some(&work_dirs),
+        )
+        .expect("docker attachment");
+
+        assert_eq!(
+            attachment.paths,
+            vec![PathBuf::from("/workspaces/demo/runtime-task")]
+        );
+        assert!(matches!(
+            attachment.connection_options,
+            RemoteConnectionOptions::Docker(DockerConnectionOptions {
+                container_id,
+                remote_user,
+                ..
+            }) if container_id == "runtime-dev-container" && remote_user == "root"
+        ));
     }
 
     #[test]

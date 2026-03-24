@@ -167,7 +167,11 @@ pub struct WorkflowNode {
     #[serde(alias = "kind")]
     pub node_type: String,
     pub label: String,
-    #[serde(default = "default_json_object", alias = "config", alias = "configure_time")]
+    #[serde(
+        default = "default_json_object",
+        alias = "config",
+        alias = "configure_time"
+    )]
     pub configuration: serde_json::Value,
     #[serde(default = "default_json_object")]
     pub runtime: serde_json::Value,
@@ -297,6 +301,8 @@ pub struct TaskStatusResponse {
     pub workflow: Option<WorkflowDefinitionRecord>,
     #[serde(default)]
     pub workspace_path: Option<String>,
+    #[serde(default)]
+    pub remote_target: Option<TaskRemoteTarget>,
     pub nodes: Vec<TaskNodeStatus>,
     pub outcome: Option<serde_json::Value>,
     pub agent: Option<serde_json::Value>,
@@ -314,7 +320,24 @@ pub struct TaskNodeConversationResponse {
     pub session_id: String,
     #[serde(default)]
     pub workspace_path: Option<String>,
+    #[serde(default)]
+    pub remote_target: Option<TaskRemoteTarget>,
     pub markdown: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(tag = "kind", rename_all = "snake_case")]
+pub enum TaskRemoteTarget {
+    Docker(TaskDockerRemoteTarget),
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct TaskDockerRemoteTarget {
+    pub name: String,
+    pub container_id: String,
+    pub remote_user: String,
+    #[serde(default)]
+    pub use_podman: bool,
 }
 
 fn default_json_object() -> serde_json::Value {
@@ -335,8 +358,9 @@ where
                 label: option.clone(),
                 value: option,
             }),
-            serde_json::Value::Object(_) => serde_json::from_value(value)
-                .map_err(serde::de::Error::custom),
+            serde_json::Value::Object(_) => {
+                serde_json::from_value(value).map_err(serde::de::Error::custom)
+            }
             other => Err(serde::de::Error::custom(format!(
                 "unsupported workflow node field option: {other}"
             ))),
@@ -804,5 +828,33 @@ mod tests {
         assert_eq!(workflow.edges[0].to_node_id, "n2");
         assert!(workflow.edges[0].from_output_id.is_empty());
         assert!(workflow.edges[0].to_input_id.is_empty());
+    }
+
+    #[test]
+    fn test_task_node_conversation_deserializes_docker_remote_target() {
+        let response: TaskNodeConversationResponse = serde_json::from_value(serde_json::json!({
+            "task_id": Uuid::nil(),
+            "node_id": "task-1",
+            "session_id": "thread-123",
+            "workspace_path": "/workspaces/demo/runtime-task",
+            "remote_target": {
+                "kind": "docker",
+                "name": "runtime-dev-container",
+                "container_id": "runtime-dev-container",
+                "remote_user": "root",
+                "use_podman": false
+            },
+            "markdown": "## Assistant\nDone."
+        }))
+        .unwrap();
+
+        assert!(matches!(
+            response.remote_target,
+            Some(TaskRemoteTarget::Docker(TaskDockerRemoteTarget {
+                container_id,
+                remote_user,
+                ..
+            })) if container_id == "runtime-dev-container" && remote_user == "root"
+        ));
     }
 }
