@@ -1,6 +1,7 @@
 use crate::client::{
     TaskLifecycleStatus, TaskStatusResponse, WorkflowClient, WorkflowDefinitionRecord,
-    WorkflowEdge, WorkflowNode, WorkflowNodeType, WorkflowNodeTypeCategory,
+    WorkflowEdge, WorkflowNode, WorkflowNodePrimitive, WorkflowNodeType, WorkflowNodeTypeCategory,
+    infer_workflow_node_primitive,
 };
 use crate::inspector::{NodeInspectorPanel, upsert_workflow_def_cache};
 use editor::Editor;
@@ -11,7 +12,7 @@ use gpui::{
 use multi_buffer::MultiBuffer;
 use std::collections::HashMap;
 use std::sync::Arc;
-use ui::ContextMenu;
+use ui::{ActiveTheme, ContextMenu};
 use util::ResultExt;
 use uuid::Uuid;
 use workspace::{Toast, Workspace, notifications::NotificationId};
@@ -282,6 +283,7 @@ impl WorkflowCanvas {
                     node_type: n.node_type.clone(),
                     label: n.label.clone(),
                     configuration: serde_json::json!({}),
+                    runtime: serde_json::json!({}),
                 })
                 .collect();
             layout.node_positions = auto_layout(&nodes, &[]);
@@ -323,6 +325,10 @@ impl WorkflowCanvas {
                 .any(|n| n.status == TaskLifecycleStatus::Running)
                 || r.task.status == TaskLifecycleStatus::Running
         })
+    }
+
+    fn is_editable(&self) -> bool {
+        self.run.is_none()
     }
 
     fn start_loading_node_types(&mut self, cx: &mut Context<Self>) {
@@ -517,7 +523,9 @@ impl WorkflowCanvas {
             return;
         }
 
-        if let Some(port) = self.hit_test_port(position, origin, false) {
+        if self.is_editable()
+            && let Some(port) = self.hit_test_port(position, origin, false)
+        {
             self.select_node(port.node_id.clone(), window, cx);
             self.pending_connection = Some(port);
             self.pending_connection_target = Some(to_canvas_point(
@@ -534,9 +542,11 @@ impl WorkflowCanvas {
             if event.click_count == 2 {
                 cx.emit(WorkflowCanvasEvent::NodeActivated(node_id));
             } else {
-                self.drag_node = Some(node_id.clone());
-                self.drag_mouse_start = Some(position);
-                self.drag_node_start_pos = self.layout.node_positions.get(&node_id).copied();
+                if self.is_editable() {
+                    self.drag_node = Some(node_id.clone());
+                    self.drag_mouse_start = Some(position);
+                    self.drag_node_start_pos = self.layout.node_positions.get(&node_id).copied();
+                }
                 self.select_node(node_id, window, cx);
             }
         } else {
@@ -614,7 +624,7 @@ impl WorkflowCanvas {
             return;
         }
 
-        if self.pending_connection.is_some() {
+        if self.is_editable() && self.pending_connection.is_some() {
             let origin = self.canvas_origin();
             self.pending_connection_target = Some(to_canvas_point(
                 &self.layout,
@@ -651,7 +661,9 @@ impl WorkflowCanvas {
         _window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        if let Some(source) = self.pending_connection.take() {
+        if self.is_editable()
+            && let Some(source) = self.pending_connection.take()
+        {
             let origin = self.canvas_origin();
             if let Some(target) = self.hit_test_port(event.position, origin, true) {
                 if source.node_id != target.node_id {
@@ -675,6 +687,11 @@ impl WorkflowCanvas {
             }
             self.pending_connection_target = None;
             cx.notify();
+        }
+
+        if !self.is_editable() {
+            self.pending_connection = None;
+            self.pending_connection_target = None;
         }
 
         self.drag_node = None;
@@ -720,7 +737,9 @@ impl WorkflowCanvas {
     ) {
         match event.keystroke.key.as_str() {
             "backspace" | "delete" => {
-                self.delete_selected_node(cx);
+                if self.is_editable() {
+                    self.delete_selected_node(cx);
+                }
             }
             "escape" => {
                 self.selection = CanvasSelection::None;
@@ -735,6 +754,10 @@ impl WorkflowCanvas {
     }
 
     fn add_node(&mut self, node_type: &WorkflowNodeType, cx: &mut Context<Self>) {
+        if !self.is_editable() {
+            return;
+        }
+
         let Some(ref mut workflow) = self.workflow else {
             return;
         };
@@ -748,6 +771,7 @@ impl WorkflowCanvas {
             node_type: node_type.id.clone(),
             label,
             configuration: serde_json::json!({}),
+            runtime: serde_json::json!({}),
         });
         self.layout.node_positions.insert(
             id.clone(),
@@ -762,6 +786,10 @@ impl WorkflowCanvas {
     }
 
     fn delete_selected_node(&mut self, cx: &mut Context<Self>) {
+        if !self.is_editable() {
+            return;
+        }
+
         match self.selection.clone() {
             CanvasSelection::Node(node_id) => self.delete_node(&node_id, cx),
             CanvasSelection::Edge(from_node_id, from_output_id, to_node_id, to_input_id) => {
@@ -778,6 +806,10 @@ impl WorkflowCanvas {
     }
 
     fn delete_node(&mut self, node_id: &str, cx: &mut Context<Self>) {
+        if !self.is_editable() {
+            return;
+        }
+
         let Some(workflow) = self.workflow.as_mut() else {
             return;
         };
@@ -803,6 +835,10 @@ impl WorkflowCanvas {
         to_input_id: &str,
         cx: &mut Context<Self>,
     ) {
+        if !self.is_editable() {
+            return;
+        }
+
         let Some(workflow) = self.workflow.as_mut() else {
             return;
         };
@@ -1027,29 +1063,23 @@ impl gpui::Focusable for WorkflowCanvas {
 }
 
 fn node_fill_and_border(
-    category: &WorkflowNodeTypeCategory,
+    primitive: &WorkflowNodePrimitive,
     appearance: gpui::WindowAppearance,
 ) -> (gpui::Rgba, gpui::Rgba) {
     use gpui::WindowAppearance::*;
-    match (category, appearance) {
-        (WorkflowNodeTypeCategory::Task, Dark | VibrantDark) => {
+    match (primitive, appearance) {
+        (WorkflowNodePrimitive::Llm, Dark | VibrantDark) => {
             (gpui::rgba(0x1a3a5cff), gpui::rgba(0x3b82f6ff))
         }
-        (WorkflowNodeTypeCategory::Task, _) => (gpui::rgba(0xdbeafeff), gpui::rgba(0x3b82f6ff)),
-        (WorkflowNodeTypeCategory::Validation, Dark | VibrantDark) => {
+        (WorkflowNodePrimitive::Llm, _) => (gpui::rgba(0xdbeafeff), gpui::rgba(0x3b82f6ff)),
+        (WorkflowNodePrimitive::Conditional, Dark | VibrantDark) => {
             (gpui::rgba(0x3a2e00ff), gpui::rgba(0xf59e0bff))
         }
-        (WorkflowNodeTypeCategory::Validation, _) => {
-            (gpui::rgba(0xfef3c7ff), gpui::rgba(0xf59e0bff))
-        }
-        (WorkflowNodeTypeCategory::Review, Dark | VibrantDark) => {
-            (gpui::rgba(0x2d1a00ff), gpui::rgba(0xf97316ff))
-        }
-        (WorkflowNodeTypeCategory::Review, _) => (gpui::rgba(0xffedd5ff), gpui::rgba(0xf97316ff)),
-        (WorkflowNodeTypeCategory::Integration, Dark | VibrantDark) => {
+        (WorkflowNodePrimitive::Conditional, _) => (gpui::rgba(0xfef3c7ff), gpui::rgba(0xf59e0bff)),
+        (WorkflowNodePrimitive::ExecuteShellCommand, Dark | VibrantDark) => {
             (gpui::rgba(0x0d2e1aff), gpui::rgba(0x22c55eff))
         }
-        (WorkflowNodeTypeCategory::Integration, _) => {
+        (WorkflowNodePrimitive::ExecuteShellCommand, _) => {
             (gpui::rgba(0xdcfce7ff), gpui::rgba(0x22c55eff))
         }
     }
@@ -1071,7 +1101,7 @@ fn status_badge_text_color() -> gpui::Rgba {
 fn paint_node(
     layout: &CanvasLayout,
     node: &WorkflowNode,
-    category: &WorkflowNodeTypeCategory,
+    primitive: &WorkflowNodePrimitive,
     node_type_label: &str,
     pos: &NodePos,
     input_ports: &[crate::client::WorkflowNodePort],
@@ -1093,7 +1123,7 @@ fn paint_node(
     };
 
     let appearance = window.appearance();
-    let (fill_color, border_color) = node_fill_and_border(category, appearance);
+    let (fill_color, border_color) = node_fill_and_border(primitive, appearance);
 
     let bounds = gpui::Bounds {
         origin: top_left,
@@ -1221,12 +1251,7 @@ fn paint_label(
 ) {
     let font_size = scaled(layout, 13.0);
     let label_text: gpui::SharedString = node.label.clone().into();
-    let text_color = gpui::Hsla {
-        h: 0.0,
-        s: 0.0,
-        l: 0.15,
-        a: 1.0,
-    };
+    let text_color = cx.theme().colors().text;
     let font = gpui::Font::default();
     let run = gpui::TextRun {
         len: label_text.len(),
@@ -1255,12 +1280,7 @@ fn paint_label(
         .log_err();
 
     let kind_text: gpui::SharedString = node_type_label.to_string().into();
-    let kind_color = gpui::Hsla {
-        h: 0.0,
-        s: 0.0,
-        l: 0.45,
-        a: 1.0,
-    };
+    let kind_color = cx.theme().colors().text_muted;
     let kind_font_size = scaled(layout, 11.0);
     let kind_font = gpui::Font::default();
     let kind_run = gpui::TextRun {
@@ -1435,13 +1455,11 @@ const DEFAULT_OUTPUT_PORTS: &[crate::client::WorkflowNodePort] =
         label: String::new(),
     }];
 
-fn default_category_for_node_type(node_type: &str) -> WorkflowNodeTypeCategory {
-    match node_type {
-        "validation" => WorkflowNodeTypeCategory::Validation,
-        "review" => WorkflowNodeTypeCategory::Review,
-        "integration" => WorkflowNodeTypeCategory::Integration,
-        _ => WorkflowNodeTypeCategory::Task,
-    }
+fn default_primitive_for_node(
+    node_type: &str,
+    legacy_category: Option<&WorkflowNodeTypeCategory>,
+) -> WorkflowNodePrimitive {
+    infer_workflow_node_primitive(node_type, legacy_category, None)
 }
 
 fn port_canvas_position(
@@ -1582,7 +1600,7 @@ impl gpui::Render for WorkflowCanvas {
         let selection = self.selection.clone();
         let pending_connection = self.pending_connection.clone();
         let pending_connection_target = self.pending_connection_target;
-        let is_edit = self.run.is_none();
+        let is_edit = self.is_editable();
         let this_weak = cx.weak_entity();
 
         div()
@@ -1635,13 +1653,13 @@ impl gpui::Render for WorkflowCanvas {
                                 let node_type_label = node_type_by_id(&node_types, &node.node_type)
                                     .map(|node_type| node_type.label.as_str())
                                     .unwrap_or(node.node_type.as_str());
-                                let category = node_type_by_id(&node_types, &node.node_type)
-                                    .map(|node_type| node_type.category.clone())
-                                    .unwrap_or_else(|| default_category_for_node_type(&node.node_type));
+                                let primitive = node_type_by_id(&node_types, &node.node_type)
+                                    .map(|node_type| node_type.primitive_kind())
+                                    .unwrap_or_else(|| default_primitive_for_node(&node.node_type, None));
                                 paint_node(
                                     &layout,
                                     node,
-                                    &category,
+                                    &primitive,
                                     node_type_label,
                                     &pos,
                                     ports_for_node(&node_types, node, true),
@@ -1703,14 +1721,18 @@ impl gpui::Render for WorkflowCanvas {
                                     node_type: node_status.node_type.clone(),
                                     label: node_status.label.clone(),
                                     configuration: serde_json::json!({}),
+                                    runtime: serde_json::json!({}),
                                 };
                                 let node_type_label = node_type_by_id(&node_types, &synthetic_node.node_type)
                                     .map(|node_type| node_type.label.as_str())
                                     .unwrap_or(synthetic_node.node_type.as_str());
+                                let primitive = node_type_by_id(&node_types, &synthetic_node.node_type)
+                                    .map(|node_type| node_type.primitive_kind())
+                                    .unwrap_or_else(|| node_status.primitive_kind());
                                 paint_node(
                                     &layout,
                                     &synthetic_node,
-                                    &node_status.category,
+                                    &primitive,
                                     node_type_label,
                                     &pos,
                                     ports_for_node(&node_types, &synthetic_node, true),
@@ -1916,8 +1938,23 @@ fn open_run_node_conversation(
             match conversation {
                 Ok(conversation) => {
                     workspace.update_in(cx, |workspace, window, cx| {
+                        let title = format!("{run_title} / {} - conversation", node.label);
+
+                        if try_open_run_node_in_center(&conversation.session_id, |session_id| {
+                            agent_ui::open_thread_in_center(
+                                workspace,
+                                agent_client_protocol::SessionId::new(session_id.to_string()),
+                                None,
+                                Some(title.clone().into()),
+                                window,
+                                cx,
+                            )
+                        }) {
+                            return;
+                        }
+
                         open_markdown_conversation(
-                            format!("{run_title} / {} - conversation", node.label),
+                            title,
                             conversation.markdown,
                             workspace.weak_handle(),
                             workspace.project().clone(),
@@ -1947,6 +1984,18 @@ fn open_run_node_conversation(
             anyhow::Ok(())
         })
         .detach_and_log_err(cx);
+}
+
+fn try_open_run_node_in_center(
+    session_id: &str,
+    open_thread_in_center: impl FnOnce(&str) -> bool,
+) -> bool {
+    let session_id = session_id.trim();
+    if session_id.is_empty() {
+        return false;
+    }
+
+    open_thread_in_center(session_id)
 }
 
 fn open_markdown_conversation(
@@ -2044,6 +2093,7 @@ mod tests {
                     node_type: "task".into(),
                     label: "Build".into(),
                     configuration: serde_json::json!({}),
+                    runtime: serde_json::json!({}),
                 }],
                 edges: vec![],
                 node_policies: vec![],
@@ -2054,11 +2104,13 @@ mod tests {
             nodes: vec![crate::client::TaskNodeStatus {
                 id: "node-1".into(),
                 node_type: "task".into(),
-                category: WorkflowNodeTypeCategory::Task,
+                primitive: None,
+                category: Some(WorkflowNodeTypeCategory::Task),
                 label: "Build".into(),
                 status: TaskLifecycleStatus::Running,
                 output: None,
                 session_id: Some("session-1".into()),
+                artifacts: Default::default(),
             }],
             outcome: None,
             agent: None,
@@ -2075,7 +2127,9 @@ mod tests {
             WorkflowNodeType {
                 id: "task".into(),
                 label: "Task".into(),
-                category: WorkflowNodeTypeCategory::Task,
+                primitive: Some(crate::client::WorkflowNodePrimitive::Llm),
+                category: None,
+                is_primitive: false,
                 inputs: vec![crate::client::WorkflowNodePort {
                     id: "default".into(),
                     label: "Input".into(),
@@ -2084,11 +2138,15 @@ mod tests {
                     id: "success".into(),
                     label: "Success".into(),
                 }],
+                configure_time_fields: vec![],
+                runtime_fields: vec![],
             },
             WorkflowNodeType {
                 id: "validation".into(),
                 label: "Validation".into(),
-                category: WorkflowNodeTypeCategory::Validation,
+                primitive: Some(crate::client::WorkflowNodePrimitive::Conditional),
+                category: None,
+                is_primitive: false,
                 inputs: vec![crate::client::WorkflowNodePort {
                     id: "default".into(),
                     label: "Input".into(),
@@ -2097,6 +2155,8 @@ mod tests {
                     id: "passed".into(),
                     label: "Passed".into(),
                 }],
+                configure_time_fields: vec![],
+                runtime_fields: vec![],
             },
         ]
     }
@@ -2108,6 +2168,7 @@ mod tests {
             node_type: "task".into(),
             label: "A".into(),
             configuration: serde_json::json!({}),
+            runtime: serde_json::json!({}),
         }];
         let edges = vec![];
         let layout = auto_layout(&nodes, &edges);
@@ -2124,18 +2185,21 @@ mod tests {
                 node_type: "task".into(),
                 label: "A".into(),
                 configuration: serde_json::json!({}),
+                runtime: serde_json::json!({}),
             },
             WorkflowNode {
                 id: "b".into(),
                 node_type: "validation".into(),
                 label: "B".into(),
                 configuration: serde_json::json!({}),
+                runtime: serde_json::json!({}),
             },
             WorkflowNode {
                 id: "c".into(),
                 node_type: "integration".into(),
                 label: "C".into(),
                 configuration: serde_json::json!({}),
+                runtime: serde_json::json!({}),
             },
         ];
         let edges = vec![
@@ -2200,11 +2264,13 @@ mod tests {
             nodes: vec![crate::client::TaskNodeStatus {
                 id: "node-1".into(),
                 node_type: "task".into(),
-                category: WorkflowNodeTypeCategory::Task,
+                primitive: None,
+                category: Some(WorkflowNodeTypeCategory::Task),
                 label: "Build".into(),
                 status: TaskLifecycleStatus::Failed,
                 output: Some("node output".into()),
                 session_id: None,
+                artifacts: Default::default(),
             }],
             outcome: None,
             agent: None,
@@ -2236,11 +2302,13 @@ mod tests {
             nodes: vec![crate::client::TaskNodeStatus {
                 id: "node-1".into(),
                 node_type: "task".into(),
-                category: WorkflowNodeTypeCategory::Task,
+                primitive: None,
+                category: Some(WorkflowNodeTypeCategory::Task),
                 label: "Build".into(),
                 status: TaskLifecycleStatus::Failed,
                 output: Some("missing green background".into()),
                 session_id: None,
+                artifacts: Default::default(),
             }],
             outcome: None,
             agent: None,
@@ -2260,7 +2328,7 @@ mod tests {
     #[test]
     fn test_running_status_badge_uses_visible_chip_colors() {
         let (task_fill, _) = node_fill_and_border(
-            &WorkflowNodeTypeCategory::Task,
+            &crate::client::WorkflowNodePrimitive::Llm,
             gpui::WindowAppearance::Dark,
         );
         let badge_fill = status_badge_color(&TaskLifecycleStatus::Running);
@@ -2268,6 +2336,52 @@ mod tests {
 
         assert_ne!(badge_fill, task_fill);
         assert_ne!(badge_text, badge_fill);
+    }
+
+    #[test]
+    fn test_try_open_run_node_in_center_skips_blank_session_id() {
+        let mut open_attempted = false;
+
+        let opened = try_open_run_node_in_center("   ", |session_id| {
+            open_attempted = true;
+            assert_eq!(session_id, "session-1");
+            true
+        });
+
+        assert!(!opened);
+        assert!(!open_attempted);
+    }
+
+    #[test]
+    fn test_try_open_run_node_in_center_passes_trimmed_session_id_to_opener() {
+        let mut received_session_id = None;
+
+        let opened = try_open_run_node_in_center(" session-1 ", |session_id| {
+            received_session_id = Some(session_id.to_string());
+            true
+        });
+
+        assert!(opened);
+        assert_eq!(received_session_id.as_deref(), Some("session-1"));
+    }
+
+    #[test]
+    fn test_legacy_node_category_falls_back_to_primitive_palette() {
+        assert_eq!(
+            default_primitive_for_node("legacy-task", Some(&WorkflowNodeTypeCategory::Task),),
+            crate::client::WorkflowNodePrimitive::Llm
+        );
+        assert_eq!(
+            default_primitive_for_node(
+                "legacy-integration",
+                Some(&WorkflowNodeTypeCategory::Integration),
+            ),
+            crate::client::WorkflowNodePrimitive::ExecuteShellCommand
+        );
+        assert_eq!(
+            default_primitive_for_node("conditional", None,),
+            crate::client::WorkflowNodePrimitive::Conditional
+        );
     }
 
     #[gpui::test]
@@ -2302,6 +2416,7 @@ mod tests {
                 node_type: "task".into(),
                 label: "Task".into(),
                 configuration: serde_json::json!({}),
+                runtime: serde_json::json!({}),
             }],
             edges: vec![],
             node_policies: vec![],
@@ -2474,12 +2589,14 @@ mod tests {
                     node_type: "task".into(),
                     label: "Task".into(),
                     configuration: serde_json::json!({}),
+                    runtime: serde_json::json!({}),
                 },
                 WorkflowNode {
                     id: "node-2".into(),
                     node_type: "validation".into(),
                     label: "Validation".into(),
                     configuration: serde_json::json!({}),
+                    runtime: serde_json::json!({}),
                 },
             ],
             edges: vec![],
@@ -2562,6 +2679,168 @@ mod tests {
     }
 
     #[gpui::test]
+    async fn test_dragging_run_node_selects_without_moving(cx: &mut gpui::TestAppContext) {
+        use gpui::{
+            Bounds, Modifiers, MouseButton, MouseDownEvent, MouseMoveEvent, MouseUpEvent, size,
+        };
+
+        init_test(cx);
+
+        let task_id = Uuid::new_v4();
+        let (canvas, cx) = cx.add_window_view(|_window, cx| {
+            WorkflowCanvas::new_run(sample_run(task_id), WorkflowClient::new(), cx)
+        });
+
+        canvas.update_in(cx, |canvas, window, cx| {
+            canvas.node_types = sample_node_types();
+            canvas.canvas_bounds = Some(Bounds::new(
+                gpui::point(px(0.0), px(0.0)),
+                size(px(800.0), px(600.0)),
+            ));
+            canvas
+                .layout
+                .node_positions
+                .insert("node-1".into(), NodePos { x: 40.0, y: 40.0 });
+
+            canvas.handle_mouse_down(
+                &MouseDownEvent {
+                    position: gpui::point(px(60.0), px(60.0)),
+                    button: MouseButton::Left,
+                    modifiers: Modifiers::default(),
+                    click_count: 1,
+                    first_mouse: false,
+                },
+                window,
+                cx,
+            );
+            canvas.handle_mouse_move(
+                &MouseMoveEvent {
+                    position: gpui::point(px(180.0), px(180.0)),
+                    pressed_button: Some(MouseButton::Left),
+                    modifiers: Modifiers::default(),
+                },
+                window,
+                cx,
+            );
+            canvas.handle_mouse_up(
+                &MouseUpEvent {
+                    button: MouseButton::Left,
+                    position: gpui::point(px(180.0), px(180.0)),
+                    modifiers: Modifiers::default(),
+                    click_count: 1,
+                },
+                window,
+                cx,
+            );
+
+            assert_eq!(canvas.selection, CanvasSelection::Node("node-1".into()));
+            let position = canvas.layout.node_positions.get("node-1").unwrap();
+            assert_eq!(position.x, 40.0);
+            assert_eq!(position.y, 40.0);
+        });
+    }
+
+    #[gpui::test]
+    async fn test_dragging_between_ports_in_run_does_not_create_edge(
+        cx: &mut gpui::TestAppContext,
+    ) {
+        use gpui::{
+            Bounds, Modifiers, MouseButton, MouseDownEvent, MouseMoveEvent, MouseUpEvent, size,
+        };
+
+        init_test(cx);
+
+        let task_id = Uuid::new_v4();
+        let mut run = sample_run(task_id);
+        if let Some(workflow) = run.workflow.as_mut() {
+            workflow.nodes.push(WorkflowNode {
+                id: "node-2".into(),
+                node_type: "validation".into(),
+                label: "Validation".into(),
+                configuration: serde_json::json!({}),
+                runtime: serde_json::json!({}),
+            });
+        }
+        run.nodes.push(crate::client::TaskNodeStatus {
+            id: "node-2".into(),
+            node_type: "validation".into(),
+            primitive: None,
+            category: Some(WorkflowNodeTypeCategory::Validation),
+            label: "Validation".into(),
+            status: TaskLifecycleStatus::Queued,
+            output: None,
+            session_id: None,
+            artifacts: Default::default(),
+        });
+
+        let (canvas, cx) = cx
+            .add_window_view(|_window, cx| WorkflowCanvas::new_run(run, WorkflowClient::new(), cx));
+
+        canvas.update_in(cx, |canvas, window, cx| {
+            canvas.node_types = sample_node_types();
+            canvas.canvas_bounds = Some(Bounds::new(
+                gpui::point(px(0.0), px(0.0)),
+                size(px(800.0), px(600.0)),
+            ));
+            canvas
+                .layout
+                .node_positions
+                .insert("node-1".into(), NodePos { x: 40.0, y: 40.0 });
+            canvas
+                .layout
+                .node_positions
+                .insert("node-2".into(), NodePos { x: 320.0, y: 40.0 });
+
+            let output_port = port_canvas_position(
+                canvas.layout.node_positions.get("node-1").unwrap(),
+                false,
+                0,
+                1,
+            );
+            let input_port = port_canvas_position(
+                canvas.layout.node_positions.get("node-2").unwrap(),
+                true,
+                0,
+                1,
+            );
+
+            canvas.handle_mouse_down(
+                &MouseDownEvent {
+                    position: gpui::point(px(output_port.0), px(output_port.1)),
+                    button: MouseButton::Left,
+                    modifiers: Modifiers::default(),
+                    click_count: 1,
+                    first_mouse: false,
+                },
+                window,
+                cx,
+            );
+            canvas.handle_mouse_move(
+                &MouseMoveEvent {
+                    position: gpui::point(px(input_port.0), px(input_port.1)),
+                    pressed_button: Some(MouseButton::Left),
+                    modifiers: Modifiers::default(),
+                },
+                window,
+                cx,
+            );
+            canvas.handle_mouse_up(
+                &MouseUpEvent {
+                    button: MouseButton::Left,
+                    position: gpui::point(px(input_port.0), px(input_port.1)),
+                    modifiers: Modifiers::default(),
+                    click_count: 1,
+                },
+                window,
+                cx,
+            );
+
+            let workflow = canvas.workflow.as_ref().unwrap();
+            assert!(workflow.edges.is_empty());
+        });
+    }
+
+    #[gpui::test]
     async fn test_backspace_deletes_selected_node_and_connected_edges(
         cx: &mut gpui::TestAppContext,
     ) {
@@ -2576,12 +2855,14 @@ mod tests {
                     node_type: "task".into(),
                     label: "Task".into(),
                     configuration: serde_json::json!({}),
+                    runtime: serde_json::json!({}),
                 },
                 WorkflowNode {
                     id: "node-2".into(),
                     node_type: "validation".into(),
                     label: "Validation".into(),
                     configuration: serde_json::json!({}),
+                    runtime: serde_json::json!({}),
                 },
             ],
             edges: vec![WorkflowEdge {
@@ -2622,6 +2903,35 @@ mod tests {
     }
 
     #[gpui::test]
+    async fn test_delete_key_does_not_delete_selected_run_node(cx: &mut gpui::TestAppContext) {
+        init_test(cx);
+
+        let task_id = Uuid::new_v4();
+        let (canvas, cx) = cx.add_window_view(|_window, cx| {
+            WorkflowCanvas::new_run(sample_run(task_id), WorkflowClient::new(), cx)
+        });
+
+        canvas.update_in(cx, |canvas, window, cx| {
+            canvas.node_types = sample_node_types();
+            canvas.selection = CanvasSelection::Node("node-1".into());
+            canvas.handle_key_down(
+                &gpui::KeyDownEvent {
+                    keystroke: gpui::Keystroke::parse("delete").unwrap(),
+                    is_held: false,
+                    prefer_character_input: false,
+                },
+                window,
+                cx,
+            );
+
+            let workflow = canvas.workflow.as_ref().unwrap();
+            assert_eq!(workflow.nodes.len(), 1);
+            assert_eq!(workflow.nodes[0].id, "node-1");
+            assert_eq!(canvas.selection, CanvasSelection::Node("node-1".into()));
+        });
+    }
+
+    #[gpui::test]
     async fn test_right_clicking_node_selects_it_and_opens_context_menu(
         cx: &mut gpui::TestAppContext,
     ) {
@@ -2637,6 +2947,7 @@ mod tests {
                 node_type: "task".into(),
                 label: "Task".into(),
                 configuration: serde_json::json!({}),
+                runtime: serde_json::json!({}),
             }],
             edges: vec![],
             node_policies: vec![],
@@ -2689,12 +3000,14 @@ mod tests {
                     node_type: "task".into(),
                     label: "Task".into(),
                     configuration: serde_json::json!({}),
+                    runtime: serde_json::json!({}),
                 },
                 WorkflowNode {
                     id: "node-2".into(),
                     node_type: "validation".into(),
                     label: "Validation".into(),
                     configuration: serde_json::json!({}),
+                    runtime: serde_json::json!({}),
                 },
             ],
             edges: vec![WorkflowEdge {

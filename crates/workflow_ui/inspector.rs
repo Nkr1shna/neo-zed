@@ -1,6 +1,7 @@
 use crate::canvas::open_workflow;
 use crate::client::{
     NodePolicy, RetryBehavior, WorkflowClient, WorkflowDefinitionRecord, WorkflowDefinitionRequest,
+    WorkflowNodeField, WorkflowNodeFieldType, WorkflowNodeType,
 };
 use crate::workflow_toolbar_icon_button;
 use editor::Editor;
@@ -11,7 +12,10 @@ use gpui::{
 use std::collections::BTreeMap;
 use std::sync::Arc;
 use std::time::Duration;
-use ui::{ContextMenu, Divider, ListItem, Tooltip, prelude::*, utils::platform_title_bar_height};
+use ui::{
+    ContextMenu, Divider, ListItem, ListItemSpacing, Tooltip, prelude::*,
+    utils::platform_title_bar_height,
+};
 use uuid::Uuid;
 use workspace::dock::{DockPosition, PanelEvent};
 use workspace::{Panel, Workspace};
@@ -118,6 +122,7 @@ pub struct WorkflowDefsView {
     )>,
     renaming_workflow_id: Option<Uuid>,
     rename_editor: gpui::Entity<Editor>,
+    pending_focus_rename_editor: bool,
     _subscriptions: Vec<Subscription>,
     _fetch_task: Option<Task<()>>,
     _mutation_task: Option<Task<()>>,
@@ -139,11 +144,13 @@ impl WorkflowDefsView {
             context_menu: None,
             renaming_workflow_id: None,
             rename_editor: cx.new(|cx| Editor::single_line(window, cx)),
+            pending_focus_rename_editor: false,
             _subscriptions: vec![],
             _fetch_task: None,
             _mutation_task: None,
         };
         view.bind_filter_editor(cx);
+        view.bind_rename_editor(cx);
         view.bind_cache(cx);
         view.fetch(cx);
         view
@@ -169,11 +176,13 @@ impl WorkflowDefsView {
             context_menu: None,
             renaming_workflow_id: None,
             rename_editor: cx.new(|cx| Editor::single_line(window, cx)),
+            pending_focus_rename_editor: false,
             _subscriptions: vec![],
             _fetch_task: None,
             _mutation_task: None,
         };
         view.bind_filter_editor(cx);
+        view.bind_rename_editor(cx);
         view.bind_cache(cx);
         view
     }
@@ -189,6 +198,29 @@ impl WorkflowDefsView {
                     }
                 }
             }),
+        );
+    }
+
+    fn bind_rename_editor(&mut self, cx: &mut Context<Self>) {
+        let rename_editor = self.rename_editor.clone();
+        self._subscriptions.push(
+            cx.subscribe(
+                &rename_editor,
+                |view: &mut Self, _, event, cx| match event {
+                    editor::EditorEvent::BufferEdited => {
+                        if view.error.is_some() {
+                            view.error = None;
+                            cx.notify();
+                        }
+                    }
+                    editor::EditorEvent::Blurred => {
+                        if view.renaming_workflow_id.is_some() {
+                            view.commit_rename(cx);
+                        }
+                    }
+                    _ => {}
+                },
+            ),
         );
     }
 
@@ -234,6 +266,14 @@ impl WorkflowDefsView {
                 false
             }
         })
+    }
+
+    pub fn is_renaming(&self) -> bool {
+        self.renaming_workflow_id.is_some()
+    }
+
+    pub fn rename_editor_is_focused(&self, window: &Window, cx: &App) -> bool {
+        self.rename_editor.read(cx).is_focused(window)
     }
 
     fn filtered_workflows(&self) -> Vec<&WorkflowDefinitionRecord> {
@@ -293,15 +333,38 @@ impl WorkflowDefsView {
         };
         self.context_menu.take();
         self.renaming_workflow_id = Some(workflow_id);
+        self.pending_focus_rename_editor = true;
         self.rename_editor.update(cx, |editor, cx| {
             editor.set_text(workflow.name.clone(), window, cx);
+            window.focus(&editor.focus_handle(cx), cx);
         });
         cx.notify();
+        cx.on_next_frame(window, |_, window, cx| {
+            cx.on_next_frame(window, |view, window, cx| {
+                if !view.pending_focus_rename_editor {
+                    return;
+                }
+
+                view.pending_focus_rename_editor = false;
+                view.rename_editor.update(cx, |editor, cx| {
+                    window.focus(&editor.focus_handle(cx), cx);
+                });
+            });
+        });
     }
 
     fn cancel_rename(&mut self, cx: &mut Context<Self>) {
         self.renaming_workflow_id = None;
+        self.pending_focus_rename_editor = false;
         cx.notify();
+    }
+
+    pub fn confirm_rename(&mut self, cx: &mut Context<Self>) {
+        self.commit_rename(cx);
+    }
+
+    pub fn cancel_active_rename(&mut self, cx: &mut Context<Self>) {
+        self.cancel_rename(cx);
     }
 
     fn replace_workflow(&mut self, workflow: WorkflowDefinitionRecord) {
@@ -322,12 +385,13 @@ impl WorkflowDefsView {
     }
 
     fn commit_rename(&mut self, cx: &mut Context<Self>) {
-        let Some(workflow_id) = self.renaming_workflow_id else {
+        let Some(workflow_id) = self.renaming_workflow_id.take() else {
             return;
         };
         let new_name = self.rename_editor.read(cx).text(cx).trim().to_string();
+        self.pending_focus_rename_editor = false;
+        self.context_menu.take();
         if new_name.is_empty() {
-            self.error = Some("Workflow name cannot be empty".to_string());
             cx.notify();
             return;
         }
@@ -341,10 +405,16 @@ impl WorkflowDefsView {
             return;
         };
 
+        if existing_workflow.name == new_name {
+            cx.notify();
+            return;
+        }
+
         self.error = None;
         let client = self.client.clone();
         let mut request = existing_workflow.to_request();
         request.name = new_name;
+        cx.notify();
 
         self._mutation_task = Some(cx.spawn(async move |this, cx| {
             let result = client.update_workflow(workflow_id, &request).await;
@@ -353,7 +423,6 @@ impl WorkflowDefsView {
                     let saved_workflow = workflow.clone();
                     this.update(cx, |view, cx| {
                         view.replace_workflow(saved_workflow);
-                        view.renaming_workflow_id = None;
                         cx.notify();
                     })
                     .ok();
@@ -440,18 +509,23 @@ impl Render for WorkflowDefsView {
         let header_height = platform_title_bar_height(_window);
         let has_query = !self.filter_editor.read(cx).text(cx).is_empty();
         let workflows = self.filtered_workflows();
+        let error_banner = (!self.loading && !self.workflows.is_empty())
+            .then(|| self.error.clone())
+            .flatten();
         let content: gpui::AnyElement = if self.loading {
             Label::new("Loading...")
                 .color(Color::Muted)
                 .into_any_element()
-        } else if let Some(ref error) = self.error {
-            Label::new(error.clone())
-                .color(Color::Error)
-                .into_any_element()
         } else if self.workflows.is_empty() {
-            Label::new("No workflows")
-                .color(Color::Muted)
-                .into_any_element()
+            if let Some(ref error) = self.error {
+                Label::new(error.clone())
+                    .color(Color::Error)
+                    .into_any_element()
+            } else {
+                Label::new("No workflows")
+                    .color(Color::Muted)
+                    .into_any_element()
+            }
         } else if workflows.is_empty() {
             Label::new("No workflows match your search.")
                 .color(Color::Muted)
@@ -459,63 +533,68 @@ impl Render for WorkflowDefsView {
         } else {
             v_flex()
                 .children(workflows.into_iter().enumerate().map(|(index, workflow)| {
+                    let item_colors = workflow_defs_item_colors(cx);
+                    let is_renaming = self.renaming_workflow_id == Some(workflow.id);
+                    let border_color = if is_renaming {
+                        item_colors.focused
+                    } else {
+                        item_colors.default
+                    };
                     let workflow_id = workflow.id.to_string();
                     let workflow_uuid = workflow.id;
                     let name = workflow.name.clone();
-                    if self.renaming_workflow_id == Some(workflow.id) {
-                        ListItem::new(index).child(
-                            h_flex()
-                                .w_full()
-                                .gap_2()
-                                .items_center()
-                                .child(self.rename_editor.clone())
-                                .child(
-                                    Button::new(
-                                        format!("save-workflow-rename-{}", workflow.id),
-                                        "Save",
-                                    )
-                                    .on_click(cx.listener(
-                                        |this, _, _window, cx| {
-                                            this.commit_rename(cx);
-                                        },
-                                    )),
-                                )
-                                .child(
-                                    Button::new(
-                                        format!("cancel-workflow-rename-{}", workflow.id),
-                                        "Cancel",
-                                    )
-                                    .style(ButtonStyle::Subtle)
-                                    .on_click(cx.listener(
-                                        |this, _, _window, cx| {
-                                            this.cancel_rename(cx);
-                                        },
-                                    )),
-                                ),
-                        )
-                    } else {
-                        ListItem::new(index)
-                            .child(Label::new(name))
-                            .on_click(move |_, window: &mut Window, cx: &mut App| {
-                                window.dispatch_action(
-                                    Box::new(OpenWorkflowDef {
-                                        id: workflow_id.clone(),
-                                    }),
-                                    cx,
-                                );
+                    div()
+                        .bg(item_colors.default)
+                        .border_1()
+                        .border_r_2()
+                        .border_color(border_color)
+                        .hover(|style| {
+                            style.bg(item_colors.hover).border_color(if is_renaming {
+                                item_colors.focused
+                            } else {
+                                item_colors.hover
                             })
-                            .on_secondary_mouse_down(cx.listener(
-                                move |this, event: &gpui::MouseDownEvent, window, cx| {
-                                    cx.stop_propagation();
-                                    this.deploy_workflow_context_menu(
-                                        workflow_uuid,
-                                        event.position,
-                                        window,
-                                        cx,
-                                    );
-                                },
-                            ))
-                    }
+                        })
+                        .child(
+                            ListItem::new(index)
+                                .spacing(ListItemSpacing::ExtraDense)
+                                .selectable(false)
+                                .start_slot(
+                                    Icon::new(IconName::WorkflowDefs)
+                                        .size(IconSize::Small)
+                                        .color(Color::Muted),
+                                )
+                                .child(if is_renaming {
+                                    h_flex()
+                                        .h_6()
+                                        .w_full()
+                                        .child(self.rename_editor.clone())
+                                        .into_any_element()
+                                } else {
+                                    Label::new(name).single_line().into_any_element()
+                                })
+                                .when(!is_renaming, |this| {
+                                    this.on_click(move |_, window: &mut Window, cx: &mut App| {
+                                        window.dispatch_action(
+                                            Box::new(OpenWorkflowDef {
+                                                id: workflow_id.clone(),
+                                            }),
+                                            cx,
+                                        );
+                                    })
+                                })
+                                .on_secondary_mouse_down(cx.listener(
+                                    move |this, event: &gpui::MouseDownEvent, window, cx| {
+                                        cx.stop_propagation();
+                                        this.deploy_workflow_context_menu(
+                                            workflow_uuid,
+                                            event.position,
+                                            window,
+                                            cx,
+                                        );
+                                    },
+                                )),
+                        )
                 }))
                 .into_any_element()
         };
@@ -581,6 +660,20 @@ impl Render for WorkflowDefsView {
                             ),
                     ),
             )
+            .when_some(error_banner, |this, error| {
+                this.child(
+                    h_flex()
+                        .mx_2()
+                        .mt_2()
+                        .rounded_sm()
+                        .border_1()
+                        .border_color(Color::Error.color(cx))
+                        .bg(cx.theme().colors().panel_background)
+                        .px_2()
+                        .py_1()
+                        .child(Label::new(error).color(Color::Error).size(LabelSize::Small)),
+                )
+            })
             .child(content)
             .children(self.context_menu.as_ref().map(|(menu, position, _)| {
                 gpui::deferred(
@@ -609,6 +702,22 @@ fn workflow_matches_query(workflow: &WorkflowDefinitionRecord, query: &str) -> b
             .is_some_and(|validation_policy| validation_policy.to_ascii_lowercase().contains(query))
 }
 
+struct WorkflowDefsItemColors {
+    default: gpui::Hsla,
+    hover: gpui::Hsla,
+    focused: gpui::Hsla,
+}
+
+fn workflow_defs_item_colors(cx: &App) -> WorkflowDefsItemColors {
+    let colors = cx.theme().colors();
+
+    WorkflowDefsItemColors {
+        default: colors.panel_background,
+        hover: colors.element_hover,
+        focused: colors.panel_focused_border,
+    }
+}
+
 enum SaveState {
     Idle,
     Saving,
@@ -616,12 +725,103 @@ enum SaveState {
     Error(String),
 }
 
+struct WorkflowNodeFieldEditor {
+    field: WorkflowNodeField,
+    editor: gpui::Entity<Editor>,
+}
+
+enum ParsedFieldUpdate {
+    Set(serde_json::Value),
+    Clear,
+    KeepExisting,
+}
+
+fn displayed_field_value(field: &WorkflowNodeField, value: Option<&serde_json::Value>) -> String {
+    let value = value.or(field.default_value.as_ref());
+    match (field.field_type, value) {
+        (_, None) => String::new(),
+        (
+            WorkflowNodeFieldType::String
+            | WorkflowNodeFieldType::Enum
+            | WorkflowNodeFieldType::Workspace
+            | WorkflowNodeFieldType::Repo
+            | WorkflowNodeFieldType::Artifact,
+            Some(value),
+        ) => value
+            .as_str()
+            .map(ToOwned::to_owned)
+            .unwrap_or_else(|| value.to_string()),
+        (WorkflowNodeFieldType::Number, Some(value)) => value.to_string(),
+        (WorkflowNodeFieldType::Boolean, Some(value)) => value
+            .as_bool()
+            .map(|value| value.to_string())
+            .unwrap_or_else(|| value.to_string()),
+    }
+}
+
+fn parse_number_value(field_text: &str) -> Option<serde_json::Value> {
+    if let Ok(value) = field_text.parse::<i64>() {
+        return Some(serde_json::json!(value));
+    }
+    if let Ok(value) = field_text.parse::<u64>() {
+        return Some(serde_json::json!(value));
+    }
+    let Ok(value) = field_text.parse::<f64>() else {
+        return None;
+    };
+    serde_json::Number::from_f64(value).map(serde_json::Value::Number)
+}
+
+fn parse_field_update(field: &WorkflowNodeField, field_text: &str) -> ParsedFieldUpdate {
+    if field_text.is_empty() {
+        return if let Some(default_value) = field.default_value.clone() {
+            ParsedFieldUpdate::Set(default_value)
+        } else if field.required {
+            ParsedFieldUpdate::KeepExisting
+        } else {
+            ParsedFieldUpdate::Clear
+        };
+    }
+
+    match field.field_type {
+        WorkflowNodeFieldType::String
+        | WorkflowNodeFieldType::Workspace
+        | WorkflowNodeFieldType::Repo
+        | WorkflowNodeFieldType::Artifact => {
+            ParsedFieldUpdate::Set(serde_json::Value::String(field_text.to_string()))
+        }
+        WorkflowNodeFieldType::Number => parse_number_value(field_text)
+            .map(ParsedFieldUpdate::Set)
+            .unwrap_or(ParsedFieldUpdate::KeepExisting),
+        WorkflowNodeFieldType::Boolean => match field_text.to_ascii_lowercase().as_str() {
+            "true" => ParsedFieldUpdate::Set(serde_json::Value::Bool(true)),
+            "false" => ParsedFieldUpdate::Set(serde_json::Value::Bool(false)),
+            _ => ParsedFieldUpdate::KeepExisting,
+        },
+        WorkflowNodeFieldType::Enum => {
+            if field.options.is_empty()
+                || field
+                    .options
+                    .iter()
+                    .any(|option| option.value == field_text)
+            {
+                ParsedFieldUpdate::Set(serde_json::Value::String(field_text.to_string()))
+            } else {
+                ParsedFieldUpdate::KeepExisting
+            }
+        }
+    }
+}
+
 pub struct NodeInspectorPanel {
     workflow: Option<WorkflowDefinitionRecord>,
     active_canvas: Option<gpui::WeakEntity<crate::canvas::WorkflowCanvas>>,
+    node_types: Vec<WorkflowNodeType>,
     selected_node_id: Option<String>,
     focus_handle: FocusHandle,
     label_editor: gpui::Entity<Editor>,
+    configure_time_field_editors: BTreeMap<String, WorkflowNodeFieldEditor>,
+    runtime_fields: Vec<WorkflowNodeField>,
     required_reviews_editor: gpui::Entity<Editor>,
     required_checks_editor: gpui::Entity<Editor>,
     max_attempts_editor: gpui::Entity<Editor>,
@@ -630,6 +830,7 @@ pub struct NodeInspectorPanel {
     save_state: SaveState,
     client: Arc<WorkflowClient>,
     position: DockPosition,
+    _node_types_task: Option<Task<()>>,
     _save_task: Option<Task<()>>,
     _subscriptions: Vec<gpui::Subscription>,
 }
@@ -642,12 +843,15 @@ impl NodeInspectorPanel {
         let max_attempts_editor = cx.new(|cx| Editor::single_line(window, cx));
         let backoff_ms_editor = cx.new(|cx| Editor::single_line(window, cx));
 
-        Self {
+        let mut panel = Self {
             workflow: None,
             active_canvas: None,
+            node_types: Vec::new(),
             selected_node_id: None,
             focus_handle: cx.focus_handle(),
             label_editor,
+            configure_time_field_editors: BTreeMap::new(),
+            runtime_fields: Vec::new(),
             required_reviews_editor,
             required_checks_editor,
             max_attempts_editor,
@@ -656,9 +860,12 @@ impl NodeInspectorPanel {
             save_state: SaveState::Idle,
             client,
             position: DockPosition::Right,
+            _node_types_task: None,
             _save_task: None,
             _subscriptions: Vec::new(),
-        }
+        };
+        panel.start_loading_node_types(window, cx);
+        panel
     }
 
     pub fn set_active_canvas(&mut self, canvas: &gpui::Entity<crate::canvas::WorkflowCanvas>) {
@@ -668,6 +875,8 @@ impl NodeInspectorPanel {
     pub fn set_workflow(&mut self, workflow: WorkflowDefinitionRecord, cx: &mut Context<Self>) {
         self.workflow = Some(workflow);
         self.selected_node_id = None;
+        self.configure_time_field_editors.clear();
+        self.runtime_fields.clear();
         self.is_dirty = false;
         cx.notify();
     }
@@ -681,11 +890,15 @@ impl NodeInspectorPanel {
         self.selected_node_id = node_id.clone();
 
         let Some(ref node_id) = node_id else {
+            self.configure_time_field_editors.clear();
+            self.runtime_fields.clear();
             cx.notify();
             return;
         };
 
         let Some(ref workflow) = self.workflow else {
+            self.configure_time_field_editors.clear();
+            self.runtime_fields.clear();
             cx.notify();
             return;
         };
@@ -724,6 +937,8 @@ impl NodeInspectorPanel {
             });
         }
 
+        self.refresh_configure_time_fields(window, cx);
+
         cx.notify();
     }
 
@@ -734,6 +949,72 @@ impl NodeInspectorPanel {
             required_checks: Vec::new(),
             retry_behavior: RetryBehavior::default(),
             validation_policy_ref: None,
+        }
+    }
+
+    fn start_loading_node_types(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        let client = self.client.clone();
+        self._node_types_task = Some(cx.spawn_in(window, async move |this, cx| {
+            let Ok(node_types) = client.list_workflow_node_types().await else {
+                return;
+            };
+
+            this.update_in(cx, |panel, window, cx| {
+                panel.node_types = node_types;
+                panel.refresh_configure_time_fields(window, cx);
+                cx.notify();
+            })
+            .ok();
+        }));
+    }
+
+    fn selected_node_type(&self) -> Option<WorkflowNodeType> {
+        let selected_node_id = self.selected_node_id.as_ref()?;
+        let workflow = self.workflow.as_ref()?;
+        let node = workflow
+            .nodes
+            .iter()
+            .find(|node| &node.id == selected_node_id)?;
+        self.node_types
+            .iter()
+            .find(|node_type| node_type.id == node.node_type)
+            .cloned()
+    }
+
+    fn refresh_configure_time_fields(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        self.configure_time_field_editors.clear();
+        self.runtime_fields.clear();
+
+        let Some(selected_node_id) = self.selected_node_id.as_ref() else {
+            return;
+        };
+        let Some(workflow) = self.workflow.as_ref() else {
+            return;
+        };
+        let Some(node) = workflow
+            .nodes
+            .iter()
+            .find(|node| &node.id == selected_node_id)
+        else {
+            return;
+        };
+        let Some(node_type) = self.selected_node_type() else {
+            return;
+        };
+
+        self.runtime_fields = node_type.runtime_fields.clone();
+        for field in node_type.configure_time_fields {
+            let editor = cx.new(|cx| {
+                let mut editor = Editor::single_line(window, cx);
+                editor.set_placeholder_text(&field.label, window, cx);
+                editor
+            });
+            let initial_text = displayed_field_value(&field, node.configuration.get(&field.key));
+            editor.update(cx, |editor, cx| {
+                editor.set_text(initial_text.clone(), window, cx);
+            });
+            self.configure_time_field_editors
+                .insert(field.key.clone(), WorkflowNodeFieldEditor { field, editor });
         }
     }
 
@@ -773,6 +1054,24 @@ impl NodeInspectorPanel {
             && !label.is_empty()
         {
             node.label = label;
+            let mut configuration = node
+                .configuration
+                .as_object()
+                .cloned()
+                .unwrap_or_else(serde_json::Map::new);
+            for (field_key, field_editor) in &self.configure_time_field_editors {
+                let field_text = field_editor.editor.read(cx).text(cx).trim().to_string();
+                match parse_field_update(&field_editor.field, &field_text) {
+                    ParsedFieldUpdate::Set(value) => {
+                        configuration.insert(field_key.clone(), value);
+                    }
+                    ParsedFieldUpdate::Clear => {
+                        configuration.remove(field_key);
+                    }
+                    ParsedFieldUpdate::KeepExisting => {}
+                }
+            }
+            node.configuration = serde_json::Value::Object(configuration);
         }
 
         let existing_policy = workflow.policy_for(&selected_node_id).cloned();
@@ -965,6 +1264,7 @@ impl Render for NodeInspectorPanel {
                 .child(Label::new("Select a node to inspect").color(Color::Muted))
                 .into_any_element()
         } else {
+            let selected_node_type = self.selected_node_type();
             let save_label: SharedString = match &self.save_state {
                 SaveState::Idle => "Save".into(),
                 SaveState::Saving => "Saving...".into(),
@@ -1003,6 +1303,84 @@ impl Render for NodeInspectorPanel {
                         )
                         .child(self.label_editor.clone()),
                 )
+                .when_some(selected_node_type.as_ref(), |this, node_type| {
+                    this.child(
+                        v_flex()
+                            .gap_0p5()
+                            .child(
+                                Label::new("Node Definition")
+                                    .size(LabelSize::Small)
+                                    .color(Color::Muted),
+                            )
+                            .child(Label::new(node_type.label.clone()))
+                            .child(
+                                Label::new(node_type.primitive_kind().display_name())
+                                    .size(LabelSize::Small)
+                                    .color(Color::Muted),
+                            ),
+                    )
+                })
+                .when(!self.configure_time_field_editors.is_empty(), |this| {
+                    this.child(
+                        v_flex()
+                            .gap_1()
+                            .child(
+                                Label::new("Configure-Time Fields")
+                                    .size(LabelSize::Small)
+                                    .color(Color::Muted),
+                            )
+                            .children(self.configure_time_field_editors.values().map(
+                                |field_editor| {
+                                    let field_label = if field_editor.field.required {
+                                        format!(
+                                            "{} ({})*",
+                                            field_editor.field.label,
+                                            field_editor.field.field_type.display_name()
+                                        )
+                                    } else {
+                                        format!(
+                                            "{} ({})",
+                                            field_editor.field.label,
+                                            field_editor.field.field_type.display_name()
+                                        )
+                                    };
+                                    v_flex()
+                                        .gap_1()
+                                        .child(
+                                            Label::new(field_label)
+                                                .size(LabelSize::Small)
+                                                .color(Color::Muted),
+                                        )
+                                        .child(field_editor.editor.clone())
+                                },
+                            )),
+                    )
+                })
+                .when(!self.runtime_fields.is_empty(), |this| {
+                    this.child(
+                        v_flex()
+                            .gap_1()
+                            .child(
+                                Label::new("Runtime Fields")
+                                    .size(LabelSize::Small)
+                                    .color(Color::Muted),
+                            )
+                            .children(self.runtime_fields.iter().map(|field| {
+                                let field_label = if field.required {
+                                    format!(
+                                        "{} ({})*",
+                                        field.label,
+                                        field.field_type.display_name()
+                                    )
+                                } else {
+                                    format!("{} ({})", field.label, field.field_type.display_name())
+                                };
+                                Label::new(field_label)
+                                    .size(LabelSize::Small)
+                                    .color(Color::Muted)
+                            })),
+                    )
+                })
                 .child(
                     v_flex()
                         .gap_1()
@@ -1131,9 +1509,13 @@ mod tests {
             name: "Workflow".into(),
             nodes: vec![crate::client::WorkflowNode {
                 id: "node-1".into(),
-                node_type: "task".into(),
+                node_type: "summarize".into(),
                 label: "Default Label".into(),
-                configuration: serde_json::json!({}),
+                configuration: serde_json::json!({
+                    "model": "gpt-5.1",
+                    "stream": false,
+                }),
+                runtime: serde_json::json!({}),
             }],
             edges: vec![],
             node_policies: vec![],
@@ -1185,6 +1567,49 @@ mod tests {
             *canvas_holder_for_view.borrow_mut() = Some(canvas.clone());
 
             let mut panel = NodeInspectorPanel::new(WorkflowClient::new(), window, cx);
+            panel.node_types = vec![crate::client::WorkflowNodeType {
+                id: "summarize".into(),
+                label: "Summarize".into(),
+                primitive: Some(crate::client::WorkflowNodePrimitive::Llm),
+                category: None,
+                is_primitive: false,
+                inputs: vec![],
+                outputs: vec![],
+                configure_time_fields: vec![
+                    crate::client::WorkflowNodeField {
+                        key: "model".into(),
+                        label: "Model".into(),
+                        field_type: crate::client::WorkflowNodeFieldType::String,
+                        required: true,
+                        default_value: Some(serde_json::json!("gpt-5.1")),
+                        options: vec![],
+                    },
+                    crate::client::WorkflowNodeField {
+                        key: "max_tokens".into(),
+                        label: "Max Tokens".into(),
+                        field_type: crate::client::WorkflowNodeFieldType::Number,
+                        required: false,
+                        default_value: None,
+                        options: vec![],
+                    },
+                    crate::client::WorkflowNodeField {
+                        key: "stream".into(),
+                        label: "Stream".into(),
+                        field_type: crate::client::WorkflowNodeFieldType::Boolean,
+                        required: false,
+                        default_value: Some(serde_json::json!(false)),
+                        options: vec![],
+                    },
+                ],
+                runtime_fields: vec![crate::client::WorkflowNodeField {
+                    key: "response_text".into(),
+                    label: "Response Text".into(),
+                    field_type: crate::client::WorkflowNodeFieldType::String,
+                    required: false,
+                    default_value: None,
+                    options: vec![],
+                }],
+            }];
             panel.set_active_canvas(&canvas);
             panel.set_workflow(workflow.clone(), cx);
             panel.set_node(Some("node-1".into()), window, cx);
@@ -1207,6 +1632,30 @@ mod tests {
             panel.backoff_ms_editor.update(cx, |editor, cx| {
                 editor.set_text("2500", window, cx);
             });
+            panel
+                .configure_time_field_editors
+                .get("model")
+                .unwrap()
+                .editor
+                .update(cx, |editor, cx| {
+                    editor.set_text("gpt-5.2", window, cx);
+                });
+            panel
+                .configure_time_field_editors
+                .get("max_tokens")
+                .unwrap()
+                .editor
+                .update(cx, |editor, cx| {
+                    editor.set_text("4096", window, cx);
+                });
+            panel
+                .configure_time_field_editors
+                .get("stream")
+                .unwrap()
+                .editor
+                .update(cx, |editor, cx| {
+                    editor.set_text("true", window, cx);
+                });
 
             panel.apply_pending_node_edits(cx);
             panel.set_node(None, window, cx);
@@ -1225,6 +1674,9 @@ mod tests {
                 .find(|node| node.id == "node-1")
                 .unwrap();
             assert_eq!(node.label, "Saved Label");
+            assert_eq!(node.configuration["model"], "gpt-5.2");
+            assert_eq!(node.configuration["max_tokens"], 4096);
+            assert_eq!(node.configuration["stream"], true);
             let policy = workflow.policy_for("node-1").unwrap();
             assert_eq!(policy.required_reviews, 2);
             assert_eq!(policy.required_checks, vec!["lint", "test"]);
@@ -1241,6 +1693,9 @@ mod tests {
                 .find(|node| node.id == "node-1")
                 .unwrap();
             assert_eq!(node.label, "Saved Label");
+            assert_eq!(node.configuration["model"], "gpt-5.2");
+            assert_eq!(node.configuration["max_tokens"], 4096);
+            assert_eq!(node.configuration["stream"], true);
             let policy = workflow.policy_for("node-1").unwrap();
             assert_eq!(policy.required_reviews, 2);
             assert_eq!(policy.required_checks, vec!["lint", "test"]);
@@ -1309,6 +1764,59 @@ mod tests {
                 "Renamed Alpha"
             );
             assert_eq!(view.renaming_workflow_id, None);
+        });
+    }
+
+    #[gpui::test]
+    async fn test_begin_rename_focuses_editor_like_project_panel(cx: &mut gpui::TestAppContext) {
+        init_test(cx);
+
+        let workflows = sample_sidebar_workflows();
+        let workflow_to_rename = workflows[0].id;
+
+        let (view, cx) = cx.add_window_view(|window, cx| {
+            let mut view = WorkflowDefsView::new_for_test(
+                WorkflowClient::with_base_url("http://localhost:9".into()),
+                window,
+                cx,
+            );
+            view.workflows = workflows.clone();
+            view
+        });
+
+        view.update_in(cx, |view, window, cx| {
+            view.begin_rename_workflow(workflow_to_rename, window, cx);
+        });
+        cx.run_until_parked();
+
+        view.update_in(cx, |view, window, cx| {
+            assert!(view.rename_editor.read(cx).is_focused(window));
+        });
+    }
+
+    #[gpui::test]
+    async fn test_confirm_rename_clears_inline_rename_state(cx: &mut gpui::TestAppContext) {
+        init_test(cx);
+
+        let workflows = sample_sidebar_workflows();
+        let workflow_to_rename = workflows[0].id;
+
+        let (view, cx) = cx.add_window_view(|window, cx| {
+            let mut view = WorkflowDefsView::new_for_test(
+                WorkflowClient::with_base_url("http://localhost:9".into()),
+                window,
+                cx,
+            );
+            view.workflows = workflows.clone();
+            view
+        });
+
+        view.update_in(cx, |view, window, cx| {
+            view.begin_rename_workflow(workflow_to_rename, window, cx);
+            view.confirm_rename(cx);
+
+            assert_eq!(view.renaming_workflow_id, None);
+            assert!(!view.pending_focus_rename_editor);
         });
     }
 

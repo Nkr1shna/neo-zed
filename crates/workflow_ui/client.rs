@@ -5,7 +5,7 @@ use anyhow::{Context, Result, anyhow};
 use futures::AsyncReadExt;
 use http_client::{AsyncBody, HttpClient as _, HttpClientWithUrl, Method, Request};
 use reqwest_client::ReqwestClient;
-use serde::{Deserialize, Serialize};
+use serde::{Deserialize, Deserializer, Serialize};
 use uuid::Uuid;
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -37,6 +37,73 @@ impl WorkflowNodeTypeCategory {
     }
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum WorkflowNodePrimitive {
+    Llm,
+    ExecuteShellCommand,
+    Conditional,
+}
+
+impl WorkflowNodePrimitive {
+    pub fn display_name(&self) -> &'static str {
+        match self {
+            WorkflowNodePrimitive::Llm => "LLM",
+            WorkflowNodePrimitive::ExecuteShellCommand => "Execute Shell Command",
+            WorkflowNodePrimitive::Conditional => "Conditional",
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum WorkflowNodeFieldType {
+    #[serde(alias = "text")]
+    String,
+    Number,
+    Boolean,
+    Enum,
+    Workspace,
+    Repo,
+    Artifact,
+}
+
+impl WorkflowNodeFieldType {
+    pub fn display_name(&self) -> &'static str {
+        match self {
+            WorkflowNodeFieldType::String => "Text",
+            WorkflowNodeFieldType::Number => "Number",
+            WorkflowNodeFieldType::Boolean => "Boolean",
+            WorkflowNodeFieldType::Enum => "Enum",
+            WorkflowNodeFieldType::Workspace => "Workspace",
+            WorkflowNodeFieldType::Repo => "Repository",
+            WorkflowNodeFieldType::Artifact => "Artifact",
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct WorkflowNodeFieldOption {
+    pub value: String,
+    #[serde(default)]
+    pub label: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct WorkflowNodeField {
+    #[serde(alias = "id")]
+    pub key: String,
+    pub label: String,
+    #[serde(alias = "kind")]
+    pub field_type: WorkflowNodeFieldType,
+    #[serde(default)]
+    pub required: bool,
+    #[serde(default)]
+    pub default_value: Option<serde_json::Value>,
+    #[serde(default, deserialize_with = "deserialize_workflow_node_field_options")]
+    pub options: Vec<WorkflowNodeFieldOption>,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct WorkflowNodePort {
     pub id: String,
@@ -47,9 +114,24 @@ pub struct WorkflowNodePort {
 pub struct WorkflowNodeType {
     pub id: String,
     pub label: String,
-    pub category: WorkflowNodeTypeCategory,
+    #[serde(default)]
+    pub primitive: Option<WorkflowNodePrimitive>,
+    #[serde(default)]
+    pub category: Option<WorkflowNodeTypeCategory>,
+    #[serde(default)]
+    pub is_primitive: bool,
     pub inputs: Vec<WorkflowNodePort>,
     pub outputs: Vec<WorkflowNodePort>,
+    #[serde(default)]
+    pub configure_time_fields: Vec<WorkflowNodeField>,
+    #[serde(default)]
+    pub runtime_fields: Vec<WorkflowNodeField>,
+}
+
+impl WorkflowNodeType {
+    pub fn primitive_kind(&self) -> WorkflowNodePrimitive {
+        infer_workflow_node_primitive(&self.id, self.category.as_ref(), self.primitive)
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -85,8 +167,10 @@ pub struct WorkflowNode {
     #[serde(alias = "kind")]
     pub node_type: String,
     pub label: String,
-    #[serde(default = "default_json_object", alias = "config")]
+    #[serde(default = "default_json_object", alias = "config", alias = "configure_time")]
     pub configuration: serde_json::Value,
+    #[serde(default = "default_json_object")]
+    pub runtime: serde_json::Value,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -189,11 +273,22 @@ pub struct TaskRecord {
 pub struct TaskNodeStatus {
     pub id: String,
     pub node_type: String,
-    pub category: WorkflowNodeTypeCategory,
+    #[serde(default)]
+    pub primitive: Option<WorkflowNodePrimitive>,
+    #[serde(default)]
+    pub category: Option<WorkflowNodeTypeCategory>,
     pub label: String,
     pub status: TaskLifecycleStatus,
     pub output: Option<String>,
     pub session_id: Option<String>,
+    #[serde(default)]
+    pub artifacts: BTreeMap<String, serde_json::Value>,
+}
+
+impl TaskNodeStatus {
+    pub fn primitive_kind(&self) -> WorkflowNodePrimitive {
+        infer_workflow_node_primitive(&self.node_type, self.category.as_ref(), self.primitive)
+    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -220,6 +315,55 @@ pub struct TaskNodeConversationResponse {
 
 fn default_json_object() -> serde_json::Value {
     serde_json::json!({})
+}
+
+fn deserialize_workflow_node_field_options<'de, D>(
+    deserializer: D,
+) -> Result<Vec<WorkflowNodeFieldOption>, D::Error>
+where
+    D: Deserializer<'de>,
+{
+    let raw_values = Vec::<serde_json::Value>::deserialize(deserializer)?;
+    raw_values
+        .into_iter()
+        .map(|value| match value {
+            serde_json::Value::String(option) => Ok(WorkflowNodeFieldOption {
+                label: option.clone(),
+                value: option,
+            }),
+            serde_json::Value::Object(_) => serde_json::from_value(value)
+                .map_err(serde::de::Error::custom),
+            other => Err(serde::de::Error::custom(format!(
+                "unsupported workflow node field option: {other}"
+            ))),
+        })
+        .collect()
+}
+
+pub(crate) fn infer_workflow_node_primitive(
+    node_type_id: &str,
+    legacy_category: Option<&WorkflowNodeTypeCategory>,
+    explicit_primitive: Option<WorkflowNodePrimitive>,
+) -> WorkflowNodePrimitive {
+    if let Some(explicit_primitive) = explicit_primitive {
+        return explicit_primitive;
+    }
+
+    if let Some(legacy_category) = legacy_category {
+        return match legacy_category {
+            WorkflowNodeTypeCategory::Task | WorkflowNodeTypeCategory::Review => {
+                WorkflowNodePrimitive::Llm
+            }
+            WorkflowNodeTypeCategory::Validation => WorkflowNodePrimitive::Conditional,
+            WorkflowNodeTypeCategory::Integration => WorkflowNodePrimitive::ExecuteShellCommand,
+        };
+    }
+
+    match node_type_id {
+        "execute_shell_command" | "integration" => WorkflowNodePrimitive::ExecuteShellCommand,
+        "conditional" | "validation" => WorkflowNodePrimitive::Conditional,
+        _ => WorkflowNodePrimitive::Llm,
+    }
 }
 
 pub struct WorkflowClient {
@@ -504,6 +648,7 @@ mod tests {
                 configuration: serde_json::json!({
                     "repo": "example/runtime",
                 }),
+                runtime: serde_json::json!({}),
             }],
             edges: vec![],
             node_policies: vec![],
@@ -527,6 +672,54 @@ mod tests {
     fn test_workflow_node_type_deserialization() {
         let node_types: Vec<WorkflowNodeType> = serde_json::from_value(serde_json::json!([
             {
+                "id": "summarize",
+                "label": "Summarize",
+                "primitive": "llm",
+                "inputs": [{"id": "default", "label": "Input"}],
+                "outputs": [{"id": "success", "label": "Success"}],
+                "configure_time_fields": [
+                    {
+                        "key": "model",
+                        "label": "Model",
+                        "field_type": "string",
+                        "required": true,
+                        "default_value": "gpt-5.1"
+                    },
+                    {
+                        "key": "max_tokens",
+                        "label": "Max Tokens",
+                        "field_type": "number"
+                    }
+                ],
+                "runtime_fields": [
+                    {
+                        "key": "response_text",
+                        "label": "Response Text",
+                        "field_type": "string"
+                    }
+                ]
+            }
+        ]))
+        .unwrap();
+
+        assert_eq!(node_types.len(), 1);
+        assert_eq!(node_types[0].id, "summarize");
+        assert_eq!(node_types[0].primitive_kind(), WorkflowNodePrimitive::Llm);
+        assert_eq!(node_types[0].category, None);
+        assert_eq!(node_types[0].inputs[0].id, "default");
+        assert_eq!(node_types[0].outputs[0].id, "success");
+        assert_eq!(node_types[0].configure_time_fields.len(), 2);
+        assert_eq!(
+            node_types[0].configure_time_fields[0].field_type,
+            WorkflowNodeFieldType::String
+        );
+        assert_eq!(node_types[0].runtime_fields.len(), 1);
+    }
+
+    #[test]
+    fn test_workflow_node_type_deserialization_supports_legacy_category_catalog() {
+        let node_types: Vec<WorkflowNodeType> = serde_json::from_value(serde_json::json!([
+            {
                 "id": "task",
                 "label": "Task",
                 "category": "task",
@@ -537,10 +730,8 @@ mod tests {
         .unwrap();
 
         assert_eq!(node_types.len(), 1);
-        assert_eq!(node_types[0].id, "task");
-        assert_eq!(node_types[0].category, WorkflowNodeTypeCategory::Task);
-        assert_eq!(node_types[0].inputs[0].id, "default");
-        assert_eq!(node_types[0].outputs[0].id, "success");
+        assert_eq!(node_types[0].primitive_kind(), WorkflowNodePrimitive::Llm);
+        assert_eq!(node_types[0].category, Some(WorkflowNodeTypeCategory::Task));
     }
 
     #[test]
