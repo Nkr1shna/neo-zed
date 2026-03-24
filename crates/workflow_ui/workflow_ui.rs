@@ -4,6 +4,7 @@ mod inspector;
 mod picker;
 mod runs;
 
+pub use canvas::{open_run, open_workflow, CanvasSelection, WorkflowCanvas, WorkflowCanvasEvent};
 pub use client::{
     NodePolicy, RetryBehavior, TaskLifecycleStatus, TaskNodeStatus, TaskRecord, TaskStatusResponse,
     WorkflowClient, WorkflowDefinitionRecord, WorkflowDefinitionRequest, WorkflowEdge,
