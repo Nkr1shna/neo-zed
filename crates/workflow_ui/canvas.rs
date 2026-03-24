@@ -1214,14 +1214,15 @@ fn paint_port_labels(
             underline: None,
             strikethrough: None,
         };
+        let layout_line =
+            window
+                .text_system()
+                .layout_line(&label_text, font_size, &[run.clone()], None);
         let shaped = window
             .text_system()
             .shape_line(label_text, font_size, &[run], None);
-        let label_x = if input_side {
-            pos.x + PORT_LABEL_X_INSET_F
-        } else {
-            pos.x + NODE_WIDTH_F - PORT_LABEL_X_INSET_F
-        };
+        let label_width_canvas = layout_line.width.as_f32() / layout.zoom;
+        let label_x = port_label_canvas_x(pos, input_side, label_width_canvas);
         let label_y = port_y - font_size.as_f32() / layout.zoom / 2.0;
         let label_origin = to_screen_point(layout, label_x, label_y, origin);
         let line_height = font_size * 1.4;
@@ -1230,11 +1231,7 @@ fn paint_port_labels(
             .paint(
                 label_origin,
                 line_height,
-                if input_side {
-                    gpui::TextAlign::Left
-                } else {
-                    gpui::TextAlign::Right
-                },
+                gpui::TextAlign::Left,
                 None,
                 window,
                 cx,
@@ -1545,6 +1542,14 @@ fn port_canvas_position(
         pos.x + NODE_WIDTH_F
     };
     (port_x, port_y)
+}
+
+fn port_label_canvas_x(pos: &NodePos, input_side: bool, label_width_canvas: f32) -> f32 {
+    if input_side {
+        pos.x + PORT_LABEL_X_INSET_F
+    } else {
+        pos.x + NODE_WIDTH_F - PORT_LABEL_X_INSET_F - label_width_canvas
+    }
 }
 
 fn workflow_node_by_id<'a>(
@@ -2827,6 +2832,16 @@ mod tests {
 
         assert!(first.1 >= 48.0);
         assert!(second.1 - first.1 >= 24.0);
+    }
+
+    #[test]
+    fn test_output_port_labels_are_positioned_inside_the_node() {
+        let pos = NodePos { x: 40.0, y: 40.0 };
+        let label_width = 64.0;
+        let label_x = port_label_canvas_x(&pos, false, label_width);
+
+        assert!(label_x >= pos.x);
+        assert!(label_x + label_width <= pos.x + NODE_WIDTH_F - PORT_LABEL_X_INSET_F + 0.1);
     }
 
     #[test]
