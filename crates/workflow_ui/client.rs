@@ -295,6 +295,8 @@ impl TaskNodeStatus {
 pub struct TaskStatusResponse {
     pub task: TaskRecord,
     pub workflow: Option<WorkflowDefinitionRecord>,
+    #[serde(default)]
+    pub workspace_path: Option<String>,
     pub nodes: Vec<TaskNodeStatus>,
     pub outcome: Option<serde_json::Value>,
     pub agent: Option<serde_json::Value>,
@@ -310,6 +312,8 @@ pub struct TaskNodeConversationResponse {
     pub task_id: Uuid,
     pub node_id: String,
     pub session_id: String,
+    #[serde(default)]
+    pub workspace_path: Option<String>,
     pub markdown: String,
 }
 
@@ -372,7 +376,10 @@ pub struct WorkflowClient {
 
 impl WorkflowClient {
     pub fn new() -> Arc<Self> {
-        Self::with_base_url("http://localhost:3000".to_string())
+        Self::with_base_url(
+            std::env::var("NEO_ZED_RUNTIME_URL")
+                .unwrap_or_else(|_| "http://localhost:3000".to_string()),
+        )
     }
 
     pub fn with_base_url(base_url: String) -> Arc<Self> {

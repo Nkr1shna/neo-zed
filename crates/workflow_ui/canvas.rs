@@ -11,8 +11,10 @@ use gpui::{
 };
 use multi_buffer::MultiBuffer;
 use std::collections::HashMap;
+use std::path::PathBuf;
 use std::sync::Arc;
 use ui::{ActiveTheme, ContextMenu};
+use util::path_list::PathList;
 use util::ResultExt;
 use uuid::Uuid;
 use workspace::{Toast, Workspace, notifications::NotificationId};
@@ -1939,12 +1941,14 @@ fn open_run_node_conversation(
                 Ok(conversation) => {
                     workspace.update_in(cx, |workspace, window, cx| {
                         let title = format!("{run_title} / {} - conversation", node.label);
+                        let work_dirs =
+                            conversation_work_dirs(conversation.workspace_path.as_deref());
 
                         if try_open_run_node_in_center(&conversation.session_id, |session_id| {
                             agent_ui::open_thread_in_center(
                                 workspace,
                                 agent_client_protocol::SessionId::new(session_id.to_string()),
-                                None,
+                                work_dirs.clone(),
                                 Some(title.clone().into()),
                                 window,
                                 cx,
@@ -1996,6 +2000,15 @@ fn try_open_run_node_in_center(
     }
 
     open_thread_in_center(session_id)
+}
+
+fn conversation_work_dirs(workspace_path: Option<&str>) -> Option<PathList> {
+    let workspace_path = workspace_path?.trim();
+    if workspace_path.is_empty() {
+        return None;
+    }
+
+    Some(PathList::new(&[PathBuf::from(workspace_path)]))
 }
 
 fn open_markdown_conversation(
@@ -2101,6 +2114,7 @@ mod tests {
                 validation_policy_ref: None,
                 trigger_metadata: Default::default(),
             }),
+            workspace_path: Some("/tmp/demo".into()),
             nodes: vec![crate::client::TaskNodeStatus {
                 id: "node-1".into(),
                 node_type: "task".into(),
@@ -2261,6 +2275,7 @@ mod tests {
                 task_description: None,
             },
             workflow: None,
+            workspace_path: Some("/tmp/demo".into()),
             nodes: vec![crate::client::TaskNodeStatus {
                 id: "node-1".into(),
                 node_type: "task".into(),
@@ -2299,6 +2314,7 @@ mod tests {
                 task_description: None,
             },
             workflow: None,
+            workspace_path: Some("/tmp/demo".into()),
             nodes: vec![crate::client::TaskNodeStatus {
                 id: "node-1".into(),
                 node_type: "task".into(),
@@ -2363,6 +2379,16 @@ mod tests {
 
         assert!(opened);
         assert_eq!(received_session_id.as_deref(), Some("session-1"));
+    }
+
+    #[test]
+    fn test_conversation_work_dirs_uses_workspace_path() {
+        let work_dirs = conversation_work_dirs(Some(" /workspaces/task-1/workspace "));
+
+        assert_eq!(
+            work_dirs.unwrap().ordered_paths().collect::<Vec<_>>(),
+            vec![&std::path::PathBuf::from("/workspaces/task-1/workspace")]
+        );
     }
 
     #[test]

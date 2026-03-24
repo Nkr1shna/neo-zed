@@ -313,6 +313,7 @@ fn fallback_task_status(
     TaskStatusResponse {
         task,
         workflow: Some(workflow),
+        workspace_path: None,
         nodes: Vec::new(),
         outcome: None,
         agent: None,
