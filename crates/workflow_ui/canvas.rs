@@ -6,8 +6,8 @@ use crate::client::{
 use crate::inspector::{NodeInspectorPanel, upsert_workflow_def_cache};
 use editor::Editor;
 use gpui::{
-    App, AppContext, Context, Corner, DismissEvent, FocusHandle, Focusable, Pixels, Point,
-    Subscription, Task, Window, WindowHandle, px,
+    App, AppContext, Context, Corner, DismissEvent, FocusHandle, Focusable, PinchEvent, Pixels,
+    Point, Subscription, Task, Window, WindowHandle, px,
 };
 use multi_buffer::MultiBuffer;
 use recent_projects::open_remote_project;
@@ -722,21 +722,19 @@ impl WorkflowCanvas {
         let delta = event.delta.pixel_delta(px(20.0));
         if event.modifiers.platform {
             let zoom_delta = 1.0 + delta.y.as_f32() * 0.01;
-            let new_zoom = (self.layout.zoom * zoom_delta).clamp(0.1, 5.0);
-            let mouse_canvas_x = (event.position.x - origin.x).as_f32() / self.layout.zoom
-                - self.layout.viewport_offset.0;
-            let mouse_canvas_y = (event.position.y - origin.y).as_f32() / self.layout.zoom
-                - self.layout.viewport_offset.1;
-            self.layout.zoom = new_zoom;
-            self.layout.viewport_offset = (
-                (event.position.x - origin.x).as_f32() / new_zoom - mouse_canvas_x,
-                (event.position.y - origin.y).as_f32() / new_zoom - mouse_canvas_y,
-            );
+            apply_canvas_zoom_at_position(&mut self.layout, origin, event.position, zoom_delta);
         } else {
             let z = self.layout.zoom;
             self.layout.viewport_offset.0 += delta.x.as_f32() / z;
             self.layout.viewport_offset.1 += delta.y.as_f32() / z;
         }
+        cx.notify();
+    }
+
+    fn handle_pinch(&mut self, event: &PinchEvent, _window: &mut Window, cx: &mut Context<Self>) {
+        let origin = self.canvas_origin();
+        let zoom_factor = 1.0 + event.delta;
+        apply_canvas_zoom_at_position(&mut self.layout, origin, event.position, zoom_factor);
         cx.notify();
     }
 
@@ -1552,6 +1550,25 @@ fn port_label_canvas_x(pos: &NodePos, input_side: bool, label_width_canvas: f32)
     }
 }
 
+fn apply_canvas_zoom_at_position(
+    layout: &mut CanvasLayout,
+    origin: Point<Pixels>,
+    position: Point<Pixels>,
+    zoom_factor: f32,
+) {
+    let zoom_factor = zoom_factor.max(0.01);
+    let previous_zoom = layout.zoom.max(0.1);
+    let next_zoom = (previous_zoom * zoom_factor).clamp(0.1, 5.0);
+    let canvas_x = (position.x - origin.x).as_f32() / previous_zoom - layout.viewport_offset.0;
+    let canvas_y = (position.y - origin.y).as_f32() / previous_zoom - layout.viewport_offset.1;
+
+    layout.zoom = next_zoom;
+    layout.viewport_offset = (
+        (position.x - origin.x).as_f32() / next_zoom - canvas_x,
+        (position.y - origin.y).as_f32() / next_zoom - canvas_y,
+    );
+}
+
 fn workflow_node_by_id<'a>(
     workflow: &'a WorkflowDefinitionRecord,
     node_id: &str,
@@ -1835,6 +1852,7 @@ impl gpui::Render for WorkflowCanvas {
             .on_mouse_move(cx.listener(Self::handle_mouse_move))
             .on_mouse_up(gpui::MouseButton::Left, cx.listener(Self::handle_mouse_up))
             .on_scroll_wheel(cx.listener(Self::handle_scroll_wheel))
+            .on_pinch(cx.listener(Self::handle_pinch))
             .on_key_down(cx.listener(Self::handle_key_down))
             .children(self.context_menu.as_ref().map(|(menu, position, _)| {
                 gpui::deferred(
@@ -2842,6 +2860,21 @@ mod tests {
 
         assert!(label_x >= pos.x);
         assert!(label_x + label_width <= pos.x + NODE_WIDTH_F - PORT_LABEL_X_INSET_F + 0.1);
+    }
+
+    #[test]
+    fn test_apply_canvas_zoom_at_position_updates_zoom_and_viewport_offset() {
+        let mut layout = CanvasLayout::default();
+        let origin = gpui::point(px(0.0), px(0.0));
+        let position = gpui::point(px(200.0), px(160.0));
+        let canvas_before = to_canvas_point(&layout, position.x, position.y, origin);
+
+        apply_canvas_zoom_at_position(&mut layout, origin, position, 1.5);
+        let canvas_after = to_canvas_point(&layout, position.x, position.y, origin);
+
+        assert_eq!(layout.zoom, 1.5);
+        assert!((canvas_after.0 - canvas_before.0).abs() < 0.01);
+        assert!((canvas_after.1 - canvas_before.1).abs() < 0.01);
     }
 
     #[test]

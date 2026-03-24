@@ -1809,7 +1809,10 @@ fn watch_themes(fs: Arc<dyn fs::Fs>, cx: &mut App) {
 }
 
 fn should_reload_theme_path(path: &Path, is_dir: bool) -> bool {
-    !is_dir && path.extension().is_some_and(|extension| extension == "json")
+    !is_dir
+        && path
+            .extension()
+            .is_some_and(|extension| extension == "json")
 }
 
 #[cfg(test)]

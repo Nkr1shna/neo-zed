@@ -15,8 +15,8 @@ use chrono::Utc;
 use editor::Editor;
 use feature_flags::{AgentV2FeatureFlag, FeatureFlagViewExt as _};
 use gpui::{
-    Action as _, AnyElement, App, Context, Entity, FocusHandle, Focusable, ListState, Pixels,
-    Render, SharedString, WeakEntity, Window, WindowHandle, list, prelude::*, px,
+    Action as _, AnyElement, App, Context, Entity, FocusHandle, Focusable, KeyContext, ListState,
+    Pixels, Render, SharedString, WeakEntity, Window, WindowHandle, list, prelude::*, px,
 };
 use menu::{
     Cancel, Confirm, SelectChild, SelectFirst, SelectLast, SelectNext, SelectParent, SelectPrevious,
@@ -1560,6 +1560,20 @@ impl Sidebar {
     }
 
     fn cancel(&mut self, _: &Cancel, window: &mut Window, cx: &mut Context<Self>) {
+        if matches!(self.view, SidebarView::WorkflowDefs)
+            && self
+                .workflow_defs_view
+                .as_ref()
+                .is_some_and(|view| view.read(cx).is_renaming())
+        {
+            if let Some(view) = &self.workflow_defs_view {
+                view.update(cx, |view, cx| view.cancel_active_rename(cx));
+            }
+            window.focus(&self.focus_handle, cx);
+            cx.notify();
+            return;
+        }
+
         let cleared = if matches!(self.view, SidebarView::WorkflowDefs) {
             self.workflow_defs_view
                 .as_ref()
@@ -1709,6 +1723,20 @@ impl Sidebar {
     }
 
     fn confirm(&mut self, _: &Confirm, window: &mut Window, cx: &mut Context<Self>) {
+        if matches!(self.view, SidebarView::WorkflowDefs)
+            && self
+                .workflow_defs_view
+                .as_ref()
+                .is_some_and(|view| view.read(cx).is_renaming())
+        {
+            if let Some(view) = &self.workflow_defs_view {
+                view.update(cx, |view, cx| view.confirm_rename(cx));
+            }
+            window.focus(&self.focus_handle, cx);
+            cx.notify();
+            return;
+        }
+
         let Some(ix) = self.selection else { return };
         let Some(entry) = self.contents.entries.get(ix) else {
             return;
@@ -2921,6 +2949,20 @@ impl Sidebar {
         view.update(cx, |view, cx| view.focus_filter_editor(window, cx));
         cx.notify();
     }
+
+    fn dispatch_context(&self, window: &Window, cx: &Context<Self>) -> KeyContext {
+        let mut dispatch_context = KeyContext::new_with_defaults();
+        dispatch_context.add("ThreadsSidebar");
+
+        let is_editing = matches!(self.view, SidebarView::WorkflowDefs)
+            && self
+                .workflow_defs_view
+                .as_ref()
+                .is_some_and(|view| view.read(cx).rename_editor_is_focused(window, cx));
+
+        dispatch_context.add(if is_editing { "editing" } else { "not_editing" });
+        dispatch_context
+    }
 }
 
 impl WorkspaceSidebar for Sidebar {
@@ -2969,7 +3011,7 @@ impl Render for Sidebar {
 
         v_flex()
             .id("workspace-sidebar")
-            .key_context("ThreadsSidebar")
+            .key_context(self.dispatch_context(window, cx))
             .track_focus(&self.focus_handle)
             .on_action(cx.listener(Self::select_next))
             .on_action(cx.listener(Self::select_previous))
