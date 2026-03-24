@@ -1,7 +1,8 @@
 use crate::client::{
-    TaskLifecycleStatus, TaskRemoteTarget, TaskStatusResponse, WorkflowClient,
-    WorkflowDefinitionRecord, WorkflowEdge, WorkflowNode, WorkflowNodePrimitive, WorkflowNodeType,
-    WorkflowNodeTypeCategory, infer_workflow_node_primitive,
+    TaskLifecycleStatus, TaskRemoteTarget, TaskStatusResponse, WORKFLOW_GLOBALS_NODE_TYPE_ID,
+    WorkflowClient, WorkflowDefinitionRecord, WorkflowEdge, WorkflowNode, WorkflowNodePort,
+    WorkflowNodePrimitive, WorkflowNodeType, WorkflowNodeTypeCategory, conditional_output_ports,
+    default_configuration_for_node_type, editor_node_types, infer_workflow_node_primitive,
 };
 use crate::inspector::{NodeInspectorPanel, upsert_workflow_def_cache};
 use editor::Editor;
@@ -349,7 +350,7 @@ impl WorkflowCanvas {
                 return;
             };
             this.update(cx, |canvas, cx| {
-                canvas.node_types = node_types;
+                canvas.node_types = editor_node_types(node_types);
                 cx.notify();
             })
             .ok();
@@ -375,28 +376,12 @@ impl WorkflowCanvas {
         None
     }
 
-    fn node_type(&self, node_type_id: &str) -> Option<&WorkflowNodeType> {
-        self.node_types
-            .iter()
-            .find(|node_type| node_type.id == node_type_id)
+    fn input_ports_for_node(&self, node: &WorkflowNode) -> Vec<WorkflowNodePort> {
+        effective_ports_for_node(&self.node_types, node, true)
     }
 
-    fn input_ports_for_node<'a>(
-        &'a self,
-        node: &'a WorkflowNode,
-    ) -> &'a [crate::client::WorkflowNodePort] {
-        self.node_type(&node.node_type)
-            .map(|node_type| node_type.inputs.as_slice())
-            .unwrap_or(DEFAULT_INPUT_PORTS)
-    }
-
-    fn output_ports_for_node<'a>(
-        &'a self,
-        node: &'a WorkflowNode,
-    ) -> &'a [crate::client::WorkflowNodePort] {
-        self.node_type(&node.node_type)
-            .map(|node_type| node_type.outputs.as_slice())
-            .unwrap_or(DEFAULT_OUTPUT_PORTS)
+    fn output_ports_for_node(&self, node: &WorkflowNode) -> Vec<WorkflowNodePort> {
+        effective_ports_for_node(&self.node_types, node, false)
     }
 
     fn hit_test_port(
@@ -770,6 +755,21 @@ impl WorkflowCanvas {
         let Some(ref mut workflow) = self.workflow else {
             return;
         };
+
+        if node_type.id == WORKFLOW_GLOBALS_NODE_TYPE_ID
+            && let Some(existing_node) = workflow
+                .nodes
+                .iter()
+                .find(|node| node.node_type == WORKFLOW_GLOBALS_NODE_TYPE_ID)
+        {
+            self.selection = CanvasSelection::Node(existing_node.id.clone());
+            cx.emit(WorkflowCanvasEvent::NodeSelected(Some(
+                existing_node.id.clone(),
+            )));
+            cx.notify();
+            return;
+        }
+
         let id = uuid::Uuid::new_v4().to_string();
         let (ox, oy) = self.layout.viewport_offset;
         let canvas_x = -ox + 300.0 / self.layout.zoom;
@@ -779,7 +779,7 @@ impl WorkflowCanvas {
             id: id.clone(),
             node_type: node_type.id.clone(),
             label,
-            configuration: serde_json::json!({}),
+            configuration: default_configuration_for_node_type(node_type),
             runtime: serde_json::json!({}),
         });
         self.layout.node_positions.insert(
@@ -1085,6 +1085,10 @@ fn node_fill_and_border(
             (gpui::rgba(0x3a2e00ff), gpui::rgba(0xf59e0bff))
         }
         (WorkflowNodePrimitive::Conditional, _) => (gpui::rgba(0xfef3c7ff), gpui::rgba(0xf59e0bff)),
+        (WorkflowNodePrimitive::Globals, Dark | VibrantDark) => {
+            (gpui::rgba(0x10283bff), gpui::rgba(0x38bdf8ff))
+        }
+        (WorkflowNodePrimitive::Globals, _) => (gpui::rgba(0xe0f2feff), gpui::rgba(0x0ea5e9ff)),
         (WorkflowNodePrimitive::ExecuteShellCommand, Dark | VibrantDark) => {
             (gpui::rgba(0x0d2e1aff), gpui::rgba(0x22c55eff))
         }
@@ -1585,24 +1589,32 @@ fn node_type_by_id<'a>(
         .find(|node_type| node_type.id == node_type_id)
 }
 
-fn ports_for_node<'a>(
-    node_types: &'a [WorkflowNodeType],
-    node: &'a WorkflowNode,
+fn effective_ports_for_node(
+    node_types: &[WorkflowNodeType],
+    node: &WorkflowNode,
     input_side: bool,
-) -> &'a [crate::client::WorkflowNodePort] {
-    node_type_by_id(node_types, &node.node_type)
-        .map(|node_type| {
-            if input_side {
-                node_type.inputs.as_slice()
-            } else {
-                node_type.outputs.as_slice()
-            }
-        })
-        .unwrap_or(if input_side {
-            DEFAULT_INPUT_PORTS
+) -> Vec<WorkflowNodePort> {
+    let Some(node_type) = node_type_by_id(node_types, &node.node_type) else {
+        return if input_side {
+            DEFAULT_INPUT_PORTS.to_vec()
         } else {
-            DEFAULT_OUTPUT_PORTS
-        })
+            DEFAULT_OUTPUT_PORTS.to_vec()
+        };
+    };
+
+    match node_type.primitive_kind() {
+        WorkflowNodePrimitive::Conditional if !input_side => {
+            conditional_output_ports(&node.configuration)
+        }
+        WorkflowNodePrimitive::Globals => Vec::new(),
+        _ => {
+            if input_side {
+                node_type.inputs.clone()
+            } else {
+                node_type.outputs.clone()
+            }
+        }
+    }
 }
 
 fn port_position_for_node(
@@ -1615,7 +1627,7 @@ fn port_position_for_node(
 ) -> Option<(f32, f32)> {
     let node = workflow_node_by_id(workflow, node_id)?;
     let pos = layout.node_positions.get(node_id)?;
-    let ports = ports_for_node(node_types, node, input_side);
+    let ports = effective_ports_for_node(node_types, node, input_side);
     let index = ports
         .iter()
         .position(|port| port.id == port_id)
@@ -1746,14 +1758,16 @@ impl gpui::Render for WorkflowCanvas {
                                 let primitive = node_type_by_id(&node_types, &node.node_type)
                                     .map(|node_type| node_type.primitive_kind())
                                     .unwrap_or_else(|| default_primitive_for_node(&node.node_type, None));
+                                let input_ports = effective_ports_for_node(&node_types, node, true);
+                                let output_ports = effective_ports_for_node(&node_types, node, false);
                                 paint_node(
                                     &layout,
                                     node,
                                     &primitive,
                                     node_type_label,
                                     &pos,
-                                    ports_for_node(&node_types, node, true),
-                                    ports_for_node(&node_types, node, false),
+                                    &input_ports,
+                                    &output_ports,
                                     selected,
                                     None,
                                     origin,
@@ -1819,14 +1833,18 @@ impl gpui::Render for WorkflowCanvas {
                                 let primitive = node_type_by_id(&node_types, &synthetic_node.node_type)
                                     .map(|node_type| node_type.primitive_kind())
                                     .unwrap_or_else(|| node_status.primitive_kind());
+                                let input_ports =
+                                    effective_ports_for_node(&node_types, &synthetic_node, true);
+                                let output_ports =
+                                    effective_ports_for_node(&node_types, &synthetic_node, false);
                                 paint_node(
                                     &layout,
                                     &synthetic_node,
                                     &primitive,
                                     node_type_label,
                                     &pos,
-                                    ports_for_node(&node_types, &synthetic_node, true),
-                                    ports_for_node(&node_types, &synthetic_node, false),
+                                    &input_ports,
+                                    &output_ports,
                                     false,
                                     Some(&node_status.status),
                                     origin,
@@ -2567,7 +2585,7 @@ mod tests {
     }
 
     fn sample_node_types() -> Vec<WorkflowNodeType> {
-        vec![
+        editor_node_types(vec![
             WorkflowNodeType {
                 id: "task".into(),
                 label: "Task".into(),
@@ -2602,7 +2620,7 @@ mod tests {
                 configure_time_fields: vec![],
                 runtime_fields: vec![],
             },
-        ]
+        ])
     }
 
     #[test]
@@ -2875,6 +2893,64 @@ mod tests {
         assert_eq!(layout.zoom, 1.5);
         assert!((canvas_after.0 - canvas_before.0).abs() < 0.01);
         assert!((canvas_after.1 - canvas_before.1).abs() < 0.01);
+    }
+
+    #[test]
+    fn test_effective_ports_for_conditional_node_use_configuration_branches() {
+        let node_types = sample_node_types();
+        let node = WorkflowNode {
+            id: "conditional-1".into(),
+            node_type: "validation".into(),
+            label: "Conditional".into(),
+            configuration: serde_json::json!({
+                "branches": [
+                    {
+                        "output_id": "if_1",
+                        "kind": "when",
+                        "condition": {
+                            "mode": "all",
+                            "children": [{"kind": "predicate"}]
+                        }
+                    },
+                    {
+                        "output_id": "if_2",
+                        "kind": "when",
+                        "condition": {
+                            "mode": "any",
+                            "children": [{"kind": "predicate"}]
+                        }
+                    },
+                    {
+                        "output_id": "else",
+                        "kind": "else"
+                    }
+                ]
+            }),
+            runtime: serde_json::json!({}),
+        };
+
+        let output_ports = effective_ports_for_node(&node_types, &node, false);
+
+        assert_eq!(output_ports.len(), 3);
+        assert_eq!(output_ports[0].id, "if_1");
+        assert_eq!(output_ports[0].label, "If");
+        assert_eq!(output_ports[1].label, "Else If 1");
+        assert_eq!(output_ports[2].label, "Else");
+    }
+
+    #[test]
+    fn test_effective_ports_for_globals_node_are_empty() {
+        let node_types = sample_node_types();
+        let node = WorkflowNode {
+            id: "globals-1".into(),
+            node_type: WORKFLOW_GLOBALS_NODE_TYPE_ID.into(),
+            label: "Globals".into(),
+            configuration: serde_json::json!({}),
+            runtime: serde_json::json!({}),
+        };
+
+        assert!(effective_ports_for_node(&node_types, &node, true).is_empty());
+        assert!(effective_ports_for_node(&node_types, &node, false).is_empty());
     }
 
     #[test]

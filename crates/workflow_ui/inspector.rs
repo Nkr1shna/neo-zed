@@ -1,7 +1,13 @@
 use crate::canvas::open_workflow;
 use crate::client::{
-    NodePolicy, RetryBehavior, WorkflowClient, WorkflowDefinitionRecord, WorkflowDefinitionRequest,
-    WorkflowNodeField, WorkflowNodeFieldType, WorkflowNodeType,
+    NodePolicy, RetryBehavior, WORKFLOW_GLOBALS_NODE_TYPE_ID, WorkflowClient,
+    WorkflowComparisonOperator, WorkflowConditionGroup, WorkflowConditionGroupMode,
+    WorkflowConditionNode, WorkflowConditionPredicate, WorkflowConditionalBranch,
+    WorkflowConditionalBranchKind, WorkflowConditionalConfiguration, WorkflowDefinitionRecord,
+    WorkflowDefinitionRequest, WorkflowGlobalVariable, WorkflowGlobalsConfiguration,
+    WorkflowNodeField, WorkflowNodeFieldType, WorkflowNodePrimitive, WorkflowNodeType,
+    WorkflowValueReference, WorkflowValueType, conditional_configuration_from_value,
+    editor_node_types, globals_configuration_from_value,
 };
 use crate::workflow_toolbar_icon_button;
 use editor::Editor;
@@ -13,8 +19,8 @@ use std::collections::BTreeMap;
 use std::sync::Arc;
 use std::time::Duration;
 use ui::{
-    ContextMenu, Divider, ListItem, ListItemSpacing, Tooltip, prelude::*,
-    utils::platform_title_bar_height,
+    ContextMenu, Divider, DropdownMenu, DropdownStyle, ListItem, ListItemSpacing, Tooltip,
+    prelude::*, utils::platform_title_bar_height,
 };
 use uuid::Uuid;
 use workspace::dock::{DockPosition, PanelEvent};
@@ -730,6 +736,17 @@ struct WorkflowNodeFieldEditor {
     editor: gpui::Entity<Editor>,
 }
 
+struct WorkflowConditionalEditorState {
+    configuration: WorkflowConditionalConfiguration,
+    rhs_editors: BTreeMap<String, gpui::Entity<Editor>>,
+}
+
+struct WorkflowGlobalsEditorState {
+    configuration: WorkflowGlobalsConfiguration,
+    key_editors: Vec<gpui::Entity<Editor>>,
+    value_editors: Vec<gpui::Entity<Editor>>,
+}
+
 enum ParsedFieldUpdate {
     Set(serde_json::Value),
     Clear,
@@ -813,6 +830,211 @@ fn parse_field_update(field: &WorkflowNodeField, field_text: &str) -> ParsedFiel
     }
 }
 
+fn condition_editor_key(branch_index: usize, path: &[usize]) -> String {
+    let mut key = format!("branch-{branch_index}");
+    for index in path {
+        key.push('.');
+        key.push_str(&index.to_string());
+    }
+    key
+}
+
+fn build_conditional_editor_state(
+    configuration: WorkflowConditionalConfiguration,
+    window: &mut Window,
+    cx: &mut Context<NodeInspectorPanel>,
+) -> WorkflowConditionalEditorState {
+    let mut rhs_editors = BTreeMap::new();
+    for (branch_index, branch) in configuration.branches.iter().enumerate() {
+        if let Some(group) = branch.condition.as_ref() {
+            populate_condition_rhs_editors(
+                group,
+                branch_index,
+                &mut Vec::new(),
+                &mut rhs_editors,
+                window,
+                cx,
+            );
+        }
+    }
+    WorkflowConditionalEditorState {
+        configuration,
+        rhs_editors,
+    }
+}
+
+fn populate_condition_rhs_editors(
+    group: &WorkflowConditionGroup,
+    branch_index: usize,
+    path: &mut Vec<usize>,
+    rhs_editors: &mut BTreeMap<String, gpui::Entity<Editor>>,
+    window: &mut Window,
+    cx: &mut Context<NodeInspectorPanel>,
+) {
+    for (child_index, child) in group.children.iter().enumerate() {
+        path.push(child_index);
+        match child {
+            WorkflowConditionNode::Predicate(predicate) => {
+                let key = condition_editor_key(branch_index, path);
+                let editor = cx.new(|cx| Editor::single_line(window, cx));
+                editor.update(cx, |editor, cx| {
+                    editor.set_text(
+                        predicate
+                            .rhs
+                            .as_ref()
+                            .map(display_scalar_json_value)
+                            .unwrap_or_default(),
+                        window,
+                        cx,
+                    );
+                });
+                rhs_editors.insert(key, editor);
+            }
+            WorkflowConditionNode::Group(group) => {
+                populate_condition_rhs_editors(group, branch_index, path, rhs_editors, window, cx);
+            }
+        }
+        path.pop();
+    }
+}
+
+fn build_globals_editor_state(
+    configuration: WorkflowGlobalsConfiguration,
+    window: &mut Window,
+    cx: &mut Context<NodeInspectorPanel>,
+) -> WorkflowGlobalsEditorState {
+    let mut key_editors = Vec::with_capacity(configuration.variables.len());
+    let mut value_editors = Vec::with_capacity(configuration.variables.len());
+
+    for variable in &configuration.variables {
+        let key_editor = cx.new(|cx| Editor::single_line(window, cx));
+        key_editor.update(cx, |editor, cx| {
+            editor.set_text(variable.key.clone(), window, cx);
+        });
+        key_editors.push(key_editor);
+
+        let value_editor = cx.new(|cx| Editor::single_line(window, cx));
+        value_editor.update(cx, |editor, cx| {
+            editor.set_text(
+                display_scalar_json_value(&variable.default_value),
+                window,
+                cx,
+            );
+        });
+        value_editors.push(value_editor);
+    }
+
+    WorkflowGlobalsEditorState {
+        configuration,
+        key_editors,
+        value_editors,
+    }
+}
+
+fn display_scalar_json_value(value: &serde_json::Value) -> String {
+    match value {
+        serde_json::Value::String(value) => value.clone(),
+        serde_json::Value::Bool(value) => value.to_string(),
+        serde_json::Value::Number(value) => value.to_string(),
+        serde_json::Value::Null => String::new(),
+        _ => value.to_string(),
+    }
+}
+
+fn parse_scalar_json_value(value_type: WorkflowValueType, text: &str) -> serde_json::Value {
+    match value_type {
+        WorkflowValueType::String => serde_json::Value::String(text.to_string()),
+        WorkflowValueType::Number => {
+            parse_number_value(text).unwrap_or_else(|| serde_json::json!(0))
+        }
+        WorkflowValueType::Boolean => match text.to_ascii_lowercase().as_str() {
+            "true" => serde_json::Value::Bool(true),
+            "false" => serde_json::Value::Bool(false),
+            _ => serde_json::Value::Bool(false),
+        },
+    }
+}
+
+fn group_mut_at_path<'a>(
+    group: &'a mut WorkflowConditionGroup,
+    path: &[usize],
+) -> Option<&'a mut WorkflowConditionGroup> {
+    let mut current = group;
+    for index in path {
+        let child = current.children.get_mut(*index)?;
+        let WorkflowConditionNode::Group(next) = child else {
+            return None;
+        };
+        current = next;
+    }
+    Some(current)
+}
+
+fn node_mut_at_path<'a>(
+    group: &'a mut WorkflowConditionGroup,
+    path: &[usize],
+) -> Option<&'a mut WorkflowConditionNode> {
+    let mut current_group = group;
+    for (path_index, index) in path.iter().enumerate() {
+        let child = current_group.children.get_mut(*index)?;
+        if path_index + 1 == path.len() {
+            return Some(child);
+        }
+        let WorkflowConditionNode::Group(next) = child else {
+            return None;
+        };
+        current_group = next;
+    }
+    None
+}
+
+fn branch_title(index: usize, branch: &WorkflowConditionalBranch) -> SharedString {
+    match branch.kind {
+        WorkflowConditionalBranchKind::When if index == 0 => "If".into(),
+        WorkflowConditionalBranchKind::When => format!("Else If {index}").into(),
+        WorkflowConditionalBranchKind::Else => "Else".into(),
+    }
+}
+
+fn sync_group_predicate_rhs(
+    group: &mut WorkflowConditionGroup,
+    branch_index: usize,
+    path: &mut Vec<usize>,
+    rhs_editors: &BTreeMap<String, gpui::Entity<Editor>>,
+    cx: &mut Context<NodeInspectorPanel>,
+) {
+    for (child_index, child) in group.children.iter_mut().enumerate() {
+        path.push(child_index);
+        match child {
+            WorkflowConditionNode::Predicate(predicate) => {
+                let key = condition_editor_key(branch_index, path);
+                if predicate
+                    .operator
+                    .is_some_and(|operator| !operator.requires_rhs())
+                {
+                    predicate.rhs = None;
+                } else if let Some(editor) = rhs_editors.get(&key) {
+                    let rhs_text = editor.read(cx).text(cx).trim().to_string();
+                    if rhs_text.is_empty() {
+                        predicate.rhs = None;
+                    } else {
+                        let value_type = predicate
+                            .lhs
+                            .as_ref()
+                            .map(|lhs| lhs.value_type)
+                            .unwrap_or(WorkflowValueType::String);
+                        predicate.rhs = Some(parse_scalar_json_value(value_type, &rhs_text));
+                    }
+                }
+            }
+            WorkflowConditionNode::Group(group) => {
+                sync_group_predicate_rhs(group, branch_index, path, rhs_editors, cx);
+            }
+        }
+        path.pop();
+    }
+}
+
 pub struct NodeInspectorPanel {
     workflow: Option<WorkflowDefinitionRecord>,
     active_canvas: Option<gpui::WeakEntity<crate::canvas::WorkflowCanvas>>,
@@ -821,6 +1043,8 @@ pub struct NodeInspectorPanel {
     focus_handle: FocusHandle,
     label_editor: gpui::Entity<Editor>,
     configure_time_field_editors: BTreeMap<String, WorkflowNodeFieldEditor>,
+    conditional_editor_state: Option<WorkflowConditionalEditorState>,
+    globals_editor_state: Option<WorkflowGlobalsEditorState>,
     runtime_fields: Vec<WorkflowNodeField>,
     required_reviews_editor: gpui::Entity<Editor>,
     required_checks_editor: gpui::Entity<Editor>,
@@ -837,13 +1061,32 @@ pub struct NodeInspectorPanel {
 
 impl NodeInspectorPanel {
     pub fn new(client: Arc<WorkflowClient>, window: &mut Window, cx: &mut Context<Self>) -> Self {
+        let mut panel = Self::new_internal(client, window, cx);
+        panel.start_loading_node_types(window, cx);
+        panel
+    }
+
+    #[cfg(test)]
+    fn new_for_test(
+        client: Arc<WorkflowClient>,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> Self {
+        Self::new_internal(client, window, cx)
+    }
+
+    fn new_internal(
+        client: Arc<WorkflowClient>,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> Self {
         let label_editor = cx.new(|cx| Editor::single_line(window, cx));
         let required_reviews_editor = cx.new(|cx| Editor::single_line(window, cx));
         let required_checks_editor = cx.new(|cx| Editor::single_line(window, cx));
         let max_attempts_editor = cx.new(|cx| Editor::single_line(window, cx));
         let backoff_ms_editor = cx.new(|cx| Editor::single_line(window, cx));
 
-        let mut panel = Self {
+        Self {
             workflow: None,
             active_canvas: None,
             node_types: Vec::new(),
@@ -851,6 +1094,8 @@ impl NodeInspectorPanel {
             focus_handle: cx.focus_handle(),
             label_editor,
             configure_time_field_editors: BTreeMap::new(),
+            conditional_editor_state: None,
+            globals_editor_state: None,
             runtime_fields: Vec::new(),
             required_reviews_editor,
             required_checks_editor,
@@ -863,9 +1108,7 @@ impl NodeInspectorPanel {
             _node_types_task: None,
             _save_task: None,
             _subscriptions: Vec::new(),
-        };
-        panel.start_loading_node_types(window, cx);
-        panel
+        }
     }
 
     pub fn set_active_canvas(&mut self, canvas: &gpui::Entity<crate::canvas::WorkflowCanvas>) {
@@ -876,6 +1119,8 @@ impl NodeInspectorPanel {
         self.workflow = Some(workflow);
         self.selected_node_id = None;
         self.configure_time_field_editors.clear();
+        self.conditional_editor_state = None;
+        self.globals_editor_state = None;
         self.runtime_fields.clear();
         self.is_dirty = false;
         cx.notify();
@@ -891,6 +1136,8 @@ impl NodeInspectorPanel {
 
         let Some(ref node_id) = node_id else {
             self.configure_time_field_editors.clear();
+            self.conditional_editor_state = None;
+            self.globals_editor_state = None;
             self.runtime_fields.clear();
             cx.notify();
             return;
@@ -898,6 +1145,8 @@ impl NodeInspectorPanel {
 
         let Some(ref workflow) = self.workflow else {
             self.configure_time_field_editors.clear();
+            self.conditional_editor_state = None;
+            self.globals_editor_state = None;
             self.runtime_fields.clear();
             cx.notify();
             return;
@@ -960,7 +1209,7 @@ impl NodeInspectorPanel {
             };
 
             this.update_in(cx, |panel, window, cx| {
-                panel.node_types = node_types;
+                panel.node_types = editor_node_types(node_types);
                 panel.refresh_configure_time_fields(window, cx);
                 cx.notify();
             })
@@ -981,8 +1230,14 @@ impl NodeInspectorPanel {
             .cloned()
     }
 
+    fn selected_node_primitive(&self) -> Option<WorkflowNodePrimitive> {
+        Some(self.selected_node_type()?.primitive_kind())
+    }
+
     fn refresh_configure_time_fields(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         self.configure_time_field_editors.clear();
+        self.conditional_editor_state = None;
+        self.globals_editor_state = None;
         self.runtime_fields.clear();
 
         let Some(selected_node_id) = self.selected_node_id.as_ref() else {
@@ -1002,6 +1257,26 @@ impl NodeInspectorPanel {
             return;
         };
 
+        match node_type.primitive_kind() {
+            WorkflowNodePrimitive::Conditional => {
+                self.conditional_editor_state = Some(build_conditional_editor_state(
+                    conditional_configuration_from_value(&node.configuration),
+                    window,
+                    cx,
+                ));
+                return;
+            }
+            WorkflowNodePrimitive::Globals => {
+                self.globals_editor_state = Some(build_globals_editor_state(
+                    globals_configuration_from_value(&node.configuration),
+                    window,
+                    cx,
+                ));
+                return;
+            }
+            _ => {}
+        }
+
         for field in node_type.configure_time_fields {
             let editor = cx.new(|cx| {
                 let mut editor = Editor::single_line(window, cx);
@@ -1017,10 +1292,387 @@ impl NodeInspectorPanel {
         }
     }
 
+    fn available_value_references(&self) -> Vec<WorkflowValueReference> {
+        let Some(selected_node_id) = self.selected_node_id.as_ref() else {
+            return Vec::new();
+        };
+        let Some(workflow) = self.workflow.as_ref() else {
+            return Vec::new();
+        };
+
+        let mut references = Vec::new();
+
+        if let Some(globals_node) = workflow
+            .nodes
+            .iter()
+            .find(|node| node.node_type == WORKFLOW_GLOBALS_NODE_TYPE_ID)
+        {
+            let globals = globals_configuration_from_value(&globals_node.configuration);
+            references.extend(globals.variables.into_iter().map(|variable| {
+                WorkflowValueReference {
+                    source: crate::client::WorkflowReferenceSource::Global,
+                    node_id: Some(globals_node.id.clone()),
+                    path: variable.key.clone(),
+                    label: format!("Global: {}", variable.key),
+                    value_type: variable.value_type,
+                }
+            }));
+        }
+
+        for edge in workflow
+            .edges
+            .iter()
+            .filter(|edge| &edge.to_node_id == selected_node_id)
+        {
+            let Some(source_node) = workflow
+                .nodes
+                .iter()
+                .find(|node| node.id == edge.from_node_id)
+            else {
+                continue;
+            };
+            let Some(source_type) = self
+                .node_types
+                .iter()
+                .find(|node_type| node_type.id == source_node.node_type)
+            else {
+                continue;
+            };
+
+            if source_type.primitive_kind() == WorkflowNodePrimitive::ExecuteShellCommand {
+                references.push(WorkflowValueReference {
+                    source: crate::client::WorkflowReferenceSource::Input,
+                    node_id: Some(source_node.id.clone()),
+                    path: "shell.exit_code".into(),
+                    label: "Shell exit code".into(),
+                    value_type: WorkflowValueType::Number,
+                });
+                references.push(WorkflowValueReference {
+                    source: crate::client::WorkflowReferenceSource::Input,
+                    node_id: Some(source_node.id.clone()),
+                    path: "shell.stdout".into(),
+                    label: "Standard output".into(),
+                    value_type: WorkflowValueType::String,
+                });
+                references.push(WorkflowValueReference {
+                    source: crate::client::WorkflowReferenceSource::Input,
+                    node_id: Some(source_node.id.clone()),
+                    path: "shell.stderr".into(),
+                    label: "Standard error".into(),
+                    value_type: WorkflowValueType::String,
+                });
+            }
+
+            references.extend(source_type.runtime_fields.iter().filter_map(|field| {
+                let value_type = match field.field_type {
+                    WorkflowNodeFieldType::String => WorkflowValueType::String,
+                    WorkflowNodeFieldType::Number => WorkflowValueType::Number,
+                    WorkflowNodeFieldType::Boolean => WorkflowValueType::Boolean,
+                    _ => return None,
+                };
+                Some(WorkflowValueReference {
+                    source: crate::client::WorkflowReferenceSource::Input,
+                    node_id: Some(source_node.id.clone()),
+                    path: field.key.clone(),
+                    label: field.label.clone(),
+                    value_type,
+                })
+            }));
+        }
+
+        references.sort_by(|left, right| left.label.cmp(&right.label));
+        references.dedup_by(|left, right| {
+            left.source == right.source && left.node_id == right.node_id && left.path == right.path
+        });
+        references
+    }
+
+    fn sync_conditional_editor_state_from_editors(&mut self, cx: &mut Context<Self>) {
+        let Some(state) = self.conditional_editor_state.as_mut() else {
+            return;
+        };
+
+        for (branch_index, branch) in state.configuration.branches.iter_mut().enumerate() {
+            let Some(group) = branch.condition.as_mut() else {
+                continue;
+            };
+            sync_group_predicate_rhs(group, branch_index, &mut Vec::new(), &state.rhs_editors, cx);
+        }
+    }
+
+    fn sync_globals_editor_state_from_editors(&mut self, cx: &mut Context<Self>) {
+        let Some(state) = self.globals_editor_state.as_mut() else {
+            return;
+        };
+
+        for (index, variable) in state.configuration.variables.iter_mut().enumerate() {
+            if let Some(editor) = state.key_editors.get(index) {
+                variable.key = editor.read(cx).text(cx).trim().to_string();
+            }
+            if let Some(editor) = state.value_editors.get(index) {
+                variable.default_value =
+                    parse_scalar_json_value(variable.value_type, editor.read(cx).text(cx).trim());
+            }
+        }
+    }
+
+    fn conditional_add_when_branch(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        self.sync_conditional_editor_state_from_editors(cx);
+        let Some(state) = self.conditional_editor_state.as_mut() else {
+            return;
+        };
+        let next_index = state
+            .configuration
+            .branches
+            .iter()
+            .filter(|branch| branch.kind == WorkflowConditionalBranchKind::When)
+            .count()
+            + 1;
+        let branch = WorkflowConditionalBranch {
+            output_id: format!("if_{next_index}"),
+            kind: WorkflowConditionalBranchKind::When,
+            condition: Some(WorkflowConditionGroup::default()),
+        };
+        let insert_index = state
+            .configuration
+            .branches
+            .iter()
+            .position(|branch| branch.kind == WorkflowConditionalBranchKind::Else)
+            .unwrap_or(state.configuration.branches.len());
+        state.configuration.branches.insert(insert_index, branch);
+        let configuration = state.configuration.clone();
+        self.conditional_editor_state =
+            Some(build_conditional_editor_state(configuration, window, cx));
+        cx.notify();
+    }
+
+    fn conditional_add_else_branch(&mut self, _window: &mut Window, cx: &mut Context<Self>) {
+        let Some(state) = self.conditional_editor_state.as_mut() else {
+            return;
+        };
+        if state
+            .configuration
+            .branches
+            .iter()
+            .any(|branch| branch.kind == WorkflowConditionalBranchKind::Else)
+        {
+            return;
+        }
+        state
+            .configuration
+            .branches
+            .push(WorkflowConditionalBranch {
+                output_id: "else".into(),
+                kind: WorkflowConditionalBranchKind::Else,
+                condition: None,
+            });
+        cx.notify();
+    }
+
+    fn conditional_add_group(
+        &mut self,
+        branch_index: usize,
+        path: Vec<usize>,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        self.sync_conditional_editor_state_from_editors(cx);
+        let Some(state) = self.conditional_editor_state.as_mut() else {
+            return;
+        };
+        let Some(branch) = state.configuration.branches.get_mut(branch_index) else {
+            return;
+        };
+        let Some(group) = branch.condition.as_mut() else {
+            return;
+        };
+        if let Some(target_group) = group_mut_at_path(group, &path) {
+            target_group.children.push(WorkflowConditionNode::Group(
+                WorkflowConditionGroup::default(),
+            ));
+        }
+        let configuration = state.configuration.clone();
+        self.conditional_editor_state =
+            Some(build_conditional_editor_state(configuration, window, cx));
+        cx.notify();
+    }
+
+    fn conditional_add_predicate(
+        &mut self,
+        branch_index: usize,
+        path: Vec<usize>,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        self.sync_conditional_editor_state_from_editors(cx);
+        let Some(state) = self.conditional_editor_state.as_mut() else {
+            return;
+        };
+        let Some(branch) = state.configuration.branches.get_mut(branch_index) else {
+            return;
+        };
+        let Some(group) = branch.condition.as_mut() else {
+            return;
+        };
+        if let Some(target_group) = group_mut_at_path(group, &path) {
+            target_group.children.push(WorkflowConditionNode::Predicate(
+                WorkflowConditionPredicate::default(),
+            ));
+        }
+        let configuration = state.configuration.clone();
+        self.conditional_editor_state =
+            Some(build_conditional_editor_state(configuration, window, cx));
+        cx.notify();
+    }
+
+    fn conditional_set_group_mode(
+        &mut self,
+        branch_index: usize,
+        path: Vec<usize>,
+        mode: WorkflowConditionGroupMode,
+        cx: &mut Context<Self>,
+    ) {
+        let Some(state) = self.conditional_editor_state.as_mut() else {
+            return;
+        };
+        let Some(branch) = state.configuration.branches.get_mut(branch_index) else {
+            return;
+        };
+        let Some(group) = branch.condition.as_mut() else {
+            return;
+        };
+        if let Some(target_group) = group_mut_at_path(group, &path) {
+            target_group.mode = mode;
+            cx.notify();
+        }
+    }
+
+    fn conditional_set_predicate_lhs(
+        &mut self,
+        branch_index: usize,
+        path: Vec<usize>,
+        lhs: WorkflowValueReference,
+        cx: &mut Context<Self>,
+    ) {
+        let Some(state) = self.conditional_editor_state.as_mut() else {
+            return;
+        };
+        let Some(branch) = state.configuration.branches.get_mut(branch_index) else {
+            return;
+        };
+        let Some(group) = branch.condition.as_mut() else {
+            return;
+        };
+        let Some(WorkflowConditionNode::Predicate(predicate)) = node_mut_at_path(group, &path)
+        else {
+            return;
+        };
+        predicate.lhs = Some(lhs.clone());
+        if predicate.operator.is_some_and(|operator| {
+            !WorkflowComparisonOperator::supported_for(lhs.value_type).contains(&operator)
+        }) {
+            predicate.operator = None;
+            predicate.rhs = None;
+        }
+        cx.notify();
+    }
+
+    fn conditional_set_predicate_operator(
+        &mut self,
+        branch_index: usize,
+        path: Vec<usize>,
+        operator: WorkflowComparisonOperator,
+        cx: &mut Context<Self>,
+    ) {
+        let Some(state) = self.conditional_editor_state.as_mut() else {
+            return;
+        };
+        let Some(branch) = state.configuration.branches.get_mut(branch_index) else {
+            return;
+        };
+        let Some(group) = branch.condition.as_mut() else {
+            return;
+        };
+        let Some(WorkflowConditionNode::Predicate(predicate)) = node_mut_at_path(group, &path)
+        else {
+            return;
+        };
+        predicate.operator = Some(operator);
+        if !operator.requires_rhs() {
+            predicate.rhs = None;
+        }
+        cx.notify();
+    }
+
+    fn globals_add_variable(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        self.sync_globals_editor_state_from_editors(cx);
+        let Some(state) = self.globals_editor_state.as_mut() else {
+            return;
+        };
+        state.configuration.variables.push(WorkflowGlobalVariable {
+            key: format!("var_{}", state.configuration.variables.len() + 1),
+            value_type: WorkflowValueType::String,
+            default_value: serde_json::json!(""),
+            allow_runtime_override: false,
+            allow_task_mutation: false,
+        });
+        let configuration = state.configuration.clone();
+        self.globals_editor_state = Some(build_globals_editor_state(configuration, window, cx));
+        cx.notify();
+    }
+
+    fn globals_set_variable_type(
+        &mut self,
+        index: usize,
+        value_type: WorkflowValueType,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        self.sync_globals_editor_state_from_editors(cx);
+        let Some(state) = self.globals_editor_state.as_mut() else {
+            return;
+        };
+        let Some(variable) = state.configuration.variables.get_mut(index) else {
+            return;
+        };
+        variable.value_type = value_type;
+        variable.default_value = match value_type {
+            WorkflowValueType::String => serde_json::json!(""),
+            WorkflowValueType::Number => serde_json::json!(0),
+            WorkflowValueType::Boolean => serde_json::json!(false),
+        };
+        let configuration = state.configuration.clone();
+        self.globals_editor_state = Some(build_globals_editor_state(configuration, window, cx));
+        cx.notify();
+    }
+
+    fn globals_toggle_runtime_override(&mut self, index: usize, cx: &mut Context<Self>) {
+        let Some(state) = self.globals_editor_state.as_mut() else {
+            return;
+        };
+        let Some(variable) = state.configuration.variables.get_mut(index) else {
+            return;
+        };
+        variable.allow_runtime_override = !variable.allow_runtime_override;
+        cx.notify();
+    }
+
+    fn globals_toggle_task_mutation(&mut self, index: usize, cx: &mut Context<Self>) {
+        let Some(state) = self.globals_editor_state.as_mut() else {
+            return;
+        };
+        let Some(variable) = state.configuration.variables.get_mut(index) else {
+            return;
+        };
+        variable.allow_task_mutation = !variable.allow_task_mutation;
+        cx.notify();
+    }
+
     fn apply_pending_node_edits(&mut self, cx: &mut Context<Self>) {
         let Some(selected_node_id) = self.selected_node_id.clone() else {
             return;
         };
+        let selected_primitive = self.selected_node_primitive();
         let label = self.label_editor.read(cx).text(cx).trim().to_string();
         let required_reviews_text = self
             .required_reviews_editor
@@ -1042,6 +1694,16 @@ impl NodeInspectorPanel {
             .to_string();
         let backoff_ms_text = self.backoff_ms_editor.read(cx).text(cx).trim().to_string();
 
+        match selected_primitive {
+            Some(WorkflowNodePrimitive::Conditional) => {
+                self.sync_conditional_editor_state_from_editors(cx);
+            }
+            Some(WorkflowNodePrimitive::Globals) => {
+                self.sync_globals_editor_state_from_editors(cx);
+            }
+            _ => {}
+        }
+
         let Some(workflow) = self.workflow.as_mut() else {
             return;
         };
@@ -1053,24 +1715,40 @@ impl NodeInspectorPanel {
             && !label.is_empty()
         {
             node.label = label;
-            let mut configuration = node
-                .configuration
-                .as_object()
-                .cloned()
-                .unwrap_or_else(serde_json::Map::new);
-            for (field_key, field_editor) in &self.configure_time_field_editors {
-                let field_text = field_editor.editor.read(cx).text(cx).trim().to_string();
-                match parse_field_update(&field_editor.field, &field_text) {
-                    ParsedFieldUpdate::Set(value) => {
-                        configuration.insert(field_key.clone(), value);
+            match selected_primitive {
+                Some(WorkflowNodePrimitive::Conditional) => {
+                    if let Some(state) = self.conditional_editor_state.as_ref() {
+                        node.configuration = serde_json::to_value(&state.configuration)
+                            .unwrap_or_else(|_| serde_json::json!({}));
                     }
-                    ParsedFieldUpdate::Clear => {
-                        configuration.remove(field_key);
+                }
+                Some(WorkflowNodePrimitive::Globals) => {
+                    if let Some(state) = self.globals_editor_state.as_ref() {
+                        node.configuration = serde_json::to_value(&state.configuration)
+                            .unwrap_or_else(|_| serde_json::json!({}));
                     }
-                    ParsedFieldUpdate::KeepExisting => {}
+                }
+                _ => {
+                    let mut configuration = node
+                        .configuration
+                        .as_object()
+                        .cloned()
+                        .unwrap_or_else(serde_json::Map::new);
+                    for (field_key, field_editor) in &self.configure_time_field_editors {
+                        let field_text = field_editor.editor.read(cx).text(cx).trim().to_string();
+                        match parse_field_update(&field_editor.field, &field_text) {
+                            ParsedFieldUpdate::Set(value) => {
+                                configuration.insert(field_key.clone(), value);
+                            }
+                            ParsedFieldUpdate::Clear => {
+                                configuration.remove(field_key);
+                            }
+                            ParsedFieldUpdate::KeepExisting => {}
+                        }
+                    }
+                    node.configuration = serde_json::Value::Object(configuration);
                 }
             }
-            node.configuration = serde_json::Value::Object(configuration);
         }
 
         let existing_policy = workflow.policy_for(&selected_node_id).cloned();
@@ -1189,6 +1867,461 @@ impl NodeInspectorPanel {
             })
             .ok();
         }));
+    }
+
+    fn render_conditional_editor(
+        &self,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> gpui::AnyElement {
+        let Some(state) = self.conditional_editor_state.as_ref() else {
+            return div().into_any_element();
+        };
+        let available_refs = self.available_value_references();
+        let has_else = state
+            .configuration
+            .branches
+            .iter()
+            .any(|branch| branch.kind == WorkflowConditionalBranchKind::Else);
+
+        v_flex()
+            .gap_2()
+            .child(
+                Label::new("Conditional Routing")
+                    .size(LabelSize::Small)
+                    .color(Color::Muted),
+            )
+            .children(state.configuration.branches.iter().enumerate().map(
+                |(branch_index, branch)| {
+                    v_flex()
+                        .gap_1()
+                        .p_2()
+                        .border_1()
+                        .border_color(cx.theme().colors().border)
+                        .rounded_md()
+                        .child(
+                            h_flex()
+                                .justify_between()
+                                .child(Label::new(branch_title(branch_index, branch)))
+                                .child(
+                                    Label::new(format!("Edge output: {}", branch.output_id))
+                                        .size(LabelSize::Small)
+                                        .color(Color::Muted),
+                                ),
+                        )
+                        .child(if let Some(group) = branch.condition.as_ref() {
+                            self.render_condition_group(
+                                branch_index,
+                                Vec::new(),
+                                group,
+                                &available_refs,
+                                window,
+                                cx,
+                            )
+                        } else {
+                            Label::new("Fallback branch")
+                                .size(LabelSize::Small)
+                                .color(Color::Muted)
+                                .into_any_element()
+                        })
+                },
+            ))
+            .child(
+                h_flex()
+                    .gap_1()
+                    .child(
+                        Button::new("conditional-add-branch", "Add Else If")
+                            .style(ButtonStyle::Subtle)
+                            .on_click(cx.listener(|this, _, window, cx| {
+                                this.conditional_add_when_branch(window, cx);
+                            })),
+                    )
+                    .child(
+                        Button::new("conditional-add-else", "Add Else")
+                            .style(ButtonStyle::Subtle)
+                            .disabled(has_else)
+                            .on_click(cx.listener(|this, _, window, cx| {
+                                this.conditional_add_else_branch(window, cx);
+                            })),
+                    ),
+            )
+            .into_any_element()
+    }
+
+    fn render_condition_group(
+        &self,
+        branch_index: usize,
+        path: Vec<usize>,
+        group: &WorkflowConditionGroup,
+        available_refs: &[WorkflowValueReference],
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> gpui::AnyElement {
+        let mode_entity = cx.weak_entity();
+        let mode_path = path.clone();
+        let mode_menu = ContextMenu::build(window, cx, move |menu, _window, _cx| {
+            menu.entry("All of", None, {
+                let this = mode_entity.clone();
+                let path = mode_path.clone();
+                move |_window, cx| {
+                    this.update(cx, |panel, cx| {
+                        panel.conditional_set_group_mode(
+                            branch_index,
+                            path.clone(),
+                            WorkflowConditionGroupMode::All,
+                            cx,
+                        );
+                    })
+                    .ok();
+                }
+            })
+            .entry("Any of", None, {
+                let this = mode_entity.clone();
+                let path = mode_path.clone();
+                move |_window, cx| {
+                    this.update(cx, |panel, cx| {
+                        panel.conditional_set_group_mode(
+                            branch_index,
+                            path.clone(),
+                            WorkflowConditionGroupMode::Any,
+                            cx,
+                        );
+                    })
+                    .ok();
+                }
+            })
+        });
+
+        v_flex()
+            .gap_1()
+            .p_1()
+            .border_l_2()
+            .border_color(cx.theme().colors().border_variant)
+            .child(
+                DropdownMenu::new(
+                    format!(
+                        "conditional-group-mode-{branch_index}-{}",
+                        condition_editor_key(branch_index, &path)
+                    ),
+                    group.mode.display_name(),
+                    mode_menu,
+                )
+                .style(DropdownStyle::Outlined)
+                .into_any_element(),
+            )
+            .children(
+                group
+                    .children
+                    .iter()
+                    .enumerate()
+                    .map(|(child_index, child)| {
+                        let mut child_path = path.clone();
+                        child_path.push(child_index);
+                        match child {
+                            WorkflowConditionNode::Predicate(predicate) => self
+                                .render_condition_predicate(
+                                    branch_index,
+                                    child_path,
+                                    predicate,
+                                    available_refs,
+                                    window,
+                                    cx,
+                                ),
+                            WorkflowConditionNode::Group(group) => self.render_condition_group(
+                                branch_index,
+                                child_path,
+                                group,
+                                available_refs,
+                                window,
+                                cx,
+                            ),
+                        }
+                    }),
+            )
+            .child(
+                h_flex()
+                    .gap_1()
+                    .child({
+                        let add_predicate_path = path.clone();
+                        Button::new(
+                            format!(
+                                "conditional-add-predicate-{branch_index}-{}",
+                                condition_editor_key(branch_index, &path)
+                            ),
+                            "Add Condition",
+                        )
+                        .style(ButtonStyle::Subtle)
+                        .on_click(cx.listener(
+                            move |this, _, window, cx| {
+                                this.conditional_add_predicate(
+                                    branch_index,
+                                    add_predicate_path.clone(),
+                                    window,
+                                    cx,
+                                );
+                            },
+                        ))
+                    })
+                    .child({
+                        let add_group_path = path.clone();
+                        Button::new(
+                            format!(
+                                "conditional-add-group-{branch_index}-{}",
+                                condition_editor_key(branch_index, &path)
+                            ),
+                            "Add Group",
+                        )
+                        .style(ButtonStyle::Subtle)
+                        .on_click(cx.listener(
+                            move |this, _, window, cx| {
+                                this.conditional_add_group(
+                                    branch_index,
+                                    add_group_path.clone(),
+                                    window,
+                                    cx,
+                                );
+                            },
+                        ))
+                    }),
+            )
+            .into_any_element()
+    }
+
+    fn render_condition_predicate(
+        &self,
+        branch_index: usize,
+        path: Vec<usize>,
+        predicate: &WorkflowConditionPredicate,
+        available_refs: &[WorkflowValueReference],
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> gpui::AnyElement {
+        let lhs_entity = cx.weak_entity();
+        let lhs_path = path.clone();
+        let lhs_label = predicate
+            .lhs
+            .as_ref()
+            .map(|lhs| lhs.label.clone())
+            .unwrap_or_else(|| "Select value".into());
+        let lhs_menu = ContextMenu::build(window, cx, move |menu, _window, _cx| {
+            available_refs
+                .iter()
+                .cloned()
+                .fold(menu, |menu, reference| {
+                    let label = reference.label.clone();
+                    menu.entry(label, None, {
+                        let this = lhs_entity.clone();
+                        let path = lhs_path.clone();
+                        move |_window, cx| {
+                            this.update(cx, |panel, cx| {
+                                panel.conditional_set_predicate_lhs(
+                                    branch_index,
+                                    path.clone(),
+                                    reference.clone(),
+                                    cx,
+                                );
+                            })
+                            .ok();
+                        }
+                    })
+                })
+        });
+
+        let supported_operators = predicate
+            .lhs
+            .as_ref()
+            .map(|lhs| WorkflowComparisonOperator::supported_for(lhs.value_type))
+            .unwrap_or(&[]);
+        let operator_label = predicate
+            .operator
+            .map(|operator| operator.display_name())
+            .unwrap_or("Select comparison");
+        let operator_entity = cx.weak_entity();
+        let operator_path = path.clone();
+        let operator_menu = ContextMenu::build(window, cx, move |menu, _window, _cx| {
+            supported_operators
+                .iter()
+                .copied()
+                .fold(menu, |menu, operator| {
+                    menu.entry(operator.display_name(), None, {
+                        let this = operator_entity.clone();
+                        let path = operator_path.clone();
+                        move |_window, cx| {
+                            this.update(cx, |panel, cx| {
+                                panel.conditional_set_predicate_operator(
+                                    branch_index,
+                                    path.clone(),
+                                    operator,
+                                    cx,
+                                );
+                            })
+                            .ok();
+                        }
+                    })
+                })
+        });
+
+        let rhs_editor = self
+            .conditional_editor_state
+            .as_ref()
+            .and_then(|state| {
+                state
+                    .rhs_editors
+                    .get(&condition_editor_key(branch_index, &path))
+            })
+            .cloned();
+
+        h_flex()
+            .gap_1()
+            .items_center()
+            .child(
+                DropdownMenu::new(
+                    format!(
+                        "conditional-lhs-{branch_index}-{}",
+                        condition_editor_key(branch_index, &path)
+                    ),
+                    lhs_label,
+                    lhs_menu,
+                )
+                .style(DropdownStyle::Outlined)
+                .into_any_element(),
+            )
+            .child(
+                DropdownMenu::new(
+                    format!(
+                        "conditional-operator-{branch_index}-{}",
+                        condition_editor_key(branch_index, &path)
+                    ),
+                    operator_label,
+                    operator_menu,
+                )
+                .style(DropdownStyle::Outlined)
+                .disabled(predicate.lhs.is_none())
+                .into_any_element(),
+            )
+            .when(
+                predicate
+                    .operator
+                    .is_some_and(|operator| operator.requires_rhs()),
+                |this| this.child(rhs_editor.expect("rhs editor must exist when rhs is required")),
+            )
+            .into_any_element()
+    }
+
+    fn render_globals_editor(
+        &self,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> gpui::AnyElement {
+        let Some(state) = self.globals_editor_state.as_ref() else {
+            return div().into_any_element();
+        };
+
+        v_flex()
+            .gap_2()
+            .child(
+                Label::new("Workflow Globals")
+                    .size(LabelSize::Small)
+                    .color(Color::Muted),
+            )
+            .children(
+                state
+                    .configuration
+                    .variables
+                    .iter()
+                    .enumerate()
+                    .map(|(index, variable)| {
+                        let this = cx.weak_entity();
+                        let type_menu =
+                            ContextMenu::build(window, cx, move |menu, _window, _cx| {
+                                [
+                                    WorkflowValueType::String,
+                                    WorkflowValueType::Number,
+                                    WorkflowValueType::Boolean,
+                                ]
+                                .into_iter()
+                                .fold(menu, |menu, value_type| {
+                                    menu.entry(value_type.display_name(), None, {
+                                        let this = this.clone();
+                                        move |window, cx| {
+                                            this.update(cx, |panel, cx| {
+                                                panel.globals_set_variable_type(
+                                                    index, value_type, window, cx,
+                                                );
+                                            })
+                                            .ok();
+                                        }
+                                    })
+                                })
+                            });
+
+                        v_flex()
+                            .gap_1()
+                            .p_2()
+                            .border_1()
+                            .border_color(cx.theme().colors().border)
+                            .rounded_md()
+                            .child(
+                                h_flex()
+                                    .gap_1()
+                                    .child(state.key_editors[index].clone())
+                                    .child(
+                                        DropdownMenu::new(
+                                            format!("globals-type-{index}"),
+                                            variable.value_type.display_name(),
+                                            type_menu,
+                                        )
+                                        .style(DropdownStyle::Outlined),
+                                    ),
+                            )
+                            .child(state.value_editors[index].clone())
+                            .child(
+                                h_flex()
+                                    .gap_1()
+                                    .child(
+                                        Button::new(
+                                            format!("globals-runtime-override-{index}"),
+                                            if variable.allow_runtime_override {
+                                                "Runtime Override: On"
+                                            } else {
+                                                "Runtime Override: Off"
+                                            },
+                                        )
+                                        .style(ButtonStyle::Subtle)
+                                        .on_click(
+                                            cx.listener(move |this, _, _window, cx| {
+                                                this.globals_toggle_runtime_override(index, cx);
+                                            }),
+                                        ),
+                                    )
+                                    .child(
+                                        Button::new(
+                                            format!("globals-task-mutation-{index}"),
+                                            if variable.allow_task_mutation {
+                                                "Task Mutation: On"
+                                            } else {
+                                                "Task Mutation: Off"
+                                            },
+                                        )
+                                        .style(ButtonStyle::Subtle)
+                                        .on_click(
+                                            cx.listener(move |this, _, _window, cx| {
+                                                this.globals_toggle_task_mutation(index, cx);
+                                            }),
+                                        ),
+                                    ),
+                            )
+                            .into_any_element()
+                    }),
+            )
+            .child(
+                Button::new("globals-add-variable", "Add Variable")
+                    .style(ButtonStyle::Subtle)
+                    .on_click(cx.listener(|this, _, window, cx| {
+                        this.globals_add_variable(window, cx);
+                    })),
+            )
+            .into_any_element()
     }
 }
 
@@ -1318,6 +2451,12 @@ impl Render for NodeInspectorPanel {
                                     .color(Color::Muted),
                             ),
                     )
+                })
+                .when(self.conditional_editor_state.is_some(), |this| {
+                    this.child(self.render_conditional_editor(_window, cx))
+                })
+                .when(self.globals_editor_state.is_some(), |this| {
+                    this.child(self.render_globals_editor(_window, cx))
                 })
                 .when(!self.configure_time_field_editors.is_empty(), |this| {
                     this.child(
@@ -1524,6 +2663,26 @@ mod tests {
         ]
     }
 
+    fn conditional_node_type() -> crate::client::WorkflowNodeType {
+        crate::client::WorkflowNodeType {
+            id: "validation".into(),
+            label: "Validation".into(),
+            primitive: Some(crate::client::WorkflowNodePrimitive::Conditional),
+            category: None,
+            is_primitive: false,
+            inputs: vec![crate::client::WorkflowNodePort {
+                id: "default".into(),
+                label: "Input".into(),
+            }],
+            outputs: vec![crate::client::WorkflowNodePort {
+                id: "passed".into(),
+                label: "Passed".into(),
+            }],
+            configure_time_fields: vec![],
+            runtime_fields: vec![],
+        }
+    }
+
     #[gpui::test]
     async fn test_apply_pending_node_edits_updates_panel_and_canvas_workflow(
         cx: &mut gpui::TestAppContext,
@@ -1540,7 +2699,7 @@ mod tests {
             });
             *canvas_holder_for_view.borrow_mut() = Some(canvas.clone());
 
-            let mut panel = NodeInspectorPanel::new(WorkflowClient::new(), window, cx);
+            let mut panel = NodeInspectorPanel::new_for_test(WorkflowClient::new(), window, cx);
             panel.node_types = vec![crate::client::WorkflowNodeType {
                 id: "summarize".into(),
                 label: "Summarize".into(),
@@ -1683,11 +2842,199 @@ mod tests {
     }
 
     #[gpui::test]
+    async fn test_apply_pending_node_edits_persists_conditional_configuration(
+        cx: &mut gpui::TestAppContext,
+    ) {
+        init_test(cx);
+
+        let workflow = WorkflowDefinitionRecord {
+            id: Uuid::nil(),
+            name: "Conditional Workflow".into(),
+            nodes: vec![
+                crate::client::WorkflowNode {
+                    id: "shell".into(),
+                    node_type: "execute_shell_command".into(),
+                    label: "Build".into(),
+                    configuration: serde_json::json!({}),
+                    runtime: serde_json::json!({}),
+                },
+                crate::client::WorkflowNode {
+                    id: "condition".into(),
+                    node_type: "validation".into(),
+                    label: "Route".into(),
+                    configuration: serde_json::to_value(
+                        crate::client::WorkflowConditionalConfiguration::default(),
+                    )
+                    .unwrap(),
+                    runtime: serde_json::json!({}),
+                },
+            ],
+            edges: vec![crate::client::WorkflowEdge {
+                from_node_id: "shell".into(),
+                from_output_id: "success".into(),
+                to_node_id: "condition".into(),
+                to_input_id: "default".into(),
+            }],
+            node_policies: vec![],
+            retry_behavior: RetryBehavior::default(),
+            validation_policy_ref: None,
+            trigger_metadata: BTreeMap::new(),
+        };
+
+        let (panel, cx) = cx.add_window_view(|window, cx| {
+            let mut panel = NodeInspectorPanel::new_for_test(WorkflowClient::new(), window, cx);
+            panel.node_types = crate::client::editor_node_types(vec![
+                conditional_node_type(),
+                crate::client::WorkflowNodeType {
+                    id: "execute_shell_command".into(),
+                    label: "Execute Shell Command".into(),
+                    primitive: Some(crate::client::WorkflowNodePrimitive::ExecuteShellCommand),
+                    category: None,
+                    is_primitive: true,
+                    inputs: vec![crate::client::WorkflowNodePort {
+                        id: "default".into(),
+                        label: "Input".into(),
+                    }],
+                    outputs: vec![crate::client::WorkflowNodePort {
+                        id: "success".into(),
+                        label: "Success".into(),
+                    }],
+                    configure_time_fields: vec![],
+                    runtime_fields: vec![],
+                },
+            ]);
+            panel.set_workflow(workflow.clone(), cx);
+            panel.set_node(Some("condition".into()), window, cx);
+            panel
+        });
+
+        panel.update_in(cx, |panel, _window, cx| {
+            let available_refs = panel.available_value_references();
+            let exit_code_ref = available_refs
+                .into_iter()
+                .find(|reference| reference.path == "shell.exit_code")
+                .unwrap();
+
+            let state = panel.conditional_editor_state.as_mut().unwrap();
+            let first_branch = state.configuration.branches.first_mut().unwrap();
+            let first_group = first_branch.condition.as_mut().unwrap();
+            let crate::client::WorkflowConditionNode::Predicate(predicate) =
+                first_group.children.first_mut().unwrap()
+            else {
+                panic!("expected predicate");
+            };
+            predicate.lhs = Some(exit_code_ref);
+            predicate.operator = Some(crate::client::WorkflowComparisonOperator::Neq);
+            state
+                .rhs_editors
+                .get("branch-0.0")
+                .unwrap()
+                .update(cx, |editor, cx| {
+                    editor.set_text("0", _window, cx);
+                });
+
+            panel.apply_pending_node_edits(cx);
+
+            let workflow = panel.workflow.as_ref().unwrap();
+            let node = workflow
+                .nodes
+                .iter()
+                .find(|node| node.id == "condition")
+                .unwrap();
+            assert_eq!(node.configuration["branches"][0]["output_id"], "if_1");
+            assert_eq!(
+                node.configuration["branches"][0]["condition"]["children"][0]["lhs"]["path"],
+                "shell.exit_code"
+            );
+            assert_eq!(
+                node.configuration["branches"][0]["condition"]["children"][0]["operator"],
+                "neq"
+            );
+            assert_eq!(
+                node.configuration["branches"][0]["condition"]["children"][0]["rhs"],
+                0
+            );
+        });
+    }
+
+    #[gpui::test]
+    async fn test_apply_pending_node_edits_persists_globals_configuration(
+        cx: &mut gpui::TestAppContext,
+    ) {
+        init_test(cx);
+
+        let workflow = WorkflowDefinitionRecord {
+            id: Uuid::nil(),
+            name: "Globals Workflow".into(),
+            nodes: vec![crate::client::WorkflowNode {
+                id: "globals".into(),
+                node_type: WORKFLOW_GLOBALS_NODE_TYPE_ID.into(),
+                label: "Globals".into(),
+                configuration: serde_json::json!({
+                    "variables": [
+                        {
+                            "key": "owner",
+                            "value_type": "string",
+                            "default_value": "ops",
+                            "allow_runtime_override": false,
+                            "allow_task_mutation": false
+                        }
+                    ]
+                }),
+                runtime: serde_json::json!({}),
+            }],
+            edges: vec![],
+            node_policies: vec![],
+            retry_behavior: RetryBehavior::default(),
+            validation_policy_ref: None,
+            trigger_metadata: BTreeMap::new(),
+        };
+
+        let (panel, cx) = cx.add_window_view(|window, cx| {
+            let mut panel = NodeInspectorPanel::new_for_test(WorkflowClient::new(), window, cx);
+            panel.node_types = crate::client::editor_node_types(vec![]);
+            panel.set_workflow(workflow.clone(), cx);
+            panel.set_node(Some("globals".into()), window, cx);
+            panel
+        });
+
+        panel.update_in(cx, |panel, window, cx| {
+            let state = panel.globals_editor_state.as_mut().unwrap();
+            state.key_editors[0].update(cx, |editor, cx| {
+                editor.set_text("deploy_env", window, cx);
+            });
+            state.value_editors[0].update(cx, |editor, cx| {
+                editor.set_text("prod", window, cx);
+            });
+            panel.globals_toggle_runtime_override(0, cx);
+            panel.globals_toggle_task_mutation(0, cx);
+            panel.apply_pending_node_edits(cx);
+
+            let workflow = panel.workflow.as_ref().unwrap();
+            let node = workflow
+                .nodes
+                .iter()
+                .find(|node| node.id == "globals")
+                .unwrap();
+            assert_eq!(node.configuration["variables"][0]["key"], "deploy_env");
+            assert_eq!(node.configuration["variables"][0]["default_value"], "prod");
+            assert_eq!(
+                node.configuration["variables"][0]["allow_runtime_override"],
+                true
+            );
+            assert_eq!(
+                node.configuration["variables"][0]["allow_task_mutation"],
+                true
+            );
+        });
+    }
+
+    #[gpui::test]
     async fn test_node_inspector_activation_priority_is_stable(cx: &mut gpui::TestAppContext) {
         init_test(cx);
 
         let (panel, cx) = cx.add_window_view(|window, cx| {
-            NodeInspectorPanel::new(WorkflowClient::new(), window, cx)
+            NodeInspectorPanel::new_for_test(WorkflowClient::new(), window, cx)
         });
 
         panel.update_in(cx, |panel, _window, _cx| {

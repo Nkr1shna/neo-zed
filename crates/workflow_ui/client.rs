@@ -43,6 +43,7 @@ pub enum WorkflowNodePrimitive {
     Llm,
     ExecuteShellCommand,
     Conditional,
+    Globals,
 }
 
 impl WorkflowNodePrimitive {
@@ -51,6 +52,7 @@ impl WorkflowNodePrimitive {
             WorkflowNodePrimitive::Llm => "LLM",
             WorkflowNodePrimitive::ExecuteShellCommand => "Execute Shell Command",
             WorkflowNodePrimitive::Conditional => "Conditional",
+            WorkflowNodePrimitive::Globals => "Globals",
         }
     }
 }
@@ -108,6 +110,268 @@ pub struct WorkflowNodeField {
 pub struct WorkflowNodePort {
     pub id: String,
     pub label: String,
+}
+
+pub const WORKFLOW_GLOBALS_NODE_TYPE_ID: &str = "workflow_globals";
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum WorkflowValueType {
+    String,
+    Number,
+    Boolean,
+}
+
+impl WorkflowValueType {
+    pub fn display_name(&self) -> &'static str {
+        match self {
+            WorkflowValueType::String => "Text",
+            WorkflowValueType::Number => "Number",
+            WorkflowValueType::Boolean => "Boolean",
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum WorkflowReferenceSource {
+    Input,
+    Global,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct WorkflowValueReference {
+    pub source: WorkflowReferenceSource,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub node_id: Option<String>,
+    pub path: String,
+    pub label: String,
+    pub value_type: WorkflowValueType,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum WorkflowComparisonOperator {
+    Eq,
+    Neq,
+    Gt,
+    Gte,
+    Lt,
+    Lte,
+    Contains,
+    StartsWith,
+    EndsWith,
+    IsEmpty,
+    NotEmpty,
+}
+
+impl WorkflowComparisonOperator {
+    pub fn display_name(&self) -> &'static str {
+        match self {
+            WorkflowComparisonOperator::Eq => "equals",
+            WorkflowComparisonOperator::Neq => "is not equal to",
+            WorkflowComparisonOperator::Gt => "is greater than",
+            WorkflowComparisonOperator::Gte => "is greater than or equal to",
+            WorkflowComparisonOperator::Lt => "is less than",
+            WorkflowComparisonOperator::Lte => "is less than or equal to",
+            WorkflowComparisonOperator::Contains => "contains",
+            WorkflowComparisonOperator::StartsWith => "starts with",
+            WorkflowComparisonOperator::EndsWith => "ends with",
+            WorkflowComparisonOperator::IsEmpty => "is empty",
+            WorkflowComparisonOperator::NotEmpty => "is not empty",
+        }
+    }
+
+    pub fn requires_rhs(&self) -> bool {
+        !matches!(
+            self,
+            WorkflowComparisonOperator::IsEmpty | WorkflowComparisonOperator::NotEmpty
+        )
+    }
+
+    pub fn supported_for(value_type: WorkflowValueType) -> &'static [Self] {
+        use WorkflowComparisonOperator::*;
+        match value_type {
+            WorkflowValueType::String => {
+                &[Eq, Neq, Contains, StartsWith, EndsWith, IsEmpty, NotEmpty]
+            }
+            WorkflowValueType::Number => &[Eq, Neq, Gt, Gte, Lt, Lte],
+            WorkflowValueType::Boolean => &[Eq, Neq],
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Default)]
+pub struct WorkflowConditionPredicate {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub lhs: Option<WorkflowValueReference>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub operator: Option<WorkflowComparisonOperator>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub rhs: Option<serde_json::Value>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum WorkflowConditionGroupMode {
+    All,
+    Any,
+}
+
+impl WorkflowConditionGroupMode {
+    pub fn display_name(&self) -> &'static str {
+        match self {
+            WorkflowConditionGroupMode::All => "All of",
+            WorkflowConditionGroupMode::Any => "Any of",
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct WorkflowConditionGroup {
+    pub mode: WorkflowConditionGroupMode,
+    #[serde(default)]
+    pub children: Vec<WorkflowConditionNode>,
+}
+
+impl Default for WorkflowConditionGroup {
+    fn default() -> Self {
+        Self {
+            mode: WorkflowConditionGroupMode::All,
+            children: vec![WorkflowConditionNode::Predicate(
+                WorkflowConditionPredicate::default(),
+            )],
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(tag = "kind", rename_all = "snake_case")]
+pub enum WorkflowConditionNode {
+    Predicate(WorkflowConditionPredicate),
+    Group(WorkflowConditionGroup),
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum WorkflowConditionalBranchKind {
+    When,
+    Else,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct WorkflowConditionalBranch {
+    pub output_id: String,
+    pub kind: WorkflowConditionalBranchKind,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub condition: Option<WorkflowConditionGroup>,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct WorkflowConditionalConfiguration {
+    #[serde(default)]
+    pub branches: Vec<WorkflowConditionalBranch>,
+}
+
+impl Default for WorkflowConditionalConfiguration {
+    fn default() -> Self {
+        Self {
+            branches: vec![
+                WorkflowConditionalBranch {
+                    output_id: "if_1".into(),
+                    kind: WorkflowConditionalBranchKind::When,
+                    condition: Some(WorkflowConditionGroup::default()),
+                },
+                WorkflowConditionalBranch {
+                    output_id: "else".into(),
+                    kind: WorkflowConditionalBranchKind::Else,
+                    condition: None,
+                },
+            ],
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct WorkflowGlobalVariable {
+    pub key: String,
+    pub value_type: WorkflowValueType,
+    #[serde(default)]
+    pub default_value: serde_json::Value,
+    #[serde(default)]
+    pub allow_runtime_override: bool,
+    #[serde(default)]
+    pub allow_task_mutation: bool,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Default)]
+pub struct WorkflowGlobalsConfiguration {
+    #[serde(default)]
+    pub variables: Vec<WorkflowGlobalVariable>,
+}
+
+pub fn workflow_globals_node_type() -> WorkflowNodeType {
+    WorkflowNodeType {
+        id: WORKFLOW_GLOBALS_NODE_TYPE_ID.into(),
+        label: "Globals".into(),
+        primitive: Some(WorkflowNodePrimitive::Globals),
+        category: None,
+        is_primitive: true,
+        inputs: vec![],
+        outputs: vec![],
+        configure_time_fields: vec![],
+        runtime_fields: vec![],
+    }
+}
+
+pub fn editor_node_types(mut node_types: Vec<WorkflowNodeType>) -> Vec<WorkflowNodeType> {
+    if !node_types
+        .iter()
+        .any(|node_type| node_type.id == WORKFLOW_GLOBALS_NODE_TYPE_ID)
+    {
+        node_types.push(workflow_globals_node_type());
+    }
+    node_types
+}
+
+pub fn default_configuration_for_node_type(node_type: &WorkflowNodeType) -> serde_json::Value {
+    match node_type.primitive_kind() {
+        WorkflowNodePrimitive::Conditional => {
+            serde_json::to_value(WorkflowConditionalConfiguration::default())
+                .unwrap_or_else(|_| serde_json::json!({}))
+        }
+        WorkflowNodePrimitive::Globals => {
+            serde_json::to_value(WorkflowGlobalsConfiguration::default())
+                .unwrap_or_else(|_| serde_json::json!({}))
+        }
+        _ => serde_json::json!({}),
+    }
+}
+
+pub fn conditional_configuration_from_value(
+    value: &serde_json::Value,
+) -> WorkflowConditionalConfiguration {
+    serde_json::from_value(value.clone()).unwrap_or_default()
+}
+
+pub fn globals_configuration_from_value(value: &serde_json::Value) -> WorkflowGlobalsConfiguration {
+    serde_json::from_value(value.clone()).unwrap_or_default()
+}
+
+pub fn conditional_output_ports(configuration: &serde_json::Value) -> Vec<WorkflowNodePort> {
+    conditional_configuration_from_value(configuration)
+        .branches
+        .into_iter()
+        .enumerate()
+        .map(|(index, branch)| WorkflowNodePort {
+            id: branch.output_id,
+            label: match branch.kind {
+                WorkflowConditionalBranchKind::When if index == 0 => "If".into(),
+                WorkflowConditionalBranchKind::When => format!("Else If {index}"),
+                WorkflowConditionalBranchKind::Else => "Else".into(),
+            },
+        })
+        .collect()
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -390,6 +654,7 @@ pub(crate) fn infer_workflow_node_primitive(
     match node_type_id {
         "execute_shell_command" | "integration" => WorkflowNodePrimitive::ExecuteShellCommand,
         "conditional" | "validation" => WorkflowNodePrimitive::Conditional,
+        WORKFLOW_GLOBALS_NODE_TYPE_ID => WorkflowNodePrimitive::Globals,
         _ => WorkflowNodePrimitive::Llm,
     }
 }
@@ -828,6 +1093,80 @@ mod tests {
         assert_eq!(workflow.edges[0].to_node_id, "n2");
         assert!(workflow.edges[0].from_output_id.is_empty());
         assert!(workflow.edges[0].to_input_id.is_empty());
+    }
+
+    #[test]
+    fn test_conditional_configuration_round_trips_with_nested_groups() {
+        let configuration = WorkflowConditionalConfiguration {
+            branches: vec![
+                WorkflowConditionalBranch {
+                    output_id: "if_1".into(),
+                    kind: WorkflowConditionalBranchKind::When,
+                    condition: Some(WorkflowConditionGroup {
+                        mode: WorkflowConditionGroupMode::All,
+                        children: vec![
+                            WorkflowConditionNode::Predicate(WorkflowConditionPredicate {
+                                lhs: Some(WorkflowValueReference {
+                                    source: WorkflowReferenceSource::Input,
+                                    node_id: Some("build".into()),
+                                    path: "shell.exit_code".into(),
+                                    label: "Shell exit code".into(),
+                                    value_type: WorkflowValueType::Number,
+                                }),
+                                operator: Some(WorkflowComparisonOperator::Neq),
+                                rhs: Some(serde_json::json!(0)),
+                            }),
+                            WorkflowConditionNode::Group(WorkflowConditionGroup {
+                                mode: WorkflowConditionGroupMode::Any,
+                                children: vec![WorkflowConditionNode::Predicate(
+                                    WorkflowConditionPredicate {
+                                        lhs: Some(WorkflowValueReference {
+                                            source: WorkflowReferenceSource::Global,
+                                            node_id: None,
+                                            path: "deploy_env".into(),
+                                            label: "Global: deploy_env".into(),
+                                            value_type: WorkflowValueType::String,
+                                        }),
+                                        operator: Some(WorkflowComparisonOperator::Eq),
+                                        rhs: Some(serde_json::json!("prod")),
+                                    },
+                                )],
+                            }),
+                        ],
+                    }),
+                },
+                WorkflowConditionalBranch {
+                    output_id: "else".into(),
+                    kind: WorkflowConditionalBranchKind::Else,
+                    condition: None,
+                },
+            ],
+        };
+
+        let serialized = serde_json::to_value(&configuration).unwrap();
+        let deserialized = conditional_configuration_from_value(&serialized);
+
+        assert_eq!(deserialized, configuration);
+        assert_eq!(conditional_output_ports(&serialized)[0].label, "If");
+        assert_eq!(conditional_output_ports(&serialized)[1].label, "Else");
+    }
+
+    #[test]
+    fn test_globals_configuration_round_trips_with_mutation_flags() {
+        let configuration = WorkflowGlobalsConfiguration {
+            variables: vec![WorkflowGlobalVariable {
+                key: "retry_budget".into(),
+                value_type: WorkflowValueType::Number,
+                default_value: serde_json::json!(3),
+                allow_runtime_override: true,
+                allow_task_mutation: true,
+            }],
+        };
+
+        let serialized = serde_json::to_value(&configuration).unwrap();
+        let deserialized = globals_configuration_from_value(&serialized);
+
+        assert_eq!(deserialized, configuration);
     }
 
     #[test]

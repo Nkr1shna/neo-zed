@@ -1,0 +1,104 @@
+<h2>Simplified Conditional Builder</h2>
+<p class="subtitle">Same JSON AST underneath, much smaller authoring surface on top.</p>
+
+<div class="cards">
+  <div class="card" data-choice="simple-builder" onclick="toggleSelect(this)">
+    <div class="card-body">
+      <div class="label">Recommended</div>
+      <h3>Progressive Disclosure</h3>
+      <p>Show one branch at a time, one rule group at a time, and hide nesting controls until the user explicitly adds them.</p>
+    </div>
+  </div>
+</div>
+
+<div class="section">
+  <h3>Default Inspector State</h3>
+  <div class="mockup">
+    <div class="mockup-header">Node Inspector • Conditional</div>
+    <div class="mockup-body">
+      <div style="display:flex; gap:10px; margin-bottom:14px;">
+        <button class="mock-button">If</button>
+        <button class="mock-button" style="opacity:.65;">Else If</button>
+        <button class="mock-button" style="opacity:.65;">Else</button>
+      </div>
+
+      <div style="border:1px solid #3a3a3a; border-radius:12px; padding:12px;">
+        <div class="label">Condition</div>
+        <div style="display:grid; grid-template-columns: 1.4fr 1fr 1fr; gap:10px; margin-top:8px;">
+          <input class="mock-input" value="Shell exit code" />
+          <input class="mock-input" value="is not equal to" />
+          <input class="mock-input" value="0" />
+        </div>
+
+        <div style="display:flex; gap:10px; margin-top:12px;">
+          <button class="mock-button">Then → retry_build</button>
+          <button class="mock-button" style="opacity:.75;">Add AND/OR group</button>
+          <button class="mock-button" style="opacity:.75;">Add nested branch</button>
+        </div>
+      </div>
+
+      <div style="margin-top:14px; display:flex; gap:10px;">
+        <button class="mock-button">Add else if</button>
+        <button class="mock-button">Add else</button>
+      </div>
+    </div>
+  </div>
+</div>
+
+<div class="section">
+  <h3>Only When Expanded</h3>
+  <div class="split">
+    <div class="mockup">
+      <div class="mockup-header">Add AND/OR Group</div>
+      <div class="mockup-body">
+        <div class="label">Group</div>
+        <div style="display:flex; gap:10px; margin:8px 0 12px;">
+          <button class="mock-button">All of</button>
+          <button class="mock-button" style="opacity:.7;">Any of</button>
+        </div>
+        <div style="border:1px dashed #555; border-radius:10px; padding:10px;">
+          <div>Shell exit code != 0</div>
+          <div style="margin-top:8px;">Standard error is not empty</div>
+        </div>
+      </div>
+    </div>
+    <div class="mockup">
+      <div class="mockup-header">Add Nested Branch</div>
+      <div class="mockup-body">
+        <div class="label">Nested under current case</div>
+        <div style="border:1px dashed #555; border-radius:10px; padding:10px; margin-top:8px;">
+          <div>If global retry_budget &lt;= 0</div>
+          <div style="margin-top:8px;">Then → notify_owner</div>
+          <div style="margin-top:8px;">Else → continue_pipeline</div>
+        </div>
+      </div>
+    </div>
+  </div>
+</div>
+
+<div class="section">
+  <h3>What Stays Hidden</h3>
+  <div class="options" data-multiselect>
+    <div class="option" data-choice="hide-json" onclick="toggleSelect(this)">
+      <div class="letter">A</div>
+      <div class="content">
+        <h3>Hide JSON</h3>
+        <p>No raw JSON in normal authoring. Optional debug-only preview later.</p>
+      </div>
+    </div>
+    <div class="option" data-choice="hide-tree-controls" onclick="toggleSelect(this)">
+      <div class="letter">B</div>
+      <div class="content">
+        <h3>Hide tree controls by default</h3>
+        <p>No always-visible tree widgets unless the user expands into nesting.</p>
+      </div>
+    </div>
+    <div class="option" data-choice="single-row-default" onclick="toggleSelect(this)">
+      <div class="letter">C</div>
+      <div class="content">
+        <h3>Start from one simple rule row</h3>
+        <p>The first experience should feel like a basic condition builder, not a visual programming canvas.</p>
+      </div>
+    </div>
+  </div>
+</div>

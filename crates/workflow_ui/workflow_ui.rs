@@ -7,10 +7,13 @@ mod runs;
 pub use canvas::{CanvasSelection, WorkflowCanvas, WorkflowCanvasEvent, open_run, open_workflow};
 pub use client::{
     NodePolicy, RetryBehavior, TaskLifecycleStatus, TaskNodeStatus, TaskRecord, TaskStatusResponse,
-    WorkflowClient, WorkflowDefinitionRecord, WorkflowDefinitionRequest, WorkflowEdge,
+    WorkflowClient, WorkflowComparisonOperator, WorkflowConditionGroup, WorkflowConditionGroupMode,
+    WorkflowConditionNode, WorkflowConditionPredicate, WorkflowConditionalBranch,
+    WorkflowConditionalBranchKind, WorkflowConditionalConfiguration, WorkflowDefinitionRecord,
+    WorkflowDefinitionRequest, WorkflowEdge, WorkflowGlobalVariable, WorkflowGlobalsConfiguration,
     WorkflowNode, WorkflowNodeField, WorkflowNodeFieldOption, WorkflowNodeFieldType,
     WorkflowNodePort, WorkflowNodePrimitive, WorkflowNodeType, WorkflowNodeTypeCategory,
-    WorkflowRunRequest,
+    WorkflowReferenceSource, WorkflowRunRequest, WorkflowValueReference, WorkflowValueType,
 };
 pub use inspector::{NewWorkflow, NodeInspectorPanel, OpenWorkflowDef, WorkflowDefsView};
 pub use picker::{WorkflowPicker, WorkflowPickerDelegate};
