@@ -467,11 +467,66 @@ impl WorkflowCanvas {
         }
     }
 
+    fn add_node(&mut self, kind: WorkflowNodeKind, cx: &mut Context<Self>) {
+        let Some(ref mut workflow) = self.workflow else {
+            return;
+        };
+        let id = uuid::Uuid::new_v4().to_string();
+        let (ox, oy) = self.layout.viewport_offset;
+        let canvas_x = -ox + 300.0 / self.layout.zoom;
+        let canvas_y = -oy + 200.0 / self.layout.zoom;
+        let label = kind.display_name().to_string();
+        workflow.nodes.push(crate::client::WorkflowNode {
+            id: id.clone(),
+            kind,
+            label,
+        });
+        self.layout
+            .node_positions
+            .insert(id.clone(), NodePos { x: canvas_x, y: canvas_y });
+        self.selection = CanvasSelection::Node(id.clone());
+        cx.emit(WorkflowCanvasEvent::NodeSelected(Some(id)));
+        cx.notify();
+    }
+
     fn render_toolbar(&self, cx: &mut Context<Self>) -> impl gpui::IntoElement {
-        use ui::prelude::*;
+        use ui::{Divider, Tooltip, prelude::*};
         h_flex()
-            .gap_2()
+            .gap_1()
             .p_2()
+            .child(
+                Button::new("add-task", "+ Task")
+                    .style(ButtonStyle::Subtle)
+                    .tooltip(Tooltip::text("Add Task node"))
+                    .on_click(cx.listener(|this, _, _, cx| {
+                        this.add_node(WorkflowNodeKind::Task, cx);
+                    })),
+            )
+            .child(
+                Button::new("add-validation", "+ Validation")
+                    .style(ButtonStyle::Subtle)
+                    .tooltip(Tooltip::text("Add Validation node"))
+                    .on_click(cx.listener(|this, _, _, cx| {
+                        this.add_node(WorkflowNodeKind::Validation, cx);
+                    })),
+            )
+            .child(
+                Button::new("add-review", "+ Review")
+                    .style(ButtonStyle::Subtle)
+                    .tooltip(Tooltip::text("Add Review node"))
+                    .on_click(cx.listener(|this, _, _, cx| {
+                        this.add_node(WorkflowNodeKind::Review, cx);
+                    })),
+            )
+            .child(
+                Button::new("add-integration", "+ Integration")
+                    .style(ButtonStyle::Subtle)
+                    .tooltip(Tooltip::text("Add Integration node"))
+                    .on_click(cx.listener(|this, _, _, cx| {
+                        this.add_node(WorkflowNodeKind::Integration, cx);
+                    })),
+            )
+            .child(Divider::vertical().color(ui::DividerColor::Border))
             .child(
                 Button::new("mode-select", "Select")
                     .style(if self.mode == CanvasMode::Select {
@@ -479,6 +534,7 @@ impl WorkflowCanvas {
                     } else {
                         ButtonStyle::Subtle
                     })
+                    .tooltip(Tooltip::text("Select / drag nodes"))
                     .on_click(cx.listener(|this, _, _, cx| {
                         this.mode = CanvasMode::Select;
                         cx.notify();
@@ -491,6 +547,7 @@ impl WorkflowCanvas {
                     } else {
                         ButtonStyle::Subtle
                     })
+                    .tooltip(Tooltip::text("Click source then target to add edge"))
                     .on_click(cx.listener(|this, _, _, cx| {
                         this.mode = CanvasMode::Connect;
                         cx.notify();
@@ -503,6 +560,7 @@ impl WorkflowCanvas {
                     } else {
                         ButtonStyle::Subtle
                     })
+                    .tooltip(Tooltip::text("Drag canvas to pan"))
                     .on_click(cx.listener(|this, _, _, cx| {
                         this.mode = CanvasMode::Pan;
                         cx.notify();
