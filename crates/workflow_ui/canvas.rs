@@ -1,7 +1,6 @@
 use crate::client::{
-    TaskLifecycleStatus, TaskNodeStatus, TaskStatusResponse, WorkflowClient,
-    WorkflowDefinitionRecord, WorkflowEdge, WorkflowNode, WorkflowNodeType,
-    WorkflowNodeTypeCategory,
+    TaskLifecycleStatus, TaskStatusResponse, WorkflowClient, WorkflowDefinitionRecord,
+    WorkflowEdge, WorkflowNode, WorkflowNodeType, WorkflowNodeTypeCategory,
 };
 use crate::inspector::{NodeInspectorPanel, upsert_workflow_def_cache};
 use editor::Editor;
@@ -23,7 +22,6 @@ const NODE_H_GAP: f32 = 80.0;
 const NODE_V_GAP: f32 = 60.0;
 const EDGE_STROKE: Pixels = px(2.0);
 const NODE_CORNER_RADIUS: Pixels = px(8.0);
-const STATUS_DOT_RADIUS: f32 = 6.0;
 const BORDER_WIDTH_NORMAL: Pixels = px(1.5);
 const BORDER_WIDTH_SELECTED: Pixels = px(3.0);
 const PORT_RADIUS_F: f32 = 7.0;
@@ -1057,13 +1055,17 @@ fn node_fill_and_border(
     }
 }
 
-fn status_dot_color(status: &TaskLifecycleStatus) -> gpui::Rgba {
+fn status_badge_color(status: &TaskLifecycleStatus) -> gpui::Rgba {
     match status {
         TaskLifecycleStatus::Queued => gpui::rgba(0x6b7280ff),
         TaskLifecycleStatus::Running => gpui::rgba(0x3b82f6ff),
         TaskLifecycleStatus::Completed => gpui::rgba(0x22c55eff),
         TaskLifecycleStatus::Failed => gpui::rgba(0xef4444ff),
     }
+}
+
+fn status_badge_text_color() -> gpui::Rgba {
+    gpui::rgba(0xf8fafcff)
 }
 
 fn paint_node(
@@ -1109,7 +1111,7 @@ fn paint_node(
     window.paint_quad(paint_quad);
 
     if let Some(status) = status {
-        paint_status_dot(layout, pos, status, origin, window);
+        paint_status_badge(layout, pos, status, origin, window, cx);
     }
 
     paint_ports(layout, pos, input_ports, true, origin, window);
@@ -1145,49 +1147,67 @@ fn paint_ports(
     }
 }
 
-fn paint_status_dot(
+fn paint_status_badge(
     layout: &CanvasLayout,
     pos: &NodePos,
     status: &TaskLifecycleStatus,
     origin: Point<Pixels>,
     window: &mut Window,
+    cx: &mut App,
 ) {
-    let dot_radius = STATUS_DOT_RADIUS * layout.zoom;
-    let center_x = pos.x + NODE_WIDTH_F - STATUS_DOT_RADIUS - 8.0;
-    let center_y = pos.y + STATUS_DOT_RADIUS + 8.0;
-    let center = to_screen_point(layout, center_x, center_y, origin);
+    let label = status.display_name();
+    let font_size = scaled(layout, 9.0);
+    let font = gpui::Font::default();
+    let text_color = status_badge_text_color();
+    let text_run = gpui::TextRun {
+        len: label.len(),
+        font,
+        color: gpui::Hsla::from(text_color),
+        background_color: None,
+        underline: None,
+        strikethrough: None,
+    };
+    let layout_line = window
+        .text_system()
+        .layout_line(label, font_size, &[text_run.clone()], None);
+    let shaped_line = window
+        .text_system()
+        .shape_line(label.into(), font_size, &[text_run], None);
 
-    let color = status_dot_color(status);
-    let kappa = 0.5523_f32;
-    let r = dot_radius;
+    let horizontal_padding = scaled(layout, 8.0);
+    let vertical_padding = scaled(layout, 4.0);
+    let badge_width = layout_line.width + horizontal_padding * 2.0;
+    let badge_height = font_size + vertical_padding * 2.0;
+    let badge_x = pos.x + NODE_WIDTH_F - badge_width.as_f32() / layout.zoom - 10.0;
+    let badge_y = pos.y + 8.0;
+    let badge_origin = to_screen_point(layout, badge_x, badge_y, origin);
+    let badge_bounds = gpui::Bounds {
+        origin: badge_origin,
+        size: gpui::size(badge_width, badge_height),
+    };
 
-    let mut builder = gpui::PathBuilder::fill();
-    builder.move_to(gpui::point(center.x, center.y - px(r)));
-    builder.cubic_bezier_to(
-        gpui::point(center.x + px(r), center.y),
-        gpui::point(center.x + px(r * kappa), center.y - px(r)),
-        gpui::point(center.x + px(r), center.y - px(r * kappa)),
-    );
-    builder.cubic_bezier_to(
-        gpui::point(center.x, center.y + px(r)),
-        gpui::point(center.x + px(r), center.y + px(r * kappa)),
-        gpui::point(center.x + px(r * kappa), center.y + px(r)),
-    );
-    builder.cubic_bezier_to(
-        gpui::point(center.x - px(r), center.y),
-        gpui::point(center.x - px(r * kappa), center.y + px(r)),
-        gpui::point(center.x - px(r), center.y + px(r * kappa)),
-    );
-    builder.cubic_bezier_to(
-        gpui::point(center.x, center.y - px(r)),
-        gpui::point(center.x - px(r), center.y - px(r * kappa)),
-        gpui::point(center.x - px(r * kappa), center.y - px(r)),
-    );
-    builder.close();
+    window.paint_quad(gpui::quad(
+        badge_bounds,
+        badge_height / 2.0,
+        status_badge_color(status),
+        px(0.0),
+        gpui::rgba(0x00000000),
+        gpui::BorderStyle::Solid,
+    ));
 
-    if let Ok(path) = builder.build() {
-        window.paint_path(path, color);
-    }
+    shaped_line
+        .paint(
+            gpui::point(
+                badge_origin.x + horizontal_padding,
+                badge_origin.y + vertical_padding,
+            ),
+            font_size * 1.2,
+            gpui::TextAlign::Left,
+            None,
+            window,
+            cx,
+        )
+        .log_err();
 }
 
 fn paint_label(
@@ -2031,7 +2051,7 @@ mod tests {
                 validation_policy_ref: None,
                 trigger_metadata: Default::default(),
             }),
-            nodes: vec![TaskNodeStatus {
+            nodes: vec![crate::client::TaskNodeStatus {
                 id: "node-1".into(),
                 node_type: "task".into(),
                 category: WorkflowNodeTypeCategory::Task,
@@ -2177,7 +2197,7 @@ mod tests {
                 task_description: None,
             },
             workflow: None,
-            nodes: vec![TaskNodeStatus {
+            nodes: vec![crate::client::TaskNodeStatus {
                 id: "node-1".into(),
                 node_type: "task".into(),
                 category: WorkflowNodeTypeCategory::Task,
@@ -2213,7 +2233,7 @@ mod tests {
                 task_description: None,
             },
             workflow: None,
-            nodes: vec![TaskNodeStatus {
+            nodes: vec![crate::client::TaskNodeStatus {
                 id: "node-1".into(),
                 node_type: "task".into(),
                 category: WorkflowNodeTypeCategory::Task,
@@ -2235,6 +2255,19 @@ mod tests {
             run_failure_message(&run).as_deref(),
             Some("Build failed: missing green background")
         );
+    }
+
+    #[test]
+    fn test_running_status_badge_uses_visible_chip_colors() {
+        let (task_fill, _) = node_fill_and_border(
+            &WorkflowNodeTypeCategory::Task,
+            gpui::WindowAppearance::Dark,
+        );
+        let badge_fill = status_badge_color(&TaskLifecycleStatus::Running);
+        let badge_text = status_badge_text_color();
+
+        assert_ne!(badge_fill, task_fill);
+        assert_ne!(badge_text, badge_fill);
     }
 
     #[gpui::test]

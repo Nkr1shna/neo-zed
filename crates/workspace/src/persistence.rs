@@ -26,7 +26,7 @@ use project::{
 };
 
 use language::{LanguageName, Toolchain, ToolchainScope};
-use orchestration::OrchestrationState;
+use orchestration::{OrchestrationState, OrchestrationStatePersistenceError};
 use remote::{
     DockerConnectionOptions, RemoteConnectionOptions, SshConnectionOptions, WslConnectionOptions,
 };
@@ -1517,15 +1517,21 @@ impl WorkspaceDb {
             WHERE workspace_id = ?
         ))?(workspace_id)?;
 
-        state_json
-            .map(|state_json| {
-                OrchestrationState::deserialize(&state_json)
-                    .map_err(anyhow::Error::from)
-                    .with_context(|| {
-                        format!("failed to load orchestration state for workspace {workspace_id:?}")
-                    })
-            })
-            .transpose()
+        match state_json {
+            Some(state_json) => match OrchestrationState::deserialize(&state_json) {
+                Ok(state) => Ok(Some(state)),
+                Err(OrchestrationStatePersistenceError::UnsupportedVersion(version)) => {
+                    log::warn!(
+                        "ignoring orchestration state for workspace {workspace_id:?}: unsupported version {version}"
+                    );
+                    Ok(None)
+                }
+                Err(error) => Err(anyhow::Error::from(error)).with_context(|| {
+                    format!("failed to load orchestration state for workspace {workspace_id:?}")
+                }),
+            },
+            None => Ok(None),
+        }
     }
 
     pub(crate) async fn save_orchestration_state(
@@ -3183,6 +3189,50 @@ mod tests {
         db.delete_workspace_by_id(workspace.id).await.unwrap();
         let restored_state = db.orchestration_state(workspace.id).unwrap();
         assert_eq!(restored_state, None);
+    }
+
+    #[gpui::test]
+    async fn test_unsupported_orchestration_state_version_is_ignored() {
+        zlog::init_test();
+
+        let db = WorkspaceDb::open_test_db("test_unsupported_orchestration_state_version").await;
+        let workspace_id = db.next_id().await.unwrap();
+        let state_json = r#"{
+            "version": 2,
+            "selected_node": null,
+            "templates": [],
+            "template_revisions": [],
+            "checkpoints": [],
+            "ledger_events": [],
+            "active_run_id": null,
+            "workflow_runs": [
+                {
+                    "id": "run-1774067370226259",
+                    "template_id": "template-1774064065549496",
+                    "template_revision_id": "template-1774064065549496@8",
+                    "bound_project_id": "19",
+                    "status": "Pending",
+                    "selected_node_id": null,
+                    "active_checkpoint_id": null,
+                    "started_at_epoch_millis": null,
+                    "completed_at_epoch_millis": null,
+                    "current_node_id": null,
+                    "last_error": null
+                }
+            ]
+        }"#;
+
+        db.write(move |conn| {
+            conn.exec_bound(sql!(
+                INSERT INTO orchestration_states(workspace_id, state_json)
+                VALUES (?, ?)
+            ))
+            .unwrap()((workspace_id, state_json))
+            .unwrap();
+        })
+        .await;
+
+        assert_eq!(db.orchestration_state(workspace_id).unwrap(), None);
     }
 
     #[gpui::test]

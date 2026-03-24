@@ -33,7 +33,7 @@ use title_bar::TitleBar;
 use ui::{
     Button, ButtonCommon, Clickable, ContextMenu, ContextMenuEntry, ContextMenuItem, Divider, Icon,
     IconButton, IconName, IconSize, PopoverMenu, ProgressBar, StyledTypography, Tab, Tooltip,
-    utils::platform_title_bar_height, v_flex,
+    v_flex,
 };
 use util::ResultExt as _;
 use workspace::dock::{DockPosition, PanelEvent, PanelHandle};
@@ -2027,6 +2027,14 @@ fn widget_progress_bar_width(widget: &RegisteredRemoteUiWidget) -> Option<Pixels
     }
 }
 
+fn should_mount_widget_strip(
+    registry: &RemoteUiRegistry,
+    surface: WidgetSurface,
+    side: StripSide,
+) -> bool {
+    !registry.widget_descriptors(surface, side).is_empty()
+}
+
 fn validate_widget_tree(widget: &RegisteredRemoteUiWidget, tree: &RemoteViewTree) -> Result<()> {
     let mut icon_count = 0usize;
     let mut badge_count = 0usize;
@@ -2139,13 +2147,12 @@ impl Render for RemoteUiWidgetStrip {
                 self.created_at.elapsed().as_millis(),
             );
         }
-        let host_height = match self.surface {
-            WidgetSurface::Titlebar => platform_title_bar_height(window),
-            WidgetSurface::Footer => window.line_height(),
-        };
-
-        ui::h_flex()
+        if self.items.is_empty() {
+            return ui::div();
+        }
+        let strip = ui::h_flex()
             .gap_1()
+            .items_center()
             .children(self.items.iter().map(|item| {
                 let (min_width, max_width) = widget_width_bounds(&item.descriptor);
                 ui::h_flex()
@@ -2157,8 +2164,12 @@ impl Render for RemoteUiWidgetStrip {
                     .when_some(max_width, |div, max_width| div.max_w(px(max_width as f32)))
                     .child(item.entity.clone())
             }))
-            .h(host_height)
-            .overflow_hidden()
+            .overflow_hidden();
+
+        match self.surface {
+            WidgetSurface::Titlebar => strip.h_full(),
+            WidgetSurface::Footer => strip.h(window.line_height()),
+        }
     }
 }
 
@@ -2283,6 +2294,9 @@ fn mount_remote_ui_widget_strips_for_workspace(
     let workspace_handle = cx.entity().downgrade();
 
     for side in [StripSide::Left, StripSide::Center, StripSide::Right] {
+        let should_mount_footer_strip = RemoteUiRegistry::read_global(cx).is_some_and(|registry| {
+            should_mount_widget_strip(registry, WidgetSurface::Footer, side)
+        });
         let footer_key = WidgetStripKey {
             workspace_id,
             surface: WidgetSurface::Footer,
@@ -2294,6 +2308,8 @@ fn mount_remote_ui_widget_strips_for_workspace(
         {
             strip.update(cx, |strip, cx| strip.refresh(cx));
             strip
+        } else if !should_mount_footer_strip {
+            continue;
         } else {
             let strip = cx.new(|cx| {
                 RemoteUiWidgetStrip::new(
@@ -2332,11 +2348,17 @@ fn mount_remote_ui_widget_strips_for_workspace(
             surface: WidgetSurface::Titlebar,
             side,
         };
+        let should_mount_titlebar_strip =
+            RemoteUiRegistry::read_global(cx).is_some_and(|registry| {
+                should_mount_widget_strip(registry, WidgetSurface::Titlebar, side)
+            });
         if let Some(strip) = RemoteUiRegistry::read_global(cx)
             .and_then(|registry| registry.mounted_widget_strip(titlebar_key))
             .and_then(|strip| strip.upgrade())
         {
             strip.update(cx, |strip, cx| strip.refresh(cx));
+        } else if !should_mount_titlebar_strip {
+            continue;
         } else {
             let strip = cx.new(|cx| {
                 RemoteUiWidgetStrip::new(
@@ -3296,6 +3318,71 @@ mod tests {
         );
         assert_eq!(footer_right[0].surface, WidgetSurface::Footer);
         assert_eq!(footer_right[0].side, StripSide::Right);
+    }
+
+    #[test]
+    fn widget_strips_only_mount_for_sides_with_registered_widgets() {
+        let mut registry = RemoteUiRegistry::default();
+
+        assert!(!should_mount_widget_strip(
+            &registry,
+            WidgetSurface::Titlebar,
+            StripSide::Left
+        ));
+        assert!(!should_mount_widget_strip(
+            &registry,
+            WidgetSurface::Footer,
+            StripSide::Center
+        ));
+
+        let mut remote_ui = RemoteUiManifest::default();
+        remote_ui
+            .titlebar_widgets
+            .push(TitlebarWidgetManifestEntry {
+                id: "left-only".into(),
+                root_view: "titlebar-left-only".into(),
+                side: WidgetSide::Left,
+                size: WidgetSize::Small,
+                priority: 10,
+                min_width: None,
+                max_width: None,
+                refresh_interval_seconds: None,
+                when: None,
+            });
+        remote_ui.footer_widgets.push(FooterWidgetManifestEntry {
+            id: "footer-center".into(),
+            root_view: "footer-center".into(),
+            zone: FooterWidgetZone::Center,
+            size: WidgetSize::Medium,
+            priority: 20,
+            min_width: None,
+            max_width: None,
+            refresh_interval_seconds: None,
+            when: None,
+        });
+
+        registry.register_extension("remote-ui".into(), remote_ui);
+
+        assert!(should_mount_widget_strip(
+            &registry,
+            WidgetSurface::Titlebar,
+            StripSide::Left
+        ));
+        assert!(!should_mount_widget_strip(
+            &registry,
+            WidgetSurface::Titlebar,
+            StripSide::Right
+        ));
+        assert!(should_mount_widget_strip(
+            &registry,
+            WidgetSurface::Footer,
+            StripSide::Center
+        ));
+        assert!(!should_mount_widget_strip(
+            &registry,
+            WidgetSurface::Footer,
+            StripSide::Left
+        ));
     }
 
     #[test]

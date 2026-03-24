@@ -17,14 +17,20 @@ impl OrchestrationState {
     }
 
     pub fn deserialize(json: &str) -> Result<Self, OrchestrationStatePersistenceError> {
-        let versioned_state: VersionedOrchestrationState = serde_json::from_str(json)?;
-        if versioned_state.version != CURRENT_ORCHESTRATION_STATE_VERSION {
+        let version_only: VersionOnlyOrchestrationState = serde_json::from_str(json)?;
+        if version_only.version != CURRENT_ORCHESTRATION_STATE_VERSION {
             return Err(OrchestrationStatePersistenceError::UnsupportedVersion(
-                versioned_state.version,
+                version_only.version,
             ));
         }
+        let versioned_state: VersionedOrchestrationState = serde_json::from_str(json)?;
         Ok(versioned_state.state)
     }
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Deserialize)]
+struct VersionOnlyOrchestrationState {
+    version: u32,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -285,5 +291,41 @@ mod tests {
                 session_id: "session-123".to_string(),
             })
         );
+    }
+
+    #[test]
+    fn orchestration_state_rejects_legacy_v2_payload_before_struct_deserialization() {
+        let json = r#"{
+            "version": 2,
+            "selected_node": null,
+            "templates": [],
+            "template_revisions": [],
+            "checkpoints": [],
+            "ledger_events": [],
+            "active_run_id": null,
+            "workflow_runs": [
+                {
+                    "id": "run-1774067370226259",
+                    "template_id": "template-1774064065549496",
+                    "template_revision_id": "template-1774064065549496@8",
+                    "bound_project_id": "19",
+                    "status": "Pending",
+                    "selected_node_id": null,
+                    "active_checkpoint_id": null,
+                    "started_at_epoch_millis": null,
+                    "completed_at_epoch_millis": null,
+                    "current_node_id": null,
+                    "last_error": null
+                }
+            ]
+        }"#;
+
+        let error =
+            OrchestrationState::deserialize(json).expect_err("legacy payload should be rejected");
+
+        assert!(matches!(
+            error,
+            OrchestrationStatePersistenceError::UnsupportedVersion(2)
+        ));
     }
 }

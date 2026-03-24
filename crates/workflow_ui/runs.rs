@@ -1,10 +1,14 @@
 use crate::canvas::open_run;
 use crate::client::{TaskLifecycleStatus, TaskRecord, WorkflowClient};
-use gpui::{Action, App, Context, IntoElement, Render, Task, Window};
+use crate::workflow_toolbar_icon_button;
+use editor::Editor;
+use gpui::{
+    Action, App, Context, Entity, Focusable, IntoElement, Render, Subscription, Task, Window,
+};
 use schemars::JsonSchema;
 use std::sync::Arc;
 use std::time::Duration;
-use ui::{ListItem, prelude::*};
+use ui::{Divider, ListItem, Tooltip, prelude::*, utils::platform_title_bar_height};
 use util::ResultExt;
 use uuid::Uuid;
 use workspace::{Toast, Workspace, notifications::NotificationId};
@@ -29,28 +33,79 @@ struct RunGroups {
 
 pub struct WorkflowRunsView {
     runs: Vec<TaskRecord>,
+    search_query: String,
+    filter_editor: Entity<Editor>,
     loading: bool,
     error: Option<String>,
     client: Arc<WorkflowClient>,
+    _subscriptions: Vec<Subscription>,
     _fetch_task: Option<Task<()>>,
     _poll_task: Option<Task<()>>,
     _discard_task: Option<Task<()>>,
 }
 
 impl WorkflowRunsView {
-    pub fn new(client: Arc<WorkflowClient>, cx: &mut Context<Self>) -> Self {
+    pub fn new(client: Arc<WorkflowClient>, window: &mut Window, cx: &mut Context<Self>) -> Self {
         let mut view = Self {
             runs: vec![],
+            search_query: String::new(),
+            filter_editor: cx.new(|cx| {
+                let mut editor = Editor::single_line(window, cx);
+                editor.set_placeholder_text("Search runs…", window, cx);
+                editor
+            }),
             loading: true,
             error: None,
             client,
+            _subscriptions: Vec::new(),
             _fetch_task: None,
             _poll_task: None,
             _discard_task: None,
         };
+        view.bind_filter_editor(cx);
         view.fetch(cx);
         view.start_polling(cx);
         view
+    }
+
+    #[cfg(test)]
+    fn new_for_test(
+        client: Arc<WorkflowClient>,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> Self {
+        let mut view = Self {
+            runs: vec![],
+            search_query: String::new(),
+            filter_editor: cx.new(|cx| {
+                let mut editor = Editor::single_line(window, cx);
+                editor.set_placeholder_text("Search runs…", window, cx);
+                editor
+            }),
+            loading: false,
+            error: None,
+            client,
+            _subscriptions: Vec::new(),
+            _fetch_task: None,
+            _poll_task: None,
+            _discard_task: None,
+        };
+        view.bind_filter_editor(cx);
+        view
+    }
+
+    fn bind_filter_editor(&mut self, cx: &mut Context<Self>) {
+        let filter_editor = self.filter_editor.clone();
+        self._subscriptions.push(
+            cx.subscribe(&filter_editor, |view: &mut Self, _, event, cx| {
+                if let editor::EditorEvent::BufferEdited = event {
+                    let query = view.filter_editor.read(cx).text(cx).to_string();
+                    if view.set_search_query(query) {
+                        cx.notify();
+                    }
+                }
+            }),
+        );
     }
 
     fn fetch(&mut self, cx: &mut Context<Self>) {
@@ -114,24 +169,45 @@ impl WorkflowRunsView {
         }));
     }
 
-    fn grouped_runs(&self) -> RunGroups {
-        let mut groups = RunGroups {
-            active: Vec::new(),
-            completed: Vec::new(),
-            failed: Vec::new(),
-        };
+    pub fn set_search_query(&mut self, query: impl Into<String>) -> bool {
+        let query = query.into();
+        if self.search_query == query {
+            return false;
+        }
+        self.search_query = query;
+        true
+    }
 
-        for run in &self.runs {
-            match run.status {
-                TaskLifecycleStatus::Queued | TaskLifecycleStatus::Running => {
-                    groups.active.push(run.clone())
-                }
-                TaskLifecycleStatus::Completed => groups.completed.push(run.clone()),
-                TaskLifecycleStatus::Failed => groups.failed.push(run.clone()),
+    pub fn focus_filter_editor(&self, window: &mut Window, cx: &mut App) {
+        let handle = self.filter_editor.read(cx).focus_handle(cx);
+        handle.focus(window, cx);
+    }
+
+    pub fn refresh(&mut self, cx: &mut Context<Self>) {
+        self.fetch(cx);
+    }
+
+    pub fn clear_search(&mut self, window: &mut Window, cx: &mut Context<Self>) -> bool {
+        self.filter_editor.update(cx, |editor, cx| {
+            if editor.buffer().read(cx).len(cx).0 > 0 {
+                editor.set_text("", window, cx);
+                true
+            } else {
+                false
             }
+        })
+    }
+
+    fn filtered_runs(&self) -> Vec<&TaskRecord> {
+        let query = self.search_query.trim().to_ascii_lowercase();
+        if query.is_empty() {
+            return self.runs.iter().collect();
         }
 
-        groups
+        self.runs
+            .iter()
+            .filter(|run| run_matches_query(run, &query))
+            .collect()
     }
 
     fn render_group(
@@ -193,31 +269,11 @@ impl WorkflowRunsView {
 }
 
 impl Render for WorkflowRunsView {
-    fn render(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
-        let header = h_flex()
-            .px_2()
-            .py_1()
-            .justify_between()
-            .child(Label::new("Runs").size(LabelSize::Small))
-            .child(
-                h_flex()
-                    .gap_1()
-                    .child(
-                        IconButton::new("refresh-workflow-runs", IconName::ArrowCircle).on_click(
-                            cx.listener(|this, _, _window, cx| {
-                                this.fetch(cx);
-                            }),
-                        ),
-                    )
-                    .child(
-                        IconButton::new("new-workflow-run", IconName::Plus).on_click(cx.listener(
-                            |_this, _, window, cx| {
-                                window.dispatch_action(Box::new(OpenWorkflowPicker), cx);
-                            },
-                        )),
-                    ),
-            );
-
+    fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        let traffic_lights = cfg!(target_os = "macos") && !window.is_fullscreen();
+        let header_height = platform_title_bar_height(window);
+        let has_query = !self.filter_editor.read(cx).text(cx).is_empty();
+        let filtered_runs = self.filtered_runs();
         let content: gpui::AnyElement = if self.loading && self.runs.is_empty() {
             Label::new("Loading...")
                 .color(Color::Muted)
@@ -228,8 +284,12 @@ impl Render for WorkflowRunsView {
                 .into_any_element()
         } else if self.runs.is_empty() {
             Label::new("No runs").color(Color::Muted).into_any_element()
+        } else if filtered_runs.is_empty() {
+            Label::new("No workflow runs match your search.")
+                .color(Color::Muted)
+                .into_any_element()
         } else {
-            let groups = self.grouped_runs();
+            let groups = grouped_runs_from_records(filtered_runs);
             v_flex()
                 .gap_2()
                 .child(self.render_group("Running / queued", &groups.active, 0, cx))
@@ -238,8 +298,103 @@ impl Render for WorkflowRunsView {
                 .into_any_element()
         };
 
-        v_flex().size_full().child(header).child(content)
+        v_flex()
+            .size_full()
+            .child(
+                h_flex()
+                    .h(header_height)
+                    .mt_px()
+                    .pb_px()
+                    .justify_between()
+                    .border_b_1()
+                    .border_color(cx.theme().colors().border)
+                    .when(traffic_lights, |this| {
+                        this.pl(px(ui::utils::TRAFFIC_LIGHT_PADDING))
+                    })
+                    .pr_1p5()
+                    .gap_1()
+                    .child(Divider::vertical().color(ui::DividerColor::Border))
+                    .child(
+                        h_flex()
+                            .ml_1()
+                            .min_w_0()
+                            .w_full()
+                            .gap_1()
+                            .child(
+                                Icon::new(IconName::MagnifyingGlass)
+                                    .size(IconSize::Small)
+                                    .color(Color::Muted),
+                            )
+                            .child(self.filter_editor.clone()),
+                    )
+                    .when(has_query, |this| {
+                        this.child(
+                            IconButton::new("clear_runs_filter", IconName::Close)
+                                .icon_size(IconSize::Small)
+                                .tooltip(Tooltip::text("Clear Search"))
+                                .on_click(cx.listener(|this, _, window, cx| {
+                                    this.clear_search(window, cx);
+                                })),
+                        )
+                    })
+                    .child(
+                        h_flex()
+                            .gap_1()
+                            .child(
+                                workflow_toolbar_icon_button(
+                                    "refresh-workflow-runs",
+                                    IconName::ArrowCircle,
+                                )
+                                .on_click(cx.listener(
+                                    |this, _, _window, cx| {
+                                        this.refresh(cx);
+                                    },
+                                )),
+                            )
+                            .child(
+                                workflow_toolbar_icon_button("new-workflow-run", IconName::Plus)
+                                    .on_click(cx.listener(|_this, _, window, cx| {
+                                        window.dispatch_action(Box::new(OpenWorkflowPicker), cx);
+                                    })),
+                            ),
+                    ),
+            )
+            .child(content)
     }
+}
+
+fn grouped_runs_from_records(runs: Vec<&TaskRecord>) -> RunGroups {
+    let mut groups = RunGroups {
+        active: Vec::new(),
+        completed: Vec::new(),
+        failed: Vec::new(),
+    };
+
+    for run in runs {
+        match run.status {
+            TaskLifecycleStatus::Queued | TaskLifecycleStatus::Running => {
+                groups.active.push(run.clone())
+            }
+            TaskLifecycleStatus::Completed => groups.completed.push(run.clone()),
+            TaskLifecycleStatus::Failed => groups.failed.push(run.clone()),
+        }
+    }
+
+    groups
+}
+
+fn run_matches_query(run: &TaskRecord, query: &str) -> bool {
+    run.title.to_ascii_lowercase().contains(query)
+        || run.source_repo.to_ascii_lowercase().contains(query)
+        || run
+            .status
+            .display_name()
+            .to_ascii_lowercase()
+            .contains(query)
+        || run
+            .task_description
+            .as_ref()
+            .is_some_and(|task_description| task_description.to_ascii_lowercase().contains(query))
 }
 
 pub fn register(
@@ -287,4 +442,71 @@ pub fn register(
             .detach();
         }
     });
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn init_test(cx: &mut gpui::TestAppContext) {
+        cx.update(|cx| {
+            let settings_store = settings::SettingsStore::test(cx);
+            cx.set_global(settings_store);
+            theme::init(theme::LoadThemes::JustBase, cx);
+        });
+    }
+
+    fn sample_run(title: &str, source_repo: &str, status: TaskLifecycleStatus) -> TaskRecord {
+        TaskRecord {
+            id: Uuid::new_v4(),
+            title: title.to_string(),
+            source_repo: source_repo.to_string(),
+            status,
+            workflow_id: None,
+            task_description: None,
+        }
+    }
+
+    #[gpui::test]
+    async fn workflow_runs_view_filters_runs_by_search_query(cx: &mut gpui::TestAppContext) {
+        init_test(cx);
+
+        let (view, cx) = cx.add_window_view(|window, cx| {
+            let mut view = WorkflowRunsView::new_for_test(
+                WorkflowClient::with_base_url("http://localhost:9".into()),
+                window,
+                cx,
+            );
+            view.runs = vec![
+                sample_run("Deploy release", "neo-zed", TaskLifecycleStatus::Running),
+                sample_run("Triage failures", "zed", TaskLifecycleStatus::Failed),
+            ];
+            view
+        });
+
+        view.update(cx, |view, _cx| {
+            view.set_search_query("zed");
+
+            let filtered = view
+                .filtered_runs()
+                .into_iter()
+                .map(|run| run.title.clone())
+                .collect::<Vec<_>>();
+
+            assert_eq!(
+                filtered,
+                vec!["Deploy release".to_string(), "Triage failures".to_string()]
+            );
+
+            view.set_search_query("failed");
+
+            let filtered = view
+                .filtered_runs()
+                .into_iter()
+                .map(|run| run.title.clone())
+                .collect::<Vec<_>>();
+
+            assert_eq!(filtered, vec!["Triage failures".to_string()]);
+        });
+    }
 }

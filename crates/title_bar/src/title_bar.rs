@@ -237,7 +237,14 @@ impl Render for TitleBar {
         }
 
         if let Some(item) = self.extension_left_item.clone() {
-            children.push(item.into_any_element());
+            children.push(
+                h_flex()
+                    .h_full()
+                    .flex_none()
+                    .items_center()
+                    .child(item)
+                    .into_any_element(),
+            );
         }
 
         let status = self.client.status();
@@ -248,6 +255,8 @@ impl Render for TitleBar {
 
         children.push(
             h_flex()
+                .h_full()
+                .items_center()
                 .map(|this| {
                     if signed_in {
                         this.pr_1p5()
@@ -261,7 +270,7 @@ impl Render for TitleBar {
                 .children(self.render_connection_status(status, cx))
                 .child(self.update_version.clone())
                 .when_some(self.extension_right_item.clone(), |this, item| {
-                    this.child(item)
+                    this.child(h_flex().h_full().flex_none().items_center().child(item))
                 })
                 .when(
                     user.is_none() && TitleBarSettings::get_global(cx).show_sign_in,

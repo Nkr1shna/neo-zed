@@ -206,6 +206,7 @@ impl Render for PlatformTitleBar {
                     .id(self.id.clone())
                     .flex()
                     .flex_row()
+                    .h_full()
                     .items_center()
                     .justify_between()
                     .overflow_x_hidden()

@@ -2,6 +2,7 @@ use crate::canvas::open_workflow;
 use crate::client::{
     NodePolicy, RetryBehavior, WorkflowClient, WorkflowDefinitionRecord, WorkflowDefinitionRequest,
 };
+use crate::workflow_toolbar_icon_button;
 use editor::Editor;
 use gpui::{
     App, Context, Corner, DismissEvent, Entity, EventEmitter, FocusHandle, Focusable, Global,
@@ -10,7 +11,7 @@ use gpui::{
 use std::collections::BTreeMap;
 use std::sync::Arc;
 use std::time::Duration;
-use ui::{ContextMenu, ListItem, prelude::*};
+use ui::{ContextMenu, Divider, ListItem, Tooltip, prelude::*, utils::platform_title_bar_height};
 use uuid::Uuid;
 use workspace::dock::{DockPosition, PanelEvent};
 use workspace::{Panel, Workspace};
@@ -105,6 +106,8 @@ gpui::actions!(
 
 pub struct WorkflowDefsView {
     workflows: Vec<WorkflowDefinitionRecord>,
+    search_query: String,
+    filter_editor: Entity<Editor>,
     loading: bool,
     error: Option<String>,
     client: Arc<WorkflowClient>,
@@ -124,6 +127,12 @@ impl WorkflowDefsView {
     pub fn new(client: Arc<WorkflowClient>, window: &mut Window, cx: &mut Context<Self>) -> Self {
         let mut view = Self {
             workflows: vec![],
+            search_query: String::new(),
+            filter_editor: cx.new(|cx| {
+                let mut editor = Editor::single_line(window, cx);
+                editor.set_placeholder_text("Search workflows…", window, cx);
+                editor
+            }),
             loading: true,
             error: None,
             client,
@@ -134,6 +143,7 @@ impl WorkflowDefsView {
             _fetch_task: None,
             _mutation_task: None,
         };
+        view.bind_filter_editor(cx);
         view.bind_cache(cx);
         view.fetch(cx);
         view
@@ -147,6 +157,12 @@ impl WorkflowDefsView {
     ) -> Self {
         let mut view = Self {
             workflows: vec![],
+            search_query: String::new(),
+            filter_editor: cx.new(|cx| {
+                let mut editor = Editor::single_line(window, cx);
+                editor.set_placeholder_text("Search workflows…", window, cx);
+                editor
+            }),
             loading: false,
             error: None,
             client,
@@ -157,8 +173,23 @@ impl WorkflowDefsView {
             _fetch_task: None,
             _mutation_task: None,
         };
+        view.bind_filter_editor(cx);
         view.bind_cache(cx);
         view
+    }
+
+    fn bind_filter_editor(&mut self, cx: &mut Context<Self>) {
+        let filter_editor = self.filter_editor.clone();
+        self._subscriptions.push(
+            cx.subscribe(&filter_editor, |view: &mut Self, _, event, cx| {
+                if let editor::EditorEvent::BufferEdited = event {
+                    let query = view.filter_editor.read(cx).text(cx).to_string();
+                    if view.set_search_query(query) {
+                        cx.notify();
+                    }
+                }
+            }),
+        );
     }
 
     fn bind_cache(&mut self, cx: &mut Context<Self>) {
@@ -174,6 +205,47 @@ impl WorkflowDefsView {
                 view.error = None;
                 cx.notify();
             }));
+    }
+
+    pub fn set_search_query(&mut self, query: impl Into<String>) -> bool {
+        let query = query.into();
+        if self.search_query == query {
+            return false;
+        }
+        self.search_query = query;
+        true
+    }
+
+    pub fn focus_filter_editor(&self, window: &mut Window, cx: &mut App) {
+        let handle = self.filter_editor.read(cx).focus_handle(cx);
+        handle.focus(window, cx);
+    }
+
+    pub fn refresh(&mut self, cx: &mut Context<Self>) {
+        self.fetch(cx);
+    }
+
+    pub fn clear_search(&mut self, window: &mut Window, cx: &mut Context<Self>) -> bool {
+        self.filter_editor.update(cx, |editor, cx| {
+            if editor.buffer().read(cx).len(cx).0 > 0 {
+                editor.set_text("", window, cx);
+                true
+            } else {
+                false
+            }
+        })
+    }
+
+    fn filtered_workflows(&self) -> Vec<&WorkflowDefinitionRecord> {
+        let query = self.search_query.trim().to_ascii_lowercase();
+        if query.is_empty() {
+            return self.workflows.iter().collect();
+        }
+
+        self.workflows
+            .iter()
+            .filter(|workflow| workflow_matches_query(workflow, &query))
+            .collect()
     }
 
     fn fetch(&mut self, cx: &mut Context<Self>) {
@@ -364,29 +436,10 @@ impl WorkflowDefsView {
 
 impl Render for WorkflowDefsView {
     fn render(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
-        let header =
-            h_flex()
-                .px_2()
-                .py_1()
-                .justify_between()
-                .child(Label::new("Workflows").size(LabelSize::Small))
-                .child(
-                    h_flex()
-                        .gap_1()
-                        .child(
-                            IconButton::new("refresh-workflows", IconName::ArrowCircle).on_click(
-                                cx.listener(|this, _, _window, cx| {
-                                    this.fetch(cx);
-                                }),
-                            ),
-                        )
-                        .child(IconButton::new("new-workflow", IconName::Plus).on_click(
-                            cx.listener(|_this, _, window, cx| {
-                                window.dispatch_action(Box::new(NewWorkflow), cx);
-                            }),
-                        )),
-                );
-
+        let traffic_lights = cfg!(target_os = "macos") && !_window.is_fullscreen();
+        let header_height = platform_title_bar_height(_window);
+        let has_query = !self.filter_editor.read(cx).text(cx).is_empty();
+        let workflows = self.filtered_workflows();
         let content: gpui::AnyElement = if self.loading {
             Label::new("Loading...")
                 .color(Color::Muted)
@@ -399,9 +452,13 @@ impl Render for WorkflowDefsView {
             Label::new("No workflows")
                 .color(Color::Muted)
                 .into_any_element()
+        } else if workflows.is_empty() {
+            Label::new("No workflows match your search.")
+                .color(Color::Muted)
+                .into_any_element()
         } else {
             v_flex()
-                .children(self.workflows.iter().enumerate().map(|(index, workflow)| {
+                .children(workflows.into_iter().enumerate().map(|(index, workflow)| {
                     let workflow_id = workflow.id.to_string();
                     let workflow_uuid = workflow.id;
                     let name = workflow.name.clone();
@@ -465,7 +522,65 @@ impl Render for WorkflowDefsView {
 
         v_flex()
             .size_full()
-            .child(header)
+            .child(
+                h_flex()
+                    .h(header_height)
+                    .mt_px()
+                    .pb_px()
+                    .justify_between()
+                    .border_b_1()
+                    .border_color(cx.theme().colors().border)
+                    .when(traffic_lights, |this| {
+                        this.pl(px(ui::utils::TRAFFIC_LIGHT_PADDING))
+                    })
+                    .pr_1p5()
+                    .gap_1()
+                    .child(Divider::vertical().color(ui::DividerColor::Border))
+                    .child(
+                        h_flex()
+                            .ml_1()
+                            .min_w_0()
+                            .w_full()
+                            .gap_1()
+                            .child(
+                                Icon::new(IconName::MagnifyingGlass)
+                                    .size(IconSize::Small)
+                                    .color(Color::Muted),
+                            )
+                            .child(self.filter_editor.clone()),
+                    )
+                    .when(has_query, |this| {
+                        this.child(
+                            IconButton::new("clear_workflows_filter", IconName::Close)
+                                .icon_size(IconSize::Small)
+                                .tooltip(Tooltip::text("Clear Search"))
+                                .on_click(cx.listener(|this, _, window, cx| {
+                                    this.clear_search(window, cx);
+                                })),
+                        )
+                    })
+                    .child(
+                        h_flex()
+                            .gap_1()
+                            .child(
+                                workflow_toolbar_icon_button(
+                                    "refresh-workflows",
+                                    IconName::ArrowCircle,
+                                )
+                                .on_click(cx.listener(
+                                    |this, _, _window, cx| {
+                                        this.refresh(cx);
+                                    },
+                                )),
+                            )
+                            .child(
+                                workflow_toolbar_icon_button("new-workflow", IconName::Plus)
+                                    .on_click(|_, window, cx| {
+                                        window.dispatch_action(Box::new(NewWorkflow), cx);
+                                    }),
+                            ),
+                    ),
+            )
             .child(content)
             .children(self.context_menu.as_ref().map(|(menu, position, _)| {
                 gpui::deferred(
@@ -477,6 +592,21 @@ impl Render for WorkflowDefsView {
                 .with_priority(1)
             }))
     }
+}
+
+fn workflow_matches_query(workflow: &WorkflowDefinitionRecord, query: &str) -> bool {
+    workflow.name.to_ascii_lowercase().contains(query)
+        || workflow.nodes.iter().any(|node| {
+            node.label.to_ascii_lowercase().contains(query)
+                || node.node_type.to_ascii_lowercase().contains(query)
+        })
+        || workflow.trigger_metadata.iter().any(|(key, value)| {
+            key.to_ascii_lowercase().contains(query) || value.to_ascii_lowercase().contains(query)
+        })
+        || workflow
+            .validation_policy_ref
+            .as_ref()
+            .is_some_and(|validation_policy| validation_policy.to_ascii_lowercase().contains(query))
 }
 
 enum SaveState {
@@ -812,7 +942,7 @@ impl Panel for NodeInspectorPanel {
     }
 
     fn activation_priority(&self) -> u32 {
-        3
+        4
     }
 
     fn set_active(&mut self, _active: bool, _window: &mut Window, cx: &mut Context<Self>) {
@@ -1120,6 +1250,19 @@ mod tests {
     }
 
     #[gpui::test]
+    async fn test_node_inspector_activation_priority_is_stable(cx: &mut gpui::TestAppContext) {
+        init_test(cx);
+
+        let (panel, cx) = cx.add_window_view(|window, cx| {
+            NodeInspectorPanel::new(WorkflowClient::new(), window, cx)
+        });
+
+        panel.update_in(cx, |panel, _window, _cx| {
+            assert_eq!(panel.activation_priority(), 4);
+        });
+    }
+
+    #[gpui::test]
     async fn test_begin_rename_prefills_editor_and_commit_updates_workflow_name(
         cx: &mut gpui::TestAppContext,
     ) {
@@ -1232,6 +1375,37 @@ mod tests {
                     .iter()
                     .any(|workflow| workflow.id == added_workflow.id)
             );
+        });
+    }
+
+    #[gpui::test]
+    async fn test_workflow_defs_view_filters_workflows_by_search_query(
+        cx: &mut gpui::TestAppContext,
+    ) {
+        init_test(cx);
+
+        let workflows = sample_sidebar_workflows();
+
+        let (view, cx) = cx.add_window_view(|window, cx| {
+            let mut view = WorkflowDefsView::new_for_test(
+                WorkflowClient::with_base_url("http://localhost:9".into()),
+                window,
+                cx,
+            );
+            view.workflows = workflows.clone();
+            view
+        });
+
+        view.update(cx, |view, _cx| {
+            view.set_search_query("beta");
+
+            let filtered = view
+                .filtered_workflows()
+                .into_iter()
+                .map(|workflow| workflow.name.clone())
+                .collect::<Vec<_>>();
+
+            assert_eq!(filtered, vec!["Beta".to_string()]);
         });
     }
 }

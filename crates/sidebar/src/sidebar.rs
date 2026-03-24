@@ -25,7 +25,6 @@ use project::{AgentId, Event as ProjectEvent, linked_worktree_short_name};
 use recent_projects::sidebar_recent_projects::SidebarRecentProjects;
 use ui::utils::platform_title_bar_height;
 
-use settings::Settings as _;
 use std::collections::{HashMap, HashSet};
 use std::mem;
 use std::path::Path;
@@ -280,7 +279,6 @@ impl Sidebar {
 
         let filter_editor = cx.new(|cx| {
             let mut editor = Editor::single_line(window, cx);
-            editor.set_use_modal_editing(true);
             editor.set_placeholder_text("Search…", window, cx);
             editor
         });
@@ -1548,17 +1546,49 @@ impl Sidebar {
             if !has_selection {
                 archive.update(cx, |view, cx| view.focus_filter_editor(window, cx));
             }
+        } else if matches!(self.view, SidebarView::WorkflowDefs) {
+            if let Some(view) = &self.workflow_defs_view {
+                view.update(cx, |view, cx| view.focus_filter_editor(window, cx));
+            }
+        } else if matches!(self.view, SidebarView::WorkflowRuns) {
+            if let Some(view) = &self.workflow_runs_view {
+                view.update(cx, |view, cx| view.focus_filter_editor(window, cx));
+            }
         } else if matches!(self.view, SidebarView::ThreadList) && self.selection.is_none() {
             self.filter_editor.focus_handle(cx).focus(window, cx);
         }
     }
 
     fn cancel(&mut self, _: &Cancel, window: &mut Window, cx: &mut Context<Self>) {
-        if self.reset_filter_editor_text(window, cx) {
+        let cleared = if matches!(self.view, SidebarView::WorkflowDefs) {
+            self.workflow_defs_view
+                .as_ref()
+                .map(|view| view.update(cx, |view, cx| view.clear_search(window, cx)))
+                .unwrap_or(false)
+        } else if matches!(self.view, SidebarView::WorkflowRuns) {
+            self.workflow_runs_view
+                .as_ref()
+                .map(|view| view.update(cx, |view, cx| view.clear_search(window, cx)))
+                .unwrap_or(false)
+        } else {
+            self.reset_filter_editor_text(window, cx)
+        };
+
+        if cleared {
             self.update_entries(cx);
         } else {
             self.selection = None;
-            self.filter_editor.focus_handle(cx).focus(window, cx);
+            if matches!(self.view, SidebarView::WorkflowDefs) {
+                if let Some(view) = &self.workflow_defs_view {
+                    view.update(cx, |view, cx| view.focus_filter_editor(window, cx));
+                }
+            } else if matches!(self.view, SidebarView::WorkflowRuns) {
+                if let Some(view) = &self.workflow_runs_view {
+                    view.update(cx, |view, cx| view.focus_filter_editor(window, cx));
+                }
+            } else {
+                self.filter_editor.focus_handle(cx).focus(window, cx);
+            }
             cx.notify();
         }
     }
@@ -1575,17 +1605,16 @@ impl Sidebar {
                 view.clear_selection();
                 view.focus_filter_editor(window, cx);
             });
+        } else if matches!(self.view, SidebarView::WorkflowDefs) {
+            if let Some(view) = &self.workflow_defs_view {
+                view.update(cx, |view, cx| view.focus_filter_editor(window, cx));
+            }
+        } else if matches!(self.view, SidebarView::WorkflowRuns) {
+            if let Some(view) = &self.workflow_runs_view {
+                view.update(cx, |view, cx| view.focus_filter_editor(window, cx));
+            }
         } else if matches!(self.view, SidebarView::ThreadList) {
             self.filter_editor.focus_handle(cx).focus(window, cx);
-        }
-
-        // When vim mode is active, the editor defaults to normal mode which
-        // blocks text input. Switch to insert mode so the user can type
-        // immediately.
-        if vim_mode_setting::VimModeSetting::get_global(cx).0 {
-            if let Ok(action) = cx.build_action("vim::SwitchToInsertMode", None) {
-                window.dispatch_action(action, cx);
-            }
         }
 
         cx.notify();
@@ -2663,63 +2692,40 @@ impl Sidebar {
             })
             .pr_1p5()
             .gap_1()
-            .border_b_1()
-            .border_color(cx.theme().colors().border)
-            .child(self.render_sidebar_toggle_button(cx))
-            .child(Divider::vertical().color(ui::DividerColor::Border))
             .when(!no_open_projects, |this| {
-                this.child(
-                    div().ml_1().child(
-                        Icon::new(IconName::MagnifyingGlass)
-                            .size(IconSize::Small)
-                            .color(Color::Muted),
-                    ),
-                )
-                .child(self.render_filter_input(cx))
-                .child(
-                    h_flex()
-                        .gap_1()
-                        .when(
-                            self.selection.is_some()
-                                && !self.filter_editor.focus_handle(cx).is_focused(window),
-                            |this| this.child(KeyBinding::for_action(&FocusSidebarFilter, cx)),
-                        )
-                        .when(has_query, |this| {
-                            this.child(
-                                IconButton::new("clear_filter", IconName::Close)
-                                    .icon_size(IconSize::Small)
-                                    .tooltip(Tooltip::text("Clear Search"))
-                                    .on_click(cx.listener(|this, _, window, cx| {
-                                        this.reset_filter_editor_text(window, cx);
-                                        this.update_entries(cx);
-                                    })),
+                this.border_b_1()
+                    .border_color(cx.theme().colors().border)
+                    .child(self.render_sidebar_toggle_button(cx))
+                    .child(Divider::vertical().color(ui::DividerColor::Border))
+                    .child(
+                        div().ml_1().child(
+                            Icon::new(IconName::MagnifyingGlass)
+                                .size(IconSize::Small)
+                                .color(Color::Muted),
+                        ),
+                    )
+                    .child(self.render_filter_input(cx))
+                    .child(
+                        h_flex()
+                            .gap_1()
+                            .when(
+                                self.selection.is_some()
+                                    && !self.filter_editor.focus_handle(cx).is_focused(window),
+                                |this| this.child(KeyBinding::for_action(&FocusSidebarFilter, cx)),
                             )
-                        }),
-                )
+                            .when(has_query, |this| {
+                                this.child(
+                                    IconButton::new("clear_filter", IconName::Close)
+                                        .icon_size(IconSize::Small)
+                                        .tooltip(Tooltip::text("Clear Search"))
+                                        .on_click(cx.listener(|this, _, window, cx| {
+                                            this.reset_filter_editor_text(window, cx);
+                                            this.update_entries(cx);
+                                        })),
+                                )
+                            }),
+                    )
             })
-    }
-
-    fn render_workflow_tab_header(
-        &self,
-        window: &Window,
-        cx: &mut Context<Self>,
-    ) -> impl IntoElement {
-        let header_height = platform_title_bar_height(window);
-        let traffic_lights = cfg!(target_os = "macos") && !window.is_fullscreen();
-
-        h_flex()
-            .h(header_height)
-            .mt_px()
-            .pb_px()
-            .border_b_1()
-            .border_color(cx.theme().colors().border)
-            .when(traffic_lights, |this| {
-                this.pl(px(ui::utils::TRAFFIC_LIGHT_PADDING))
-            })
-            .pr_1p5()
-            .gap_1()
-            .child(self.render_sidebar_toggle_button(cx))
-            .child(div().flex_1())
     }
 
     fn render_view_tabs(&self, cx: &mut Context<Self>) -> impl IntoElement {
@@ -2888,19 +2894,27 @@ impl Sidebar {
             let view = cx.new(|cx| WorkflowDefsView::new(client, window, cx));
             self.workflow_defs_view = Some(view);
         }
+        let Some(view) = self.workflow_defs_view.clone() else {
+            return;
+        };
         self.view = SidebarView::WorkflowDefs;
         self._subscriptions.clear();
+        view.update(cx, |view, cx| view.focus_filter_editor(window, cx));
         cx.notify();
     }
 
-    fn show_workflow_runs(&mut self, _window: &mut Window, cx: &mut Context<Self>) {
+    fn show_workflow_runs(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         if self.workflow_runs_view.is_none() {
             let client = self.workflow_client.clone();
-            let view = cx.new(|cx| WorkflowRunsView::new(client, cx));
+            let view = cx.new(|cx| WorkflowRunsView::new(client, window, cx));
             self.workflow_runs_view = Some(view);
         }
+        let Some(view) = self.workflow_runs_view.clone() else {
+            return;
+        };
         self.view = SidebarView::WorkflowRuns;
         self._subscriptions.clear();
+        view.update(cx, |view, cx| view.focus_filter_editor(window, cx));
         cx.notify();
     }
 }
@@ -2940,11 +2954,11 @@ impl Render for Sidebar {
         let _titlebar_height = ui::utils::platform_title_bar_height(window);
         let ui_font = theme::setup_ui_font(window, cx);
         let sticky_header = self.render_sticky_header(window, cx);
-        let bg = cx
-            .theme()
-            .colors()
+
+        let color = cx.theme().colors();
+        let bg = color
             .title_bar_background
-            .blend(cx.theme().colors().panel_background.opacity(0.8));
+            .blend(color.panel_background.opacity(0.32));
 
         let no_open_projects = !self.contents.has_open_projects;
         let no_search_results = self.contents.entries.is_empty();
@@ -2980,7 +2994,7 @@ impl Render for Sidebar {
             .w(self.width)
             .bg(bg)
             .border_r_1()
-            .border_color(cx.theme().colors().border)
+            .border_color(color.border)
             .map(|this| match &self.view {
                 SidebarView::ThreadList => this
                     .child(self.render_sidebar_header(no_open_projects, window, cx))
@@ -3012,16 +3026,14 @@ impl Render for Sidebar {
                 SidebarView::Archive(archive_view) => this.child(archive_view.clone()),
                 SidebarView::WorkflowDefs => {
                     if let Some(view) = &self.workflow_defs_view {
-                        this.child(self.render_workflow_tab_header(window, cx))
-                            .child(view.clone())
+                        this.child(view.clone())
                     } else {
                         this
                     }
                 }
                 SidebarView::WorkflowRuns => {
                     if let Some(view) = &self.workflow_runs_view {
-                        this.child(self.render_workflow_tab_header(window, cx))
-                            .child(view.clone())
+                        this.child(view.clone())
                     } else {
                         this
                     }
@@ -3038,7 +3050,6 @@ impl Render for Sidebar {
                     .child(
                         h_flex()
                             .gap_1()
-                            .child(self.render_recent_projects_button(cx))
                             .child(
                                 IconButton::new("archive", IconName::Archive)
                                     .icon_size(IconSize::Small)
@@ -3054,6 +3065,7 @@ impl Render for Sidebar {
                                         this.toggle_archive(&ToggleArchive, window, cx);
                                     })),
                             )
+                            .child(self.render_recent_projects_button(cx))
                             .child(self.render_view_tabs(cx)),
                     ),
             )
