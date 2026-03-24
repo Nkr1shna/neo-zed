@@ -274,6 +274,7 @@ pub enum IconName {
     UserGroup,
     UserRoundPen,
     Warning,
+    WorkflowDefs,
     WholeWord,
     XCircle,
     XCircleFilled,

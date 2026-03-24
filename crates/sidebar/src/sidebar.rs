@@ -2749,7 +2749,7 @@ impl Sidebar {
                     })),
             )
             .child(
-                IconButton::new("sidebar-view-workflow-defs", IconName::Sparkle)
+                IconButton::new("sidebar-view-workflow-defs", IconName::WorkflowDefs)
                     .icon_size(IconSize::Small)
                     .toggle_state(workflow_defs_selected)
                     .tooltip(Tooltip::text("Workflow Definitions"))

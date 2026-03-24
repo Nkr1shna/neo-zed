@@ -1787,7 +1787,11 @@ fn watch_themes(fs: Arc<dyn fs::Fs>, cx: &mut App) {
 
         while let Some(paths) = events.next().await {
             for event in paths {
-                if fs.metadata(&event.path).await.ok().flatten().is_some() {
+                let Some(metadata) = fs.metadata(&event.path).await.ok().flatten() else {
+                    continue;
+                };
+
+                if should_reload_theme_path(&event.path, metadata.is_dir) {
                     let theme_registry = cx.update(|cx| ThemeRegistry::global(cx));
                     if theme_registry
                         .load_user_theme(&event.path, fs.clone())
@@ -1802,6 +1806,31 @@ fn watch_themes(fs: Arc<dyn fs::Fs>, cx: &mut App) {
         }
     })
     .detach()
+}
+
+fn should_reload_theme_path(path: &Path, is_dir: bool) -> bool {
+    !is_dir && path.extension().is_some_and(|extension| extension == "json")
+}
+
+#[cfg(test)]
+mod tests {
+    use std::path::Path;
+
+    #[test]
+    fn theme_change_paths_only_reload_json_files() {
+        assert!(super::should_reload_theme_path(
+            Path::new("/tmp/theme.json"),
+            false
+        ));
+        assert!(!super::should_reload_theme_path(
+            Path::new("/tmp/themes"),
+            true
+        ));
+        assert!(!super::should_reload_theme_path(
+            Path::new("/tmp/theme.tmp"),
+            false
+        ));
+    }
 }
 
 #[cfg(debug_assertions)]
