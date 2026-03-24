@@ -25,11 +25,16 @@ util.workspace = true
 language.workspace = true
 paths.workspace = true
 log.workspace = true
+http_client.workspace = true
+reqwest_client.workspace = true
 
 anyhow.workspace = true
 schemars.workspace = true
-reqwest.workspace = true
 serde.workspace = true
 serde_json.workspace = true
 uuid.workspace = true
 futures.workspace = true
+
+[dev-dependencies]
+gpui = { workspace = true, features = ["test-support"] }
+settings = { workspace = true, features = ["test-support"] }

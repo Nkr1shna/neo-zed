@@ -2668,7 +2668,6 @@ impl Sidebar {
             .border_color(cx.theme().colors().border)
             .child(self.render_sidebar_toggle_button(cx))
             .child(Divider::vertical().color(ui::DividerColor::Border))
-            .child(self.render_view_tabs(cx))
             .when(!no_open_projects, |this| {
                 this.child(
                     div().ml_1().child(
@@ -2721,13 +2720,11 @@ impl Sidebar {
             .pr_1p5()
             .gap_1()
             .child(self.render_sidebar_toggle_button(cx))
-            .child(Divider::vertical().color(ui::DividerColor::Border))
-            .child(self.render_view_tabs(cx))
+            .child(div().flex_1())
     }
 
     fn render_view_tabs(&self, cx: &mut Context<Self>) -> impl IntoElement {
-        let threads_selected =
-            matches!(self.view, SidebarView::ThreadList | SidebarView::Archive(_));
+        let threads_selected = matches!(self.view, SidebarView::ThreadList);
         let workflow_defs_selected = matches!(self.view, SidebarView::WorkflowDefs);
         let workflow_runs_selected = matches!(self.view, SidebarView::WorkflowRuns);
 
@@ -2886,10 +2883,10 @@ impl Sidebar {
         self.show_workflow_runs(window, cx);
     }
 
-    fn show_workflow_defs(&mut self, _window: &mut Window, cx: &mut Context<Self>) {
+    fn show_workflow_defs(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         if self.workflow_defs_view.is_none() {
             let client = self.workflow_client.clone();
-            let view = cx.new(|cx| WorkflowDefsView::new(client, cx));
+            let view = cx.new(|cx| WorkflowDefsView::new(client, window, cx));
             self.workflow_defs_view = Some(view);
         }
         self.view = SidebarView::WorkflowDefs;
@@ -3057,7 +3054,8 @@ impl Render for Sidebar {
                                     .on_click(cx.listener(|this, _, window, cx| {
                                         this.toggle_archive(&ToggleArchive, window, cx);
                                     })),
-                            ),
+                            )
+                            .child(self.render_view_tabs(cx)),
                     ),
             )
     }

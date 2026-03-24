@@ -7,7 +7,7 @@ use std::time::Duration;
 use ui::{ListItem, prelude::*};
 use util::ResultExt;
 use uuid::Uuid;
-use workspace::Workspace;
+use workspace::{Toast, Workspace, notifications::NotificationId};
 
 #[derive(Clone, Debug, PartialEq, Action, serde::Deserialize, JsonSchema)]
 #[action(namespace = workflow_ui)]
@@ -18,6 +18,8 @@ pub struct OpenWorkflowPicker;
 pub struct OpenWorkflowRun {
     pub task_id: String,
 }
+
+struct OpenWorkflowRunErrorToast;
 
 struct RunGroups {
     active: Vec<TaskRecord>,
@@ -256,15 +258,31 @@ pub fn register(
             };
             let workspace_handle = cx.entity().downgrade();
             cx.spawn_in(window, async move |_, cx| {
-                let Ok(run) = client.get_task_status(task_id).await else {
-                    return;
-                };
-
-                workspace_handle
-                    .update_in(cx, |workspace, window, cx| {
-                        open_run(run, client.clone(), workspace, window, cx);
-                    })
-                    .log_err();
+                match client.get_task_status(task_id).await {
+                    Ok(run) => {
+                        workspace_handle
+                            .update_in(cx, |workspace, window, cx| {
+                                open_run(run, client.clone(), workspace, window, cx);
+                            })
+                            .log_err();
+                    }
+                    Err(error) => {
+                        workspace_handle
+                            .update_in(cx, |workspace, _window, cx| {
+                                workspace.show_toast(
+                                    Toast::new(
+                                        NotificationId::composite::<OpenWorkflowRunErrorToast>(
+                                            task_id.to_string(),
+                                        ),
+                                        format!("Failed to open run: {error}"),
+                                    )
+                                    .autohide(),
+                                    cx,
+                                );
+                            })
+                            .log_err();
+                    }
+                }
             })
             .detach();
         }

@@ -2,36 +2,54 @@ use std::collections::BTreeMap;
 use std::sync::Arc;
 
 use anyhow::{Context, Result, anyhow};
+use futures::AsyncReadExt;
+use http_client::{AsyncBody, HttpClient as _, HttpClientWithUrl, Method, Request};
+use reqwest_client::ReqwestClient;
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
-pub enum WorkflowNodeKind {
+pub enum WorkflowNodeTypeCategory {
     Task,
     Validation,
     Review,
     Integration,
 }
 
-impl WorkflowNodeKind {
+impl WorkflowNodeTypeCategory {
     pub fn display_name(&self) -> &'static str {
         match self {
-            WorkflowNodeKind::Task => "Task",
-            WorkflowNodeKind::Validation => "Validation",
-            WorkflowNodeKind::Review => "Review",
-            WorkflowNodeKind::Integration => "Integration",
+            WorkflowNodeTypeCategory::Task => "Task",
+            WorkflowNodeTypeCategory::Validation => "Validation",
+            WorkflowNodeTypeCategory::Review => "Review",
+            WorkflowNodeTypeCategory::Integration => "Integration",
         }
     }
 
-    pub fn all() -> &'static [WorkflowNodeKind] {
+    pub fn all() -> &'static [WorkflowNodeTypeCategory] {
         &[
-            WorkflowNodeKind::Task,
-            WorkflowNodeKind::Validation,
-            WorkflowNodeKind::Review,
-            WorkflowNodeKind::Integration,
+            WorkflowNodeTypeCategory::Task,
+            WorkflowNodeTypeCategory::Validation,
+            WorkflowNodeTypeCategory::Review,
+            WorkflowNodeTypeCategory::Integration,
         ]
     }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct WorkflowNodePort {
+    pub id: String,
+    pub label: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct WorkflowNodeType {
+    pub id: String,
+    pub label: String,
+    pub category: WorkflowNodeTypeCategory,
+    pub inputs: Vec<WorkflowNodePort>,
+    pub outputs: Vec<WorkflowNodePort>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -64,14 +82,23 @@ impl TaskLifecycleStatus {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct WorkflowNode {
     pub id: String,
-    pub kind: WorkflowNodeKind,
+    #[serde(alias = "kind")]
+    pub node_type: String,
     pub label: String,
+    #[serde(default = "default_json_object", alias = "config")]
+    pub configuration: serde_json::Value,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct WorkflowEdge {
-    pub from: String,
-    pub to: String,
+    #[serde(alias = "from")]
+    pub from_node_id: String,
+    #[serde(default)]
+    pub from_output_id: String,
+    #[serde(alias = "to")]
+    pub to_node_id: String,
+    #[serde(default)]
+    pub to_input_id: String,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -161,10 +188,12 @@ pub struct TaskRecord {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct TaskNodeStatus {
     pub id: String,
-    pub kind: WorkflowNodeKind,
+    pub node_type: String,
+    pub category: WorkflowNodeTypeCategory,
     pub label: String,
     pub status: TaskLifecycleStatus,
     pub output: Option<String>,
+    pub session_id: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -177,12 +206,24 @@ pub struct TaskStatusResponse {
     pub lease: Option<serde_json::Value>,
     pub validation: Option<serde_json::Value>,
     pub integration: Option<serde_json::Value>,
+    pub failure_message: Option<String>,
     pub agents: Option<Vec<serde_json::Value>>,
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct TaskNodeConversationResponse {
+    pub task_id: Uuid,
+    pub node_id: String,
+    pub session_id: String,
+    pub markdown: String,
+}
+
+fn default_json_object() -> serde_json::Value {
+    serde_json::json!({})
+}
+
 pub struct WorkflowClient {
-    base_url: String,
-    http: reqwest::Client,
+    http: Arc<HttpClientWithUrl>,
 }
 
 impl WorkflowClient {
@@ -192,22 +233,27 @@ impl WorkflowClient {
 
     pub fn with_base_url(base_url: String) -> Arc<Self> {
         Arc::new(Self {
-            base_url,
-            http: reqwest::Client::new(),
+            http: Arc::new(HttpClientWithUrl::new(
+                Arc::new(ReqwestClient::new()),
+                base_url,
+                None,
+            )),
         })
     }
 
-    async fn get_json<T: for<'de> Deserialize<'de>>(&self, url: &str) -> Result<T> {
-        let response = self
+    async fn get_json<T: for<'de> Deserialize<'de>>(&self, path: &str) -> Result<T> {
+        let url = self.http.build_url(path);
+        let mut response = self
             .http
-            .get(url)
-            .send()
+            .get(&url, AsyncBody::default(), false)
             .await
             .with_context(|| format!("GET {url} failed"))?;
 
         let status = response.status();
-        let bytes = response
-            .bytes()
+        let mut bytes = Vec::new();
+        response
+            .body_mut()
+            .read_to_end(&mut bytes)
             .await
             .with_context(|| format!("reading GET {url} response body failed"))?;
 
@@ -222,22 +268,22 @@ impl WorkflowClient {
 
     async fn post_json<B: Serialize, T: for<'de> Deserialize<'de>>(
         &self,
-        url: &str,
+        path: &str,
         body: &B,
     ) -> Result<T> {
-        let body_bytes = serde_json::to_vec(body).context("serializing request body failed")?;
-        let response = self
+        let url = self.http.build_url(path);
+        let body_bytes = serde_json::to_string(body).context("serializing request body failed")?;
+        let mut response = self
             .http
-            .post(url)
-            .header("Content-Type", "application/json")
-            .body(body_bytes)
-            .send()
+            .post_json(&url, AsyncBody::from(body_bytes))
             .await
             .with_context(|| format!("POST {url} failed"))?;
 
         let status = response.status();
-        let bytes = response
-            .bytes()
+        let mut bytes = Vec::new();
+        response
+            .body_mut()
+            .read_to_end(&mut bytes)
             .await
             .with_context(|| format!("reading POST {url} response body failed"))?;
 
@@ -252,22 +298,28 @@ impl WorkflowClient {
 
     async fn put_json<B: Serialize, T: for<'de> Deserialize<'de>>(
         &self,
-        url: &str,
+        path: &str,
         body: &B,
     ) -> Result<T> {
-        let body_bytes = serde_json::to_vec(body).context("serializing request body failed")?;
-        let response = self
-            .http
-            .put(url)
+        let url = self.http.build_url(path);
+        let body_bytes = serde_json::to_string(body).context("serializing request body failed")?;
+        let request = Request::builder()
+            .uri(url.as_str())
+            .method(Method::PUT)
             .header("Content-Type", "application/json")
-            .body(body_bytes)
-            .send()
+            .body(AsyncBody::from(body_bytes))
+            .context("building PUT request failed")?;
+        let mut response = self
+            .http
+            .send(request)
             .await
             .with_context(|| format!("PUT {url} failed"))?;
 
         let status = response.status();
-        let bytes = response
-            .bytes()
+        let mut bytes = Vec::new();
+        response
+            .body_mut()
+            .read_to_end(&mut bytes)
             .await
             .with_context(|| format!("reading PUT {url} response body failed"))?;
 
@@ -280,18 +332,25 @@ impl WorkflowClient {
             .with_context(|| format!("deserializing PUT {url} response failed"))
     }
 
-    async fn delete(&self, url: &str) -> Result<()> {
-        let response = self
+    async fn delete(&self, path: &str) -> Result<()> {
+        let url = self.http.build_url(path);
+        let request = Request::builder()
+            .uri(url.as_str())
+            .method(Method::DELETE)
+            .body(AsyncBody::default())
+            .context("building DELETE request failed")?;
+        let mut response = self
             .http
-            .delete(url)
-            .send()
+            .send(request)
             .await
             .with_context(|| format!("DELETE {url} failed"))?;
 
         let status = response.status();
         if !status.is_success() {
-            let bytes = response
-                .bytes()
+            let mut bytes = Vec::new();
+            response
+                .body_mut()
+                .read_to_end(&mut bytes)
                 .await
                 .with_context(|| format!("reading DELETE {url} response body failed"))?;
             let body = String::from_utf8_lossy(&bytes);
@@ -302,20 +361,22 @@ impl WorkflowClient {
     }
 
     pub async fn list_workflows(&self) -> Result<Vec<WorkflowDefinitionRecord>> {
-        self.get_json(&format!("{}/workflows", self.base_url)).await
+        self.get_json("/workflows").await
+    }
+
+    pub async fn list_workflow_node_types(&self) -> Result<Vec<WorkflowNodeType>> {
+        self.get_json("/workflow-node-types").await
     }
 
     pub async fn get_workflow(&self, id: Uuid) -> Result<WorkflowDefinitionRecord> {
-        self.get_json(&format!("{}/workflows/{id}", self.base_url))
-            .await
+        self.get_json(&format!("/workflows/{id}")).await
     }
 
     pub async fn create_workflow(
         &self,
         request: &WorkflowDefinitionRequest,
     ) -> Result<WorkflowDefinitionRecord> {
-        self.post_json(&format!("{}/workflows", self.base_url), request)
-            .await
+        self.post_json("/workflows", request).await
     }
 
     pub async fn update_workflow(
@@ -323,26 +384,37 @@ impl WorkflowClient {
         id: Uuid,
         request: &WorkflowDefinitionRequest,
     ) -> Result<WorkflowDefinitionRecord> {
-        self.put_json(&format!("{}/workflows/{id}", self.base_url), request)
-            .await
+        self.put_json(&format!("/workflows/{id}"), request).await
     }
 
     pub async fn run_workflow(&self, id: Uuid, request: &WorkflowRunRequest) -> Result<TaskRecord> {
-        self.post_json(&format!("{}/workflows/{id}/run", self.base_url), request)
+        self.post_json(&format!("/workflows/{id}/run"), request)
             .await
     }
 
     pub async fn list_tasks(&self) -> Result<Vec<TaskRecord>> {
-        self.get_json(&format!("{}/tasks", self.base_url)).await
+        self.get_json("/tasks").await
     }
 
     pub async fn get_task_status(&self, id: Uuid) -> Result<TaskStatusResponse> {
-        self.get_json(&format!("{}/tasks/{id}", self.base_url))
+        self.get_json(&format!("/tasks/{id}/status")).await
+    }
+
+    pub async fn get_task_node_conversation(
+        &self,
+        task_id: Uuid,
+        node_id: &str,
+    ) -> Result<TaskNodeConversationResponse> {
+        self.get_json(&format!("/tasks/{task_id}/nodes/{node_id}/conversation"))
             .await
     }
 
     pub async fn delete_task(&self, id: Uuid) -> Result<()> {
-        self.delete(&format!("{}/tasks/{id}", self.base_url)).await
+        self.delete(&format!("/tasks/{id}")).await
+    }
+
+    pub async fn delete_workflow(&self, id: Uuid) -> Result<()> {
+        self.delete(&format!("/workflows/{id}")).await
     }
 }
 
@@ -367,21 +439,27 @@ mod tests {
     }
 
     #[test]
-    fn test_workflow_node_kind_display_name() {
-        assert_eq!(WorkflowNodeKind::Task.display_name(), "Task");
-        assert_eq!(WorkflowNodeKind::Validation.display_name(), "Validation");
-        assert_eq!(WorkflowNodeKind::Review.display_name(), "Review");
-        assert_eq!(WorkflowNodeKind::Integration.display_name(), "Integration");
+    fn test_workflow_node_type_category_display_name() {
+        assert_eq!(WorkflowNodeTypeCategory::Task.display_name(), "Task");
+        assert_eq!(
+            WorkflowNodeTypeCategory::Validation.display_name(),
+            "Validation"
+        );
+        assert_eq!(WorkflowNodeTypeCategory::Review.display_name(), "Review");
+        assert_eq!(
+            WorkflowNodeTypeCategory::Integration.display_name(),
+            "Integration"
+        );
     }
 
     #[test]
-    fn test_workflow_node_kind_all() {
-        let all = WorkflowNodeKind::all();
+    fn test_workflow_node_type_category_all() {
+        let all = WorkflowNodeTypeCategory::all();
         assert_eq!(all.len(), 4);
-        assert!(all.contains(&WorkflowNodeKind::Task));
-        assert!(all.contains(&WorkflowNodeKind::Validation));
-        assert!(all.contains(&WorkflowNodeKind::Review));
-        assert!(all.contains(&WorkflowNodeKind::Integration));
+        assert!(all.contains(&WorkflowNodeTypeCategory::Task));
+        assert!(all.contains(&WorkflowNodeTypeCategory::Validation));
+        assert!(all.contains(&WorkflowNodeTypeCategory::Review));
+        assert!(all.contains(&WorkflowNodeTypeCategory::Integration));
     }
 
     #[test]
@@ -421,8 +499,11 @@ mod tests {
             name: "my-workflow".to_string(),
             nodes: vec![WorkflowNode {
                 id: "n1".to_string(),
-                kind: WorkflowNodeKind::Task,
+                node_type: "task".to_string(),
                 label: "Build".to_string(),
+                configuration: serde_json::json!({
+                    "repo": "example/runtime",
+                }),
             }],
             edges: vec![],
             node_policies: vec![],
@@ -434,10 +515,96 @@ mod tests {
         let request = record.to_request();
         assert_eq!(request.name, "my-workflow");
         assert_eq!(request.nodes.len(), 1);
+        assert_eq!(request.nodes[0].configuration["repo"], "example/runtime");
         assert_eq!(request.validation_policy_ref.as_deref(), Some("policy-ref"));
         assert_eq!(
             request.trigger_metadata.get("key").map(|s| s.as_str()),
             Some("value")
         );
+    }
+
+    #[test]
+    fn test_workflow_node_type_deserialization() {
+        let node_types: Vec<WorkflowNodeType> = serde_json::from_value(serde_json::json!([
+            {
+                "id": "task",
+                "label": "Task",
+                "category": "task",
+                "inputs": [{"id": "default", "label": "Input"}],
+                "outputs": [{"id": "success", "label": "Success"}]
+            }
+        ]))
+        .unwrap();
+
+        assert_eq!(node_types.len(), 1);
+        assert_eq!(node_types[0].id, "task");
+        assert_eq!(node_types[0].category, WorkflowNodeTypeCategory::Task);
+        assert_eq!(node_types[0].inputs[0].id, "default");
+        assert_eq!(node_types[0].outputs[0].id, "success");
+    }
+
+    #[test]
+    fn test_workflow_definition_deserializes_node_types_and_port_edges() {
+        let workflow: WorkflowDefinitionRecord = serde_json::from_value(serde_json::json!({
+            "id": Uuid::nil(),
+            "name": "workflow",
+            "nodes": [
+                {
+                    "id": "n1",
+                    "node_type": "task",
+                    "label": "Build",
+                    "configuration": {"repo": "example/runtime"}
+                }
+            ],
+            "edges": [
+                {
+                    "from_node_id": "n1",
+                    "from_output_id": "success",
+                    "to_node_id": "n2",
+                    "to_input_id": "default"
+                }
+            ],
+            "node_policies": [],
+            "retry_behavior": {"max_attempts": 1, "backoff_ms": 0},
+            "validation_policy_ref": null,
+            "trigger_metadata": {}
+        }))
+        .unwrap();
+
+        assert_eq!(workflow.nodes[0].node_type, "task");
+        assert_eq!(workflow.nodes[0].configuration["repo"], "example/runtime");
+        assert_eq!(workflow.edges[0].from_output_id, "success");
+        assert_eq!(workflow.edges[0].to_input_id, "default");
+    }
+
+    #[test]
+    fn test_workflow_definition_deserializes_legacy_graph_json() {
+        let workflow: WorkflowDefinitionRecord = serde_json::from_value(serde_json::json!({
+            "id": Uuid::nil(),
+            "name": "legacy-workflow",
+            "nodes": [
+                {
+                    "id": "n1",
+                    "kind": "task",
+                    "label": "Build",
+                    "config": {"repo": "legacy/repo"}
+                }
+            ],
+            "edges": [
+                {"from": "n1", "to": "n2"}
+            ],
+            "node_policies": [],
+            "retry_behavior": {"max_attempts": 1, "backoff_ms": 0},
+            "validation_policy_ref": null,
+            "trigger_metadata": {}
+        }))
+        .unwrap();
+
+        assert_eq!(workflow.nodes[0].node_type, "task");
+        assert_eq!(workflow.nodes[0].configuration["repo"], "legacy/repo");
+        assert_eq!(workflow.edges[0].from_node_id, "n1");
+        assert_eq!(workflow.edges[0].to_node_id, "n2");
+        assert!(workflow.edges[0].from_output_id.is_empty());
+        assert!(workflow.edges[0].to_input_id.is_empty());
     }
 }

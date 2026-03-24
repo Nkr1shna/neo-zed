@@ -8,7 +8,7 @@ pub use canvas::{CanvasSelection, WorkflowCanvas, WorkflowCanvasEvent, open_run,
 pub use client::{
     NodePolicy, RetryBehavior, TaskLifecycleStatus, TaskNodeStatus, TaskRecord, TaskStatusResponse,
     WorkflowClient, WorkflowDefinitionRecord, WorkflowDefinitionRequest, WorkflowEdge,
-    WorkflowNode, WorkflowNodeKind, WorkflowRunRequest,
+    WorkflowNode, WorkflowNodePort, WorkflowNodeType, WorkflowNodeTypeCategory, WorkflowRunRequest,
 };
 pub use inspector::{NodeInspectorPanel, OpenWorkflowDef, WorkflowDefsView};
 pub use picker::{WorkflowPicker, WorkflowPickerDelegate};

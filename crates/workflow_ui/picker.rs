@@ -319,6 +319,7 @@ fn fallback_task_status(
         lease: None,
         validation: None,
         integration: None,
+        failure_message: None,
         agents: None,
     }
 }

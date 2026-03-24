@@ -21496,12 +21496,14 @@ dependencies = [
  "editor",
  "futures 0.3.31",
  "gpui",
+ "http_client",
  "language",
  "log",
  "multi_buffer",
  "paths",
  "picker",
  "project",
+ "reqwest_client",
  "schemars",
  "serde",
  "serde_json",
@@ -21511,7 +21513,6 @@ dependencies = [
  "util",
  "uuid",
  "workspace",
- "zed-reqwest",
 ]
 
 [[package]]
