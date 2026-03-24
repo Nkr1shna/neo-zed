@@ -989,7 +989,7 @@ impl Render for ManageProfilesModal {
                         .pb_1()
                         .child(ProfileModalHeader::new(
                             format!("{profile_name} — Configure Built-in Tools"),
-                            Some(IconName::Cog),
+                            Some(IconName::Settings),
                         ))
                         .child(ListSeparator)
                         .child(tool_picker.clone())
@@ -1012,7 +1012,7 @@ impl Render for ManageProfilesModal {
                         .pb_1()
                         .child(ProfileModalHeader::new(
                             format!("{profile_name} — Configure Default Model"),
-                            Some(IconName::Ai),
+                            Some(IconName::ZedAgent),
                         ))
                         .child(ListSeparator)
                         .child(v_flex().w(rems(34.)).child(model_picker.clone()))

@@ -2687,8 +2687,12 @@ impl Sidebar {
             .h(header_height)
             .mt_px()
             .pb_px()
-            .when(traffic_lights, |this| {
-                this.pl(px(ui::utils::TRAFFIC_LIGHT_PADDING))
+            .map(|this| {
+                if traffic_lights {
+                    this.pl(px(ui::utils::TRAFFIC_LIGHT_PADDING))
+                } else {
+                    this.pl_1p5()
+                }
             })
             .pr_1p5()
             .gap_1()
