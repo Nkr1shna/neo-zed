@@ -39,6 +39,7 @@ use ui::{
 };
 use util::ResultExt as _;
 use util::path_list::PathList;
+use workflow_ui::{WorkflowClient, WorkflowDefsView, WorkflowRunsView};
 use workspace::{
     AddFolderToProject, FocusWorkspaceSidebar, MultiWorkspace, MultiWorkspaceEvent, Open,
     Sidebar as WorkspaceSidebar, ToggleWorkspaceSidebar, Workspace, WorkspaceId,
@@ -56,6 +57,8 @@ gpui::actions!(
         NewThreadInGroup,
         /// Toggles between the thread list and the archive view.
         ToggleArchive,
+        ShowWorkflowDefs,
+        ShowWorkflowRuns,
     ]
 );
 
@@ -69,6 +72,8 @@ enum SidebarView {
     #[default]
     ThreadList,
     Archive(Entity<ThreadsArchiveView>),
+    WorkflowDefs,
+    WorkflowRuns,
 }
 
 #[derive(Clone, Debug)]
@@ -254,6 +259,9 @@ pub struct Sidebar {
     collapsed_groups: HashSet<PathList>,
     expanded_groups: HashMap<PathList, usize>,
     view: SidebarView,
+    workflow_defs_view: Option<Entity<WorkflowDefsView>>,
+    workflow_runs_view: Option<Entity<WorkflowRunsView>>,
+    workflow_client: Arc<WorkflowClient>,
     recent_projects_popover_handle: PopoverMenuHandle<SidebarRecentProjects>,
     project_header_menu_ix: Option<usize>,
     _subscriptions: Vec<gpui::Subscription>,
@@ -346,6 +354,9 @@ impl Sidebar {
             collapsed_groups: HashSet::new(),
             expanded_groups: HashMap::new(),
             view: SidebarView::default(),
+            workflow_defs_view: None,
+            workflow_runs_view: None,
+            workflow_client: WorkflowClient::new(),
             recent_projects_popover_handle: PopoverMenuHandle::default(),
             project_header_menu_ix: None,
             _subscriptions: Vec::new(),
@@ -1538,7 +1549,7 @@ impl Sidebar {
             if !has_selection {
                 archive.update(cx, |view, cx| view.focus_filter_editor(window, cx));
             }
-        } else if self.selection.is_none() {
+        } else if matches!(self.view, SidebarView::ThreadList) && self.selection.is_none() {
             self.filter_editor.focus_handle(cx).focus(window, cx);
         }
     }
@@ -1565,7 +1576,7 @@ impl Sidebar {
                 view.clear_selection();
                 view.focus_filter_editor(window, cx);
             });
-        } else {
+        } else if matches!(self.view, SidebarView::ThreadList) {
             self.filter_editor.focus_handle(cx).focus(window, cx);
         }
 
@@ -2653,39 +2664,102 @@ impl Sidebar {
             })
             .pr_1p5()
             .gap_1()
+            .border_b_1()
+            .border_color(cx.theme().colors().border)
+            .child(self.render_sidebar_toggle_button(cx))
+            .child(Divider::vertical().color(ui::DividerColor::Border))
+            .child(self.render_view_tabs(cx))
             .when(!no_open_projects, |this| {
-                this.border_b_1()
-                    .border_color(cx.theme().colors().border)
-                    .child(Divider::vertical().color(ui::DividerColor::Border))
-                    .child(
-                        div().ml_1().child(
-                            Icon::new(IconName::MagnifyingGlass)
-                                .size(IconSize::Small)
-                                .color(Color::Muted),
-                        ),
-                    )
-                    .child(self.render_filter_input(cx))
-                    .child(
-                        h_flex()
-                            .gap_1()
-                            .when(
-                                self.selection.is_some()
-                                    && !self.filter_editor.focus_handle(cx).is_focused(window),
-                                |this| this.child(KeyBinding::for_action(&FocusSidebarFilter, cx)),
+                this.child(
+                    div().ml_1().child(
+                        Icon::new(IconName::MagnifyingGlass)
+                            .size(IconSize::Small)
+                            .color(Color::Muted),
+                    ),
+                )
+                .child(self.render_filter_input(cx))
+                .child(
+                    h_flex()
+                        .gap_1()
+                        .when(
+                            self.selection.is_some()
+                                && !self.filter_editor.focus_handle(cx).is_focused(window),
+                            |this| this.child(KeyBinding::for_action(&FocusSidebarFilter, cx)),
+                        )
+                        .when(has_query, |this| {
+                            this.child(
+                                IconButton::new("clear_filter", IconName::Close)
+                                    .icon_size(IconSize::Small)
+                                    .tooltip(Tooltip::text("Clear Search"))
+                                    .on_click(cx.listener(|this, _, window, cx| {
+                                        this.reset_filter_editor_text(window, cx);
+                                        this.update_entries(cx);
+                                    })),
                             )
-                            .when(has_query, |this| {
-                                this.child(
-                                    IconButton::new("clear_filter", IconName::Close)
-                                        .icon_size(IconSize::Small)
-                                        .tooltip(Tooltip::text("Clear Search"))
-                                        .on_click(cx.listener(|this, _, window, cx| {
-                                            this.reset_filter_editor_text(window, cx);
-                                            this.update_entries(cx);
-                                        })),
-                                )
-                            }),
-                    )
+                        }),
+                )
             })
+    }
+
+    fn render_workflow_tab_header(
+        &self,
+        window: &Window,
+        cx: &mut Context<Self>,
+    ) -> impl IntoElement {
+        let header_height = platform_title_bar_height(window);
+        let traffic_lights = cfg!(target_os = "macos") && !window.is_fullscreen();
+
+        h_flex()
+            .h(header_height)
+            .mt_px()
+            .pb_px()
+            .border_b_1()
+            .border_color(cx.theme().colors().border)
+            .when(traffic_lights, |this| {
+                this.pl(px(ui::utils::TRAFFIC_LIGHT_PADDING))
+            })
+            .pr_1p5()
+            .gap_1()
+            .child(self.render_sidebar_toggle_button(cx))
+            .child(Divider::vertical().color(ui::DividerColor::Border))
+            .child(self.render_view_tabs(cx))
+    }
+
+    fn render_view_tabs(&self, cx: &mut Context<Self>) -> impl IntoElement {
+        let threads_selected =
+            matches!(self.view, SidebarView::ThreadList | SidebarView::Archive(_));
+        let workflow_defs_selected = matches!(self.view, SidebarView::WorkflowDefs);
+        let workflow_runs_selected = matches!(self.view, SidebarView::WorkflowRuns);
+
+        h_flex()
+            .gap_1()
+            .child(
+                IconButton::new("sidebar-view-threads", IconName::ZedAgent)
+                    .icon_size(IconSize::Small)
+                    .toggle_state(threads_selected)
+                    .tooltip(Tooltip::text("Threads"))
+                    .on_click(cx.listener(|this, _, window, cx| {
+                        this.show_thread_list(window, cx);
+                    })),
+            )
+            .child(
+                IconButton::new("sidebar-view-workflow-defs", IconName::Sparkle)
+                    .icon_size(IconSize::Small)
+                    .toggle_state(workflow_defs_selected)
+                    .tooltip(Tooltip::text("Workflow Definitions"))
+                    .on_click(cx.listener(|this, _, window, cx| {
+                        this.show_workflow_defs(window, cx);
+                    })),
+            )
+            .child(
+                IconButton::new("sidebar-view-workflow-runs", IconName::PlayFilled)
+                    .icon_size(IconSize::Small)
+                    .toggle_state(workflow_runs_selected)
+                    .tooltip(Tooltip::text("Workflow Runs"))
+                    .on_click(cx.listener(|this, _, window, cx| {
+                        this.show_workflow_runs(window, cx);
+                    })),
+            )
     }
 
     fn render_sidebar_toggle_button(&self, _cx: &mut Context<Self>) -> impl IntoElement {
@@ -2722,7 +2796,9 @@ impl Sidebar {
 impl Sidebar {
     fn toggle_archive(&mut self, _: &ToggleArchive, window: &mut Window, cx: &mut Context<Self>) {
         match &self.view {
-            SidebarView::ThreadList => self.show_archive(window, cx),
+            SidebarView::ThreadList | SidebarView::WorkflowDefs | SidebarView::WorkflowRuns => {
+                self.show_archive(window, cx)
+            }
             SidebarView::Archive(_) => self.show_thread_list(window, cx),
         }
     }
@@ -2791,6 +2867,46 @@ impl Sidebar {
         handle.focus(window, cx);
         cx.notify();
     }
+
+    fn show_workflow_defs_action(
+        &mut self,
+        _: &ShowWorkflowDefs,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        self.show_workflow_defs(window, cx);
+    }
+
+    fn show_workflow_runs_action(
+        &mut self,
+        _: &ShowWorkflowRuns,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        self.show_workflow_runs(window, cx);
+    }
+
+    fn show_workflow_defs(&mut self, _window: &mut Window, cx: &mut Context<Self>) {
+        if self.workflow_defs_view.is_none() {
+            let client = self.workflow_client.clone();
+            let view = cx.new(|cx| WorkflowDefsView::new(client, cx));
+            self.workflow_defs_view = Some(view);
+        }
+        self.view = SidebarView::WorkflowDefs;
+        self._subscriptions.clear();
+        cx.notify();
+    }
+
+    fn show_workflow_runs(&mut self, _window: &mut Window, cx: &mut Context<Self>) {
+        if self.workflow_runs_view.is_none() {
+            let client = self.workflow_client.clone();
+            let view = cx.new(|cx| WorkflowRunsView::new(client, cx));
+            self.workflow_runs_view = Some(view);
+        }
+        self.view = SidebarView::WorkflowRuns;
+        self._subscriptions.clear();
+        cx.notify();
+    }
 }
 
 impl WorkspaceSidebar for Sidebar {
@@ -2857,6 +2973,8 @@ impl Render for Sidebar {
             .on_action(cx.listener(Self::remove_selected_thread))
             .on_action(cx.listener(Self::new_thread_in_group))
             .on_action(cx.listener(Self::toggle_archive))
+            .on_action(cx.listener(Self::show_workflow_defs_action))
+            .on_action(cx.listener(Self::show_workflow_runs_action))
             .on_action(cx.listener(Self::focus_sidebar_filter))
             .on_action(cx.listener(|this, _: &OpenRecent, window, cx| {
                 this.recent_projects_popover_handle.toggle(window, cx);
@@ -2896,6 +3014,22 @@ impl Render for Sidebar {
                         }
                     }),
                 SidebarView::Archive(archive_view) => this.child(archive_view.clone()),
+                SidebarView::WorkflowDefs => {
+                    if let Some(view) = &self.workflow_defs_view {
+                        this.child(self.render_workflow_tab_header(window, cx))
+                            .child(view.clone())
+                    } else {
+                        this
+                    }
+                }
+                SidebarView::WorkflowRuns => {
+                    if let Some(view) = &self.workflow_runs_view {
+                        this.child(self.render_workflow_tab_header(window, cx))
+                            .child(view.clone())
+                    } else {
+                        this
+                    }
+                }
             })
             .child(
                 h_flex()

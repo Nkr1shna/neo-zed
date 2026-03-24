@@ -45,7 +45,10 @@ pub enum TaskLifecycleStatus {
 
 impl TaskLifecycleStatus {
     pub fn is_terminal(&self) -> bool {
-        matches!(self, TaskLifecycleStatus::Completed | TaskLifecycleStatus::Failed)
+        matches!(
+            self,
+            TaskLifecycleStatus::Completed | TaskLifecycleStatus::Failed
+        )
     }
 
     pub fn display_name(&self) -> &'static str {
@@ -132,7 +135,9 @@ impl WorkflowDefinitionRecord {
     }
 
     pub fn policy_for(&self, node_id: &str) -> Option<&NodePolicy> {
-        self.node_policies.iter().find(|policy| policy.node_id == node_id)
+        self.node_policies
+            .iter()
+            .find(|policy| policy.node_id == node_id)
     }
 }
 
@@ -301,14 +306,16 @@ impl WorkflowClient {
     }
 
     pub async fn get_workflow(&self, id: Uuid) -> Result<WorkflowDefinitionRecord> {
-        self.get_json(&format!("{}/workflows/{id}", self.base_url)).await
+        self.get_json(&format!("{}/workflows/{id}", self.base_url))
+            .await
     }
 
     pub async fn create_workflow(
         &self,
         request: &WorkflowDefinitionRequest,
     ) -> Result<WorkflowDefinitionRecord> {
-        self.post_json(&format!("{}/workflows", self.base_url), request).await
+        self.post_json(&format!("{}/workflows", self.base_url), request)
+            .await
     }
 
     pub async fn update_workflow(
@@ -316,11 +323,13 @@ impl WorkflowClient {
         id: Uuid,
         request: &WorkflowDefinitionRequest,
     ) -> Result<WorkflowDefinitionRecord> {
-        self.put_json(&format!("{}/workflows/{id}", self.base_url), request).await
+        self.put_json(&format!("{}/workflows/{id}", self.base_url), request)
+            .await
     }
 
     pub async fn run_workflow(&self, id: Uuid, request: &WorkflowRunRequest) -> Result<TaskRecord> {
-        self.post_json(&format!("{}/workflows/{id}/run", self.base_url), request).await
+        self.post_json(&format!("{}/workflows/{id}/run", self.base_url), request)
+            .await
     }
 
     pub async fn list_tasks(&self) -> Result<Vec<TaskRecord>> {
@@ -328,7 +337,8 @@ impl WorkflowClient {
     }
 
     pub async fn get_task_status(&self, id: Uuid) -> Result<TaskStatusResponse> {
-        self.get_json(&format!("{}/tasks/{id}", self.base_url)).await
+        self.get_json(&format!("{}/tasks/{id}", self.base_url))
+            .await
     }
 
     pub async fn delete_task(&self, id: Uuid) -> Result<()> {

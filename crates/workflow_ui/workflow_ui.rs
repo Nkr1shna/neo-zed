@@ -4,13 +4,15 @@ mod inspector;
 mod picker;
 mod runs;
 
-pub use canvas::{open_run, open_workflow, CanvasSelection, WorkflowCanvas, WorkflowCanvasEvent};
-pub use inspector::{NodeInspectorPanel, OpenWorkflowDef, WorkflowDefsView};
+pub use canvas::{CanvasSelection, WorkflowCanvas, WorkflowCanvasEvent, open_run, open_workflow};
 pub use client::{
     NodePolicy, RetryBehavior, TaskLifecycleStatus, TaskNodeStatus, TaskRecord, TaskStatusResponse,
     WorkflowClient, WorkflowDefinitionRecord, WorkflowDefinitionRequest, WorkflowEdge,
     WorkflowNode, WorkflowNodeKind, WorkflowRunRequest,
 };
+pub use inspector::{NodeInspectorPanel, OpenWorkflowDef, WorkflowDefsView};
+pub use picker::{WorkflowPicker, WorkflowPickerDelegate};
+pub use runs::{OpenWorkflowPicker, OpenWorkflowRun, WorkflowRunsView};
 
 use gpui::App;
 use workspace::Workspace;
@@ -28,4 +30,6 @@ pub fn register(
     cx: &mut gpui::Context<Workspace>,
 ) {
     inspector::register(workspace, window, cx);
+    runs::register(workspace, None, cx);
+    picker::register(workspace, None, cx);
 }

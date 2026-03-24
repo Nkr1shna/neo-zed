@@ -1,12 +1,15 @@
 use crate::client::{
-    TaskLifecycleStatus, TaskStatusResponse, WorkflowClient, WorkflowDefinitionRecord,
-    WorkflowEdge, WorkflowNode, WorkflowNodeKind,
+    TaskLifecycleStatus, TaskNodeStatus, TaskStatusResponse, WorkflowClient,
+    WorkflowDefinitionRecord, WorkflowEdge, WorkflowNode, WorkflowNodeKind,
 };
-use gpui::{px, App, AppContext, Context, FocusHandle, Pixels, Point, Task, Window};
-use util::ResultExt;
+use editor::Editor;
+use gpui::{App, AppContext, Context, FocusHandle, Pixels, Point, Task, Window, px};
+use multi_buffer::MultiBuffer;
 use std::collections::HashMap;
 use std::sync::Arc;
+use util::ResultExt;
 use uuid::Uuid;
+use workspace::Workspace;
 
 const NODE_WIDTH_F: f32 = 200.0;
 const NODE_HEIGHT_F: f32 = 72.0;
@@ -71,13 +74,13 @@ pub enum WorkflowCanvasEvent {
 }
 
 pub fn auto_layout(nodes: &[WorkflowNode], edges: &[WorkflowEdge]) -> HashMap<String, NodePos> {
-    let mut in_degree: HashMap<&str, usize> =
-        nodes.iter().map(|n| (n.id.as_str(), 0)).collect();
-    let mut adj: HashMap<&str, Vec<&str>> =
-        nodes.iter().map(|n| (n.id.as_str(), vec![])).collect();
+    let mut in_degree: HashMap<&str, usize> = nodes.iter().map(|n| (n.id.as_str(), 0)).collect();
+    let mut adj: HashMap<&str, Vec<&str>> = nodes.iter().map(|n| (n.id.as_str(), vec![])).collect();
     for edge in edges {
         *in_degree.entry(edge.to.as_str()).or_insert(0) += 1;
-        adj.entry(edge.from.as_str()).or_default().push(edge.to.as_str());
+        adj.entry(edge.from.as_str())
+            .or_default()
+            .push(edge.to.as_str());
     }
     let mut queue: std::collections::VecDeque<&str> = in_degree
         .iter()
@@ -123,7 +126,10 @@ pub fn to_screen_point(
 ) -> Point<Pixels> {
     let (ox, oy) = layout.viewport_offset;
     let z = layout.zoom;
-    gpui::point(origin.x + px((canvas_x + ox) * z), origin.y + px((canvas_y + oy) * z))
+    gpui::point(
+        origin.x + px((canvas_x + ox) * z),
+        origin.y + px((canvas_y + oy) * z),
+    )
 }
 
 pub fn scaled(layout: &CanvasLayout, canvas_val: f32) -> Pixels {
@@ -246,7 +252,9 @@ impl WorkflowCanvas {
 
     fn has_running_nodes(&self) -> bool {
         self.run.as_ref().map_or(false, |r| {
-            r.nodes.iter().any(|n| n.status == TaskLifecycleStatus::Running)
+            r.nodes
+                .iter()
+                .any(|n| n.status == TaskLifecycleStatus::Running)
                 || r.task.status == TaskLifecycleStatus::Running
         })
     }
@@ -658,7 +666,9 @@ fn paint_label(
         underline: None,
         strikethrough: None,
     };
-    let shaped = window.text_system().shape_line(label_text, font_size, &[run], None);
+    let shaped = window
+        .text_system()
+        .shape_line(label_text, font_size, &[run], None);
     let label_x = pos.x + 12.0;
     let label_y = pos.y + NODE_HEIGHT_F / 2.0 - 8.0;
     let label_origin = to_screen_point(layout, label_x, label_y, origin);
@@ -691,10 +701,9 @@ fn paint_label(
         underline: None,
         strikethrough: None,
     };
-    let kind_shaped =
-        window
-            .text_system()
-            .shape_line(kind_text, kind_font_size, &[kind_run], None);
+    let kind_shaped = window
+        .text_system()
+        .shape_line(kind_text, kind_font_size, &[kind_run], None);
     let kind_y = pos.y + NODE_HEIGHT_F / 2.0 + 8.0;
     let kind_origin = to_screen_point(layout, label_x, kind_y, origin);
     let kind_line_height = kind_font_size * 1.5;
@@ -769,11 +778,7 @@ fn paint_arrowhead(
 }
 
 impl gpui::Render for WorkflowCanvas {
-    fn render(
-        &mut self,
-        window: &mut Window,
-        cx: &mut Context<Self>,
-    ) -> impl gpui::IntoElement {
+    fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl gpui::IntoElement {
         use ui::prelude::*;
 
         if self.has_running_nodes() {
@@ -895,7 +900,99 @@ pub fn open_run(
     cx: &mut gpui::Context<workspace::Workspace>,
 ) {
     let canvas = cx.new(|cx| WorkflowCanvas::new_run(run, client, cx));
+    let canvas_handle = canvas.downgrade();
+    let workspace_handle = workspace.weak_handle();
+    canvas.update(cx, |canvas, _cx| {
+        canvas.on_node_activated = Some(Box::new(move |node_id, window, cx| {
+            open_run_node_conversation(
+                canvas_handle.clone(),
+                workspace_handle.clone(),
+                node_id,
+                window,
+                cx,
+            );
+        }));
+    });
     workspace.add_item_to_center(Box::new(canvas), window, cx);
+}
+
+fn open_run_node_conversation(
+    canvas: gpui::WeakEntity<WorkflowCanvas>,
+    workspace: gpui::WeakEntity<Workspace>,
+    node_id: String,
+    window: &mut Window,
+    cx: &mut App,
+) {
+    let Ok(Some((run_title, node))) = canvas.read_with(cx, |canvas, _cx| {
+        let run = canvas.run.as_ref()?;
+        let node = run.nodes.iter().find(|node| node.id == node_id)?.clone();
+        Some((run.task.title.clone(), node))
+    }) else {
+        return;
+    };
+
+    open_node_conversation(node, run_title, workspace, window, cx);
+}
+
+fn open_node_conversation(
+    node: TaskNodeStatus,
+    run_title: String,
+    workspace: gpui::WeakEntity<Workspace>,
+    window: &mut Window,
+    cx: &mut App,
+) {
+    let Some(workspace) = workspace.upgrade() else {
+        return;
+    };
+    let markdown_language = workspace
+        .read(cx)
+        .app_state()
+        .languages
+        .language_for_name("Markdown");
+    let project = workspace.read(cx).project().clone();
+    let title = format!("{run_title} / {} — conversation", node.label);
+    let content = format!(
+        "# {} — {}\n\n**Status:** {}\n\n---\n\n{}",
+        run_title,
+        node.label,
+        node.status.display_name(),
+        node.output.as_deref().unwrap_or("*(No output yet)*"),
+    );
+
+    window
+        .spawn(cx, async move |cx| {
+            let markdown_language = markdown_language.await?;
+            let buffer = project
+                .update(cx, |project, cx| {
+                    project.create_buffer(Some(markdown_language), false, cx)
+                })
+                .await?;
+
+            buffer.update(cx, |buffer, cx| {
+                buffer.set_text(content, cx);
+                buffer.set_capability(language::Capability::ReadOnly, cx);
+            });
+
+            workspace.update_in(cx, |workspace, window, cx| {
+                let multibuffer =
+                    cx.new(|cx| MultiBuffer::singleton(buffer, cx).with_title(title.clone()));
+                workspace.add_item_to_active_pane(
+                    Box::new(cx.new(|cx| {
+                        let mut editor =
+                            Editor::for_multibuffer(multibuffer, Some(project.clone()), window, cx);
+                        editor.set_read_only(true);
+                        editor
+                    })),
+                    None,
+                    true,
+                    window,
+                    cx,
+                );
+            })?;
+
+            anyhow::Ok(())
+        })
+        .detach_and_log_err(cx);
 }
 
 impl workspace::Item for WorkflowCanvas {

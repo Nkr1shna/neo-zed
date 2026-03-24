@@ -17,7 +17,15 @@ pub struct OpenWorkflowDef {
     pub id: String,
 }
 
-gpui::actions!(workflow_ui, [NewWorkflow, ToggleNodeInspector, PublishWorkflow, SaveWorkflowDraft]);
+gpui::actions!(
+    workflow_ui,
+    [
+        NewWorkflow,
+        ToggleNodeInspector,
+        PublishWorkflow,
+        SaveWorkflowDraft
+    ]
+);
 
 pub struct WorkflowDefsView {
     workflows: Vec<WorkflowDefinitionRecord>,
@@ -62,29 +70,28 @@ impl WorkflowDefsView {
 
 impl Render for WorkflowDefsView {
     fn render(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
-        let header = h_flex()
-            .px_2()
-            .py_1()
-            .justify_between()
-            .child(Label::new("Workflows").size(LabelSize::Small))
-            .child(
-                h_flex()
-                    .gap_1()
-                    .child(
-                        IconButton::new("refresh-workflows", IconName::ArrowCircle).on_click(
-                            cx.listener(|this, _, _window, cx| {
-                                this.fetch(cx);
-                            }),
-                        ),
-                    )
-                    .child(
-                        IconButton::new("new-workflow", IconName::Plus).on_click(cx.listener(
-                            |_this, _, window, cx| {
+        let header =
+            h_flex()
+                .px_2()
+                .py_1()
+                .justify_between()
+                .child(Label::new("Workflows").size(LabelSize::Small))
+                .child(
+                    h_flex()
+                        .gap_1()
+                        .child(
+                            IconButton::new("refresh-workflows", IconName::ArrowCircle).on_click(
+                                cx.listener(|this, _, _window, cx| {
+                                    this.fetch(cx);
+                                }),
+                            ),
+                        )
+                        .child(IconButton::new("new-workflow", IconName::Plus).on_click(
+                            cx.listener(|_this, _, window, cx| {
                                 window.dispatch_action(Box::new(NewWorkflow), cx);
-                            },
+                            }),
                         )),
-                    ),
-            );
+                );
 
         let content: gpui::AnyElement = if self.loading {
             Label::new("Loading...")
@@ -103,14 +110,16 @@ impl Render for WorkflowDefsView {
                 .children(self.workflows.iter().enumerate().map(|(index, workflow)| {
                     let workflow_id = workflow.id.to_string();
                     let name = workflow.name.clone();
-                    ListItem::new(index)
-                        .child(Label::new(name))
-                        .on_click(move |_, window: &mut Window, cx: &mut App| {
+                    ListItem::new(index).child(Label::new(name)).on_click(
+                        move |_, window: &mut Window, cx: &mut App| {
                             window.dispatch_action(
-                                Box::new(OpenWorkflowDef { id: workflow_id.clone() }),
+                                Box::new(OpenWorkflowDef {
+                                    id: workflow_id.clone(),
+                                }),
                                 cx,
                             );
-                        })
+                        },
+                    )
                 }))
                 .into_any_element()
         };
@@ -257,7 +266,10 @@ impl NodeInspectorPanel {
             let result = if is_new {
                 client.create_workflow(&request).await.map(|_| ())
             } else {
-                client.update_workflow(workflow_id, &request).await.map(|_| ())
+                client
+                    .update_workflow(workflow_id, &request)
+                    .await
+                    .map(|_| ())
             };
 
             this.update(cx, |panel, cx| {
@@ -382,7 +394,11 @@ impl Render for NodeInspectorPanel {
                 .child(
                     v_flex()
                         .gap_1()
-                        .child(Label::new("Label").size(LabelSize::Small).color(Color::Muted))
+                        .child(
+                            Label::new("Label")
+                                .size(LabelSize::Small)
+                                .color(Color::Muted),
+                        )
                         .child(self.label_editor.clone()),
                 )
                 .child(

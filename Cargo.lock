@@ -15976,6 +15976,7 @@ dependencies = [
  "ui",
  "util",
  "vim_mode_setting",
+ "workflow_ui",
  "workspace",
  "zed_actions",
 ]
@@ -21497,6 +21498,7 @@ dependencies = [
  "gpui",
  "language",
  "log",
+ "multi_buffer",
  "paths",
  "picker",
  "project",
