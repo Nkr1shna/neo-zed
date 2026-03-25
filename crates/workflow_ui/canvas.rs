@@ -1527,13 +1527,9 @@ fn paint_edge(
         if is_selected {
             let glow_color = gpui::rgba(0xffffff40);
             let glow_width = scaled(layout, 6.0);
-            let dx_g = (to_pt.x - from_pt.x).as_f32();
-            let off_g = px(bezier_ctrl_offset(dx_g));
-            let ctrl_a_g = gpui::point(from_pt.x + off_g, from_pt.y);
-            let ctrl_b_g = gpui::point(to_pt.x - off_g, to_pt.y);
             let mut glow_builder = gpui::PathBuilder::stroke(glow_width);
             glow_builder.move_to(from_pt);
-            glow_builder.cubic_bezier_to(to_pt, ctrl_a_g, ctrl_b_g);
+            glow_builder.cubic_bezier_to(to_pt, ctrl_a, ctrl_b);
             if let Ok(glow_path) = glow_builder.build() {
                 window.paint_path(glow_path, glow_color);
             }
