@@ -13,7 +13,7 @@ use gpui::{
 use multi_buffer::MultiBuffer;
 use recent_projects::open_remote_project;
 use remote::{DockerConnectionOptions, RemoteConnectionOptions};
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::path::PathBuf;
 use std::sync::Arc;
 use ui::{ActiveTheme, ContextMenu};
@@ -101,45 +101,127 @@ enum SaveState {
 }
 
 pub fn auto_layout(nodes: &[WorkflowNode], edges: &[WorkflowEdge]) -> HashMap<String, NodePos> {
-    let mut in_degree: HashMap<&str, usize> = nodes.iter().map(|n| (n.id.as_str(), 0)).collect();
-    let mut adj: HashMap<&str, Vec<&str>> = nodes.iter().map(|n| (n.id.as_str(), vec![])).collect();
-    for edge in edges {
-        *in_degree.entry(edge.to_node_id.as_str()).or_insert(0) += 1;
-        adj.entry(edge.from_node_id.as_str())
-            .or_default()
-            .push(edge.to_node_id.as_str());
+    if nodes.is_empty() {
+        return HashMap::new();
     }
-    let mut queue: std::collections::VecDeque<&str> = in_degree
+
+    // Identify back edges using node-list order as a proxy for topological order.
+    // Edges that go from a later node back to an earlier node (by list index) are back edges.
+    // This works reliably for workflow graphs where nodes are created in flow order.
+    let node_order: HashMap<String, usize> = nodes
         .iter()
-        .filter_map(|(id, &deg)| if deg == 0 { Some(*id) } else { None })
+        .enumerate()
+        .map(|(i, n)| (n.id.clone(), i))
         .collect();
-    let mut depth: HashMap<&str, usize> = HashMap::new();
+    let back_edges: HashSet<(String, String)> = edges
+        .iter()
+        .filter(|e| {
+            let from_ord = node_order.get(&e.from_node_id).copied().unwrap_or(0);
+            let to_ord = node_order
+                .get(&e.to_node_id)
+                .copied()
+                .unwrap_or(usize::MAX);
+            from_ord > to_ord
+        })
+        .map(|e| (e.from_node_id.clone(), e.to_node_id.clone()))
+        .collect();
+
+    // Build forward-only adjacency (skip back edges to break cycles for layering)
+    let mut forward_adj: HashMap<String, Vec<String>> = nodes.iter().map(|n| (n.id.clone(), vec![])).collect();
+    let mut in_degree: HashMap<String, usize> = nodes.iter().map(|n| (n.id.clone(), 0)).collect();
+    for edge in edges {
+        if !back_edges.contains(&(edge.from_node_id.clone(), edge.to_node_id.clone())) {
+            forward_adj.entry(edge.from_node_id.clone()).or_default().push(edge.to_node_id.clone());
+            *in_degree.entry(edge.to_node_id.clone()).or_insert(0) += 1;
+        }
+    }
+
+    // Longest-path layering via BFS from sources
+    let queue: std::collections::VecDeque<String> = in_degree
+        .iter()
+        .filter_map(|(id, &deg)| if deg == 0 { Some(id.clone()) } else { None })
+        .collect();
+    // Sort for determinism
+    let mut queue_vec: Vec<String> = queue.into_iter().collect();
+    queue_vec.sort();
+    let mut queue: std::collections::VecDeque<String> = queue_vec.into();
+
+    let mut depth: HashMap<String, usize> = HashMap::new();
     while let Some(node) = queue.pop_front() {
-        let d = depth.get(node).copied().unwrap_or(0);
-        for &next in adj.get(node).unwrap_or(&vec![]) {
+        let d = depth.get(&node).copied().unwrap_or(0);
+        for next in forward_adj.get(&node).unwrap_or(&vec![]) {
             let next_depth = d + 1;
-            let entry = depth.entry(next).or_insert(0);
+            let entry = depth.entry(next.clone()).or_insert(0);
             if next_depth > *entry {
                 *entry = next_depth;
             }
-            queue.push_back(next);
+            queue.push_back(next.clone());
         }
     }
-    let mut columns: HashMap<usize, Vec<&str>> = HashMap::new();
+
+    // Group nodes by column (layer)
+    let max_col = depth.values().copied().max().unwrap_or(0);
+    let mut columns: Vec<Vec<String>> = vec![vec![]; max_col + 1];
     for node in nodes {
-        let col = depth.get(node.id.as_str()).copied().unwrap_or(0);
-        columns.entry(col).or_default().push(node.id.as_str());
+        let col = depth.get(&node.id).copied().unwrap_or(0);
+        columns[col].push(node.id.clone());
     }
+
+    // Sort each column by node id for initial determinism
+    for col_nodes in &mut columns {
+        col_nodes.sort();
+    }
+
+    // Build predecessor adjacency for barycenter pass
+    let mut pred_adj: HashMap<String, Vec<String>> = nodes.iter().map(|n| (n.id.clone(), vec![])).collect();
+    for edge in edges {
+        if !back_edges.contains(&(edge.from_node_id.clone(), edge.to_node_id.clone())) {
+            pred_adj.entry(edge.to_node_id.clone()).or_default().push(edge.from_node_id.clone());
+        }
+    }
+
+    // Assign initial row positions for barycenter computation
+    let mut row_pos: HashMap<String, f32> = HashMap::new();
+    for col_nodes in &columns {
+        for (row, node_id) in col_nodes.iter().enumerate() {
+            row_pos.insert(node_id.clone(), row as f32);
+        }
+    }
+
+    // Left-to-right barycenter pass to minimize crossings
+    for col_idx in 1..=max_col {
+        let col_nodes = columns[col_idx].clone();
+        let empty_preds: Vec<String> = vec![];
+        let mut barycenters: Vec<(String, f32)> = col_nodes.iter().map(|node_id| {
+            let preds = pred_adj.get(node_id.as_str()).unwrap_or(&empty_preds);
+            let bc = if preds.is_empty() {
+                row_pos.get(node_id.as_str()).copied().unwrap_or(0.0)
+            } else {
+                preds.iter().map(|p| row_pos.get(p.as_str()).copied().unwrap_or(0.0)).sum::<f32>() / preds.len() as f32
+            };
+            (node_id.clone(), bc)
+        }).collect();
+        barycenters.sort_by(|a, b| a.1.partial_cmp(&b.1).unwrap_or(std::cmp::Ordering::Equal).then(a.0.cmp(&b.0)));
+        columns[col_idx] = barycenters.into_iter().map(|(id, _)| id).collect();
+        for (row, node_id) in columns[col_idx].iter().enumerate() {
+            row_pos.insert(node_id.clone(), row as f32);
+        }
+    }
+
+    // Compute final positions, centering each column vertically relative to the tallest column
+    let max_col_count = columns.iter().map(|c| c.len()).max().unwrap_or(1);
+    let max_h = max_col_count as f32 * (NODE_HEIGHT_F + NODE_V_GAP) - NODE_V_GAP;
+
     let mut positions = HashMap::new();
-    for (col, node_ids) in &columns {
-        for (row, &node_id) in node_ids.iter().enumerate() {
-            positions.insert(
-                node_id.to_string(),
-                NodePos {
-                    x: *col as f32 * (NODE_WIDTH_F + NODE_H_GAP) + 40.0,
-                    y: row as f32 * (NODE_HEIGHT_F + NODE_V_GAP) + 40.0,
-                },
-            );
+    for (col_idx, col_nodes) in columns.iter().enumerate() {
+        let count = col_nodes.len();
+        let col_h = count as f32 * (NODE_HEIGHT_F + NODE_V_GAP) - NODE_V_GAP;
+        let start_y = 40.0 + (max_h - col_h) * 0.5;
+        for (row_idx, node_id) in col_nodes.iter().enumerate() {
+            positions.insert(node_id.clone(), NodePos {
+                x: col_idx as f32 * (NODE_WIDTH_F + NODE_H_GAP) + 40.0,
+                y: start_y + row_idx as f32 * (NODE_HEIGHT_F + NODE_V_GAP),
+            });
         }
     }
     positions
@@ -1374,6 +1456,21 @@ fn paint_label(
         .log_err();
 }
 
+fn is_backward_edge(from: (f32, f32), to: (f32, f32)) -> bool {
+    to.0 < from.0 - 20.0
+}
+
+// React Flow-style bezier control point offset.
+// Scales with distance for forward edges; uses sqrt scaling for backward/opposing ones.
+fn bezier_ctrl_offset(dx: f32) -> f32 {
+    if dx >= 0.0 {
+        (dx * 0.5).max(40.0)
+    } else {
+        // React Flow: curvature(0.25) * 25 * sqrt(-dx)
+        0.25 * 25.0 * (-dx).sqrt()
+    }
+}
+
 fn paint_edge(
     layout: &CanvasLayout,
     from: (f32, f32),
@@ -1381,45 +1478,140 @@ fn paint_edge(
     origin: Point<Pixels>,
     window: &mut Window,
 ) {
-    let from_x = from.0;
-    let from_y = from.1;
-    let to_x = to.0;
-    let to_y = to.1;
-
-    let from_pt = to_screen_point(layout, from_x, from_y, origin);
-    let to_pt = to_screen_point(layout, to_x, to_y, origin);
-
-    let ctrl_offset = scaled(layout, 60.0);
-    let ctrl_a = gpui::point(from_pt.x + ctrl_offset, from_pt.y);
-    let ctrl_b = gpui::point(to_pt.x - ctrl_offset, to_pt.y);
-
-    let stroke_width = scaled(layout, EDGE_STROKE.as_f32());
+    let from_pt = to_screen_point(layout, from.0, from.1, origin);
+    let to_pt = to_screen_point(layout, to.0, to.1, origin);
     let edge_color = gpui::rgba(0x9ca3afff);
+    let stroke_width = scaled(layout, EDGE_STROKE.as_f32());
+
+    if is_backward_edge(from, to) {
+        paint_smoothstep_edge(layout, from_pt, to_pt, edge_color, stroke_width, window);
+    } else {
+        let dx = (to_pt.x - from_pt.x).as_f32();
+        let off = px(bezier_ctrl_offset(dx));
+        let ctrl_a = gpui::point(from_pt.x + off, from_pt.y);
+        let ctrl_b = gpui::point(to_pt.x - off, to_pt.y);
+        let mut builder = gpui::PathBuilder::stroke(stroke_width);
+        builder.move_to(from_pt);
+        builder.cubic_bezier_to(to_pt, ctrl_a, ctrl_b);
+        if let Ok(path) = builder.build() {
+            window.paint_path(path, edge_color);
+        }
+        paint_arrowhead_directed(
+            layout,
+            to_pt,
+            (to_pt.x - ctrl_b.x).as_f32(),
+            (to_pt.y - ctrl_b.y).as_f32(),
+            window,
+        );
+    }
+}
+
+// Smoothstep elbow: follows React Flow's smoothstep edge algorithm.
+// Routes: source → (right, h_gap) → (down, elbow_y) → (left, h_gap) → (up, target_y) → target
+fn paint_smoothstep_edge(
+    layout: &CanvasLayout,
+    from_pt: Point<Pixels>,
+    to_pt: Point<Pixels>,
+    edge_color: gpui::Rgba,
+    stroke_width: Pixels,
+    window: &mut Window,
+) {
+    let h_gap = px(layout.zoom * 40.0);
+    // Route below whichever port is lower, clearing the node height
+    let elbow_y = from_pt.y.max(to_pt.y) + px(layout.zoom * (NODE_HEIGHT_F * 0.5 + 50.0));
+    let corner_r = px(layout.zoom * 10.0);
+
+    let p1 = gpui::point(from_pt.x + h_gap, from_pt.y);
+    let p2 = gpui::point(from_pt.x + h_gap, elbow_y);
+    let p3 = gpui::point(to_pt.x - h_gap, elbow_y);
+    let p4 = gpui::point(to_pt.x - h_gap, to_pt.y);
 
     let mut builder = gpui::PathBuilder::stroke(stroke_width);
-    builder.move_to(from_pt);
-    builder.cubic_bezier_to(to_pt, ctrl_a, ctrl_b);
+    paint_smoothstep_polyline(&mut builder, &[from_pt, p1, p2, p3, p4, to_pt], corner_r);
     if let Ok(path) = builder.build() {
         window.paint_path(path, edge_color);
     }
-
-    paint_arrowhead(layout, to_x, to_y, origin, window);
+    // Arrowhead always points right into the input port
+    paint_arrowhead_directed(layout, to_pt, 1.0, 0.0, window);
 }
 
-fn paint_arrowhead(
+// Polyline with rounded corners using cubic bezier approximation of quadratic arcs.
+fn paint_smoothstep_polyline(
+    builder: &mut gpui::PathBuilder,
+    points: &[Point<Pixels>],
+    corner_r: Pixels,
+) {
+    if points.len() < 2 {
+        return;
+    }
+    builder.move_to(points[0]);
+    for i in 0..points.len() - 1 {
+        let curr = points[i];
+        let next = points[i + 1];
+        if i + 2 >= points.len() {
+            builder.line_to(next);
+            continue;
+        }
+        let after = points[i + 2];
+        let seg1_len = {
+            let dx = (next.x - curr.x).as_f32();
+            let dy = (next.y - curr.y).as_f32();
+            (dx * dx + dy * dy).sqrt()
+        };
+        let seg2_len = {
+            let dx = (after.x - next.x).as_f32();
+            let dy = (after.y - next.y).as_f32();
+            (dx * dx + dy * dy).sqrt()
+        };
+        let r = corner_r
+            .min(px(seg1_len * 0.45))
+            .min(px(seg2_len * 0.45));
+        if r.as_f32() < 0.5 {
+            builder.line_to(next);
+            continue;
+        }
+        let t1 = 1.0 - r.as_f32() / seg1_len.max(0.001);
+        let corner_start = gpui::point(
+            curr.x + (next.x - curr.x) * t1,
+            curr.y + (next.y - curr.y) * t1,
+        );
+        let t2 = r.as_f32() / seg2_len.max(0.001);
+        let corner_end = gpui::point(
+            next.x + (after.x - next.x) * t2,
+            next.y + (after.y - next.y) * t2,
+        );
+        builder.line_to(corner_start);
+        // Both control points at the corner vertex approximates a quadratic arc
+        builder.cubic_bezier_to(corner_end, next, next);
+    }
+}
+
+fn paint_arrowhead_directed(
     layout: &CanvasLayout,
-    tip_x: f32,
-    tip_y: f32,
-    origin: Point<Pixels>,
+    tip: Point<Pixels>,
+    dir_x: f32,
+    dir_y: f32,
     window: &mut Window,
 ) {
-    let tip = to_screen_point(layout, tip_x, tip_y, origin);
+    let length = (dir_x * dir_x + dir_y * dir_y).sqrt();
+    if length < 0.001 {
+        return;
+    }
+    let ux = dir_x / length;
+    let uy = dir_y / length;
+
     let size = layout.zoom * 10.0;
     let half = size * 0.5;
 
-    let p1 = gpui::point(tip.x, tip.y);
-    let p2 = gpui::point(tip.x - px(size), tip.y - px(half));
-    let p3 = gpui::point(tip.x - px(size), tip.y + px(half));
+    let p1 = tip;
+    let p2 = gpui::point(
+        tip.x - px(size * ux) - px(half * uy),
+        tip.y - px(size * uy) + px(half * ux),
+    );
+    let p3 = gpui::point(
+        tip.x - px(size * ux) + px(half * uy),
+        tip.y - px(size * uy) - px(half * ux),
+    );
 
     let arrow_color = gpui::rgba(0x9ca3afff);
     let mut builder = gpui::PathBuilder::fill();
@@ -1480,12 +1672,34 @@ fn edge_contains_screen_point(
 ) -> bool {
     let from_pt = to_screen_point(layout, from.0, from.1, origin);
     let to_pt = to_screen_point(layout, to.0, to.1, origin);
-    let ctrl_offset = scaled(layout, 60.0);
-    let ctrl_a = gpui::point(from_pt.x + ctrl_offset, from_pt.y);
-    let ctrl_b = gpui::point(to_pt.x - ctrl_offset, to_pt.y);
     let threshold = (EDGE_STROKE.as_f32() * layout.zoom + 8.0).max(8.0);
-    let mut previous = from_pt;
 
+    if is_backward_edge(from, to) {
+        // Sample along the smoothstep elbow polyline for hit-testing
+        let h_gap = px(layout.zoom * 40.0);
+        let elbow_y =
+            from_pt.y.max(to_pt.y) + px(layout.zoom * (NODE_HEIGHT_F * 0.5 + 50.0));
+        let pts = [
+            from_pt,
+            gpui::point(from_pt.x + h_gap, from_pt.y),
+            gpui::point(from_pt.x + h_gap, elbow_y),
+            gpui::point(to_pt.x - h_gap, elbow_y),
+            gpui::point(to_pt.x - h_gap, to_pt.y),
+            to_pt,
+        ];
+        for seg in pts.windows(2) {
+            if distance_to_segment(screen_point, seg[0], seg[1]) <= threshold {
+                return true;
+            }
+        }
+        return false;
+    }
+
+    let dx = (to_pt.x - from_pt.x).as_f32();
+    let off = px(bezier_ctrl_offset(dx));
+    let ctrl_a = gpui::point(from_pt.x + off, from_pt.y);
+    let ctrl_b = gpui::point(to_pt.x - off, to_pt.y);
+    let mut previous = from_pt;
     for step in 1..=20 {
         let t = step as f32 / 20.0;
         let current = cubic_bezier_point(from_pt, ctrl_a, ctrl_b, to_pt, t);
@@ -1494,7 +1708,6 @@ fn edge_contains_screen_point(
         }
         previous = current;
     }
-
     false
 }
 
@@ -1723,26 +1936,33 @@ impl gpui::Render for WorkflowCanvas {
                     move |bounds, _prepaint, window, cx| {
                         let origin = bounds.origin;
                         if let Some(ref wf) = workflow {
-                            for edge in &wf.edges {
-                                if let (Some(from_port), Some(to_port)) = (
-                                    port_position_for_node(
-                                        &layout,
-                                        wf,
-                                        &node_types,
-                                        &edge.from_node_id,
-                                        &edge.from_output_id,
-                                        false,
-                                    ),
-                                    port_position_for_node(
-                                        &layout,
-                                        wf,
-                                        &node_types,
-                                        &edge.to_node_id,
-                                        &edge.to_input_id,
-                                        true,
-                                    ),
-                                ) {
-                                    paint_edge(&layout, from_port, to_port, origin, window);
+                            let edge_draw_list: Vec<((f32, f32), (f32, f32))> = wf
+                                .edges
+                                .iter()
+                                .filter_map(|edge| {
+                                    Some((
+                                        port_position_for_node(
+                                            &layout,
+                                            wf,
+                                            &node_types,
+                                            &edge.from_node_id,
+                                            &edge.from_output_id,
+                                            false,
+                                        )?,
+                                        port_position_for_node(
+                                            &layout,
+                                            wf,
+                                            &node_types,
+                                            &edge.to_node_id,
+                                            &edge.to_input_id,
+                                            true,
+                                        )?,
+                                    ))
+                                })
+                                .collect();
+                            for (from_port, to_port) in &edge_draw_list {
+                                if !is_backward_edge(*from_port, *to_port) {
+                                    paint_edge(&layout, *from_port, *to_port, origin, window);
                                 }
                             }
                             for node in &wf.nodes {
@@ -1775,6 +1995,11 @@ impl gpui::Render for WorkflowCanvas {
                                     cx,
                                 );
                             }
+                            for (from_port, to_port) in &edge_draw_list {
+                                if is_backward_edge(*from_port, *to_port) {
+                                    paint_edge(&layout, *from_port, *to_port, origin, window);
+                                }
+                            }
                             if let (Some(source), Some(target)) =
                                 (pending_connection.as_ref(), pending_connection_target)
                             {
@@ -1790,27 +2015,37 @@ impl gpui::Render for WorkflowCanvas {
                                 }
                             }
                         } else if let Some(ref run_data) = run {
+                            let mut backward_run_edges: Vec<((f32, f32), (f32, f32))> = Vec::new();
                             if let Some(ref wf) = run_data.workflow {
-                                for edge in &wf.edges {
-                                    if let (Some(from_port), Some(to_port)) = (
-                                        port_position_for_node(
-                                            &layout,
-                                            wf,
-                                            &node_types,
-                                            &edge.from_node_id,
-                                            &edge.from_output_id,
-                                            false,
-                                        ),
-                                        port_position_for_node(
-                                            &layout,
-                                            wf,
-                                            &node_types,
-                                            &edge.to_node_id,
-                                            &edge.to_input_id,
-                                            true,
-                                        ),
-                                    ) {
-                                        paint_edge(&layout, from_port, to_port, origin, window);
+                                let edge_positions: Vec<((f32, f32), (f32, f32))> = wf
+                                    .edges
+                                    .iter()
+                                    .filter_map(|edge| {
+                                        Some((
+                                            port_position_for_node(
+                                                &layout,
+                                                wf,
+                                                &node_types,
+                                                &edge.from_node_id,
+                                                &edge.from_output_id,
+                                                false,
+                                            )?,
+                                            port_position_for_node(
+                                                &layout,
+                                                wf,
+                                                &node_types,
+                                                &edge.to_node_id,
+                                                &edge.to_input_id,
+                                                true,
+                                            )?,
+                                        ))
+                                    })
+                                    .collect();
+                                for (from_port, to_port) in &edge_positions {
+                                    if is_backward_edge(*from_port, *to_port) {
+                                        backward_run_edges.push((*from_port, *to_port));
+                                    } else {
+                                        paint_edge(&layout, *from_port, *to_port, origin, window);
                                     }
                                 }
                             }
@@ -1851,6 +2086,9 @@ impl gpui::Render for WorkflowCanvas {
                                     window,
                                     cx,
                                 );
+                            }
+                            for (from_port, to_port) in backward_run_edges {
+                                paint_edge(&layout, from_port, to_port, origin, window);
                             }
                         }
                     },
