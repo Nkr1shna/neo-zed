@@ -272,6 +272,7 @@ pub struct WorkflowCanvas {
     drag_mouse_start: Option<Point<Pixels>>,
     pan_mouse_start: Option<Point<Pixels>>,
     pan_viewport_start: Option<(f32, f32)>,
+    background_click_start: Option<Point<Pixels>>,
     context_menu: Option<(gpui::Entity<ContextMenu>, Point<Pixels>, Subscription)>,
     save_state: SaveState,
     animation_phase: f32,
@@ -309,6 +310,7 @@ impl WorkflowCanvas {
             drag_mouse_start: None,
             pan_mouse_start: None,
             pan_viewport_start: None,
+            background_click_start: None,
             context_menu: None,
             save_state: SaveState::Idle,
             animation_phase: 0.0,
@@ -347,6 +349,7 @@ impl WorkflowCanvas {
             drag_mouse_start: None,
             pan_mouse_start: None,
             pan_viewport_start: None,
+            background_click_start: None,
             context_menu: None,
             save_state: SaveState::Idle,
             animation_phase: 0.0,
@@ -396,6 +399,7 @@ impl WorkflowCanvas {
             drag_mouse_start: None,
             pan_mouse_start: None,
             pan_viewport_start: None,
+            background_click_start: None,
             context_menu: None,
             save_state: SaveState::Idle,
             animation_phase: 0.0,
@@ -439,6 +443,14 @@ impl WorkflowCanvas {
         }));
     }
 
+    fn globals_node_id(&self) -> Option<String> {
+        let wf = self.workflow.as_ref()?;
+        wf.nodes
+            .iter()
+            .find(|n| n.node_type == WORKFLOW_GLOBALS_NODE_TYPE_ID)
+            .map(|n| n.id.clone())
+    }
+
     fn hit_test_node(
         &self,
         screen_pt: Point<Pixels>,
@@ -447,6 +459,10 @@ impl WorkflowCanvas {
         let (cx_coord, cy_coord) =
             to_canvas_point(&self.layout, screen_pt.x, screen_pt.y, canvas_origin);
         for (id, pos) in &self.layout.node_positions {
+            // Globals node is hidden from canvas interaction
+            if self.globals_node_id().as_deref() == Some(id.as_str()) {
+                continue;
+            }
             if cx_coord >= pos.x
                 && cx_coord <= pos.x + NODE_WIDTH_F
                 && cy_coord >= pos.y
@@ -474,6 +490,9 @@ impl WorkflowCanvas {
     ) -> Option<PortEndpoint> {
         let workflow = self.workflow.as_ref()?;
         for node in &workflow.nodes {
+            if node.node_type == WORKFLOW_GLOBALS_NODE_TYPE_ID {
+                continue;
+            }
             let Some(position) = self.layout.node_positions.get(&node.id) else {
                 continue;
             };
@@ -633,6 +652,7 @@ impl WorkflowCanvas {
             self.pending_connection_target = None;
             self.pan_mouse_start = Some(position);
             self.pan_viewport_start = Some(self.layout.viewport_offset);
+            self.background_click_start = Some(position);
         }
 
         cx.notify();
@@ -777,6 +797,15 @@ impl WorkflowCanvas {
         self.drag_node_start_pos = None;
         self.pan_mouse_start = None;
         self.pan_viewport_start = None;
+
+        if let Some(click_start) = self.background_click_start.take() {
+            let dx = (event.position.x - click_start.x).as_f32();
+            let dy = (event.position.y - click_start.y).as_f32();
+            let dist_sq = dx * dx + dy * dy;
+            if dist_sq < 4.0 * 4.0 {
+                cx.emit(WorkflowCanvasEvent::NodeSelected(self.globals_node_id()));
+            }
+        }
     }
 
     fn handle_scroll_wheel(
@@ -1966,6 +1995,9 @@ impl gpui::Render for WorkflowCanvas {
                                 }
                             }
                             for node in &wf.nodes {
+                                if node.node_type == WORKFLOW_GLOBALS_NODE_TYPE_ID {
+                                    continue;
+                                }
                                 let pos = layout
                                     .node_positions
                                     .get(&node.id)
@@ -2050,6 +2082,9 @@ impl gpui::Render for WorkflowCanvas {
                                 }
                             }
                             for node_status in &run_data.nodes {
+                                if node_status.node_type == WORKFLOW_GLOBALS_NODE_TYPE_ID {
+                                    continue;
+                                }
                                 let pos = layout
                                     .node_positions
                                     .get(&node_status.id)
