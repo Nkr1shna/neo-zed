@@ -458,9 +458,9 @@ impl WorkflowCanvas {
     ) -> Option<String> {
         let (cx_coord, cy_coord) =
             to_canvas_point(&self.layout, screen_pt.x, screen_pt.y, canvas_origin);
+        let globals_id = self.globals_node_id();
         for (id, pos) in &self.layout.node_positions {
-            // Globals node is hidden from canvas interaction
-            if self.globals_node_id().as_deref() == Some(id.as_str()) {
+            if globals_id.as_deref() == Some(id.as_str()) {
                 continue;
             }
             if cx_coord >= pos.x
