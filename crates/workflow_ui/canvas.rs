@@ -834,7 +834,6 @@ impl WorkflowCanvas {
                 cx.notify();
             } else {
                 self.drag_edge_waypoint_key = Some(edge_key);
-                cx.notify();
             }
             return;
         }
@@ -954,13 +953,14 @@ impl WorkflowCanvas {
                 },
             );
             cx.notify();
+            return;
         }
 
-        if let Some(ref key) = self.drag_edge_waypoint_key.clone() {
+        if let Some(key) = self.drag_edge_waypoint_key.clone() {
             let origin = self.canvas_origin();
             let canvas_pos =
                 to_canvas_point(&self.layout, position.x, position.y, origin);
-            self.layout.edge_waypoints.insert(key.clone(), canvas_pos);
+            self.layout.edge_waypoints.insert(key, canvas_pos);
             cx.notify();
         }
     }
