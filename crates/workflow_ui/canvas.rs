@@ -1504,21 +1504,40 @@ fn paint_edge(
     layout: &CanvasLayout,
     from: (f32, f32),
     to: (f32, f32),
+    is_selected: bool,
     origin: Point<Pixels>,
     window: &mut Window,
 ) {
     let from_pt = to_screen_point(layout, from.0, from.1, origin);
     let to_pt = to_screen_point(layout, to.0, to.1, origin);
-    let edge_color = gpui::rgba(0x9ca3afff);
-    let stroke_width = scaled(layout, EDGE_STROKE.as_f32());
+    let edge_color = if is_selected {
+        gpui::rgba(0xffffffff)
+    } else {
+        gpui::rgba(0x9ca3afff)
+    };
+    let stroke_width = scaled(layout, if is_selected { 2.5 } else { EDGE_STROKE.as_f32() });
 
     if is_backward_edge(from, to) {
-        paint_smoothstep_edge(layout, from_pt, to_pt, edge_color, stroke_width, window);
+        paint_smoothstep_edge(layout, from_pt, to_pt, edge_color, stroke_width, is_selected, window);
     } else {
         let dx = (to_pt.x - from_pt.x).as_f32();
         let off = px(bezier_ctrl_offset(dx));
         let ctrl_a = gpui::point(from_pt.x + off, from_pt.y);
         let ctrl_b = gpui::point(to_pt.x - off, to_pt.y);
+        if is_selected {
+            let glow_color = gpui::rgba(0xffffff40);
+            let glow_width = scaled(layout, 6.0);
+            let dx_g = (to_pt.x - from_pt.x).as_f32();
+            let off_g = px(bezier_ctrl_offset(dx_g));
+            let ctrl_a_g = gpui::point(from_pt.x + off_g, from_pt.y);
+            let ctrl_b_g = gpui::point(to_pt.x - off_g, to_pt.y);
+            let mut glow_builder = gpui::PathBuilder::stroke(glow_width);
+            glow_builder.move_to(from_pt);
+            glow_builder.cubic_bezier_to(to_pt, ctrl_a_g, ctrl_b_g);
+            if let Ok(glow_path) = glow_builder.build() {
+                window.paint_path(glow_path, glow_color);
+            }
+        }
         let mut builder = gpui::PathBuilder::stroke(stroke_width);
         builder.move_to(from_pt);
         builder.cubic_bezier_to(to_pt, ctrl_a, ctrl_b);
@@ -1543,6 +1562,7 @@ fn paint_smoothstep_edge(
     to_pt: Point<Pixels>,
     edge_color: gpui::Rgba,
     stroke_width: Pixels,
+    is_selected: bool,
     window: &mut Window,
 ) {
     let h_gap = px(layout.zoom * 40.0);
@@ -1555,6 +1575,15 @@ fn paint_smoothstep_edge(
     let p3 = gpui::point(to_pt.x - h_gap, elbow_y);
     let p4 = gpui::point(to_pt.x - h_gap, to_pt.y);
 
+    if is_selected {
+        let glow_color = gpui::rgba(0xffffff40);
+        let glow_width = scaled(layout, 6.0);
+        let mut glow_builder = gpui::PathBuilder::stroke(glow_width);
+        paint_smoothstep_polyline(&mut glow_builder, &[from_pt, p1, p2, p3, p4, to_pt], corner_r);
+        if let Ok(glow_path) = glow_builder.build() {
+            window.paint_path(glow_path, glow_color);
+        }
+    }
     let mut builder = gpui::PathBuilder::stroke(stroke_width);
     paint_smoothstep_polyline(&mut builder, &[from_pt, p1, p2, p3, p4, to_pt], corner_r);
     if let Ok(path) = builder.build() {
@@ -1965,11 +1994,12 @@ impl gpui::Render for WorkflowCanvas {
                     move |bounds, _prepaint, window, cx| {
                         let origin = bounds.origin;
                         if let Some(ref wf) = workflow {
-                            let edge_draw_list: Vec<((f32, f32), (f32, f32))> = wf
+                            let edge_draw_list: Vec<(WorkflowEdge, (f32, f32), (f32, f32))> = wf
                                 .edges
                                 .iter()
                                 .filter_map(|edge| {
                                     Some((
+                                        edge.clone(),
                                         port_position_for_node(
                                             &layout,
                                             wf,
@@ -1989,9 +2019,16 @@ impl gpui::Render for WorkflowCanvas {
                                     ))
                                 })
                                 .collect();
-                            for (from_port, to_port) in &edge_draw_list {
+                            for (edge, from_port, to_port) in &edge_draw_list {
                                 if !is_backward_edge(*from_port, *to_port) {
-                                    paint_edge(&layout, *from_port, *to_port, origin, window);
+                                    let is_selected = matches!(&selection,
+                                        CanvasSelection::Edge(fn_id, fo_id, tn_id, ti_id)
+                                        if fn_id == &edge.from_node_id
+                                            && fo_id == &edge.from_output_id
+                                            && tn_id == &edge.to_node_id
+                                            && ti_id == &edge.to_input_id
+                                    );
+                                    paint_edge(&layout, *from_port, *to_port, is_selected, origin, window);
                                 }
                             }
                             for node in &wf.nodes {
@@ -2027,9 +2064,16 @@ impl gpui::Render for WorkflowCanvas {
                                     cx,
                                 );
                             }
-                            for (from_port, to_port) in &edge_draw_list {
+                            for (edge, from_port, to_port) in &edge_draw_list {
                                 if is_backward_edge(*from_port, *to_port) {
-                                    paint_edge(&layout, *from_port, *to_port, origin, window);
+                                    let is_selected = matches!(&selection,
+                                        CanvasSelection::Edge(fn_id, fo_id, tn_id, ti_id)
+                                        if fn_id == &edge.from_node_id
+                                            && fo_id == &edge.from_output_id
+                                            && tn_id == &edge.to_node_id
+                                            && ti_id == &edge.to_input_id
+                                    );
+                                    paint_edge(&layout, *from_port, *to_port, is_selected, origin, window);
                                 }
                             }
                             if let (Some(source), Some(target)) =
@@ -2043,7 +2087,7 @@ impl gpui::Render for WorkflowCanvas {
                                     &source.port_id,
                                     false,
                                 ) {
-                                    paint_edge(&layout, from_port, target, origin, window);
+                                    paint_edge(&layout, from_port, target, false, origin, window);
                                 }
                             }
                         } else if let Some(ref run_data) = run {
@@ -2077,7 +2121,7 @@ impl gpui::Render for WorkflowCanvas {
                                     if is_backward_edge(*from_port, *to_port) {
                                         backward_run_edges.push((*from_port, *to_port));
                                     } else {
-                                        paint_edge(&layout, *from_port, *to_port, origin, window);
+                                        paint_edge(&layout, *from_port, *to_port, false, origin, window);
                                     }
                                 }
                             }
@@ -2123,7 +2167,7 @@ impl gpui::Render for WorkflowCanvas {
                                 );
                             }
                             for (from_port, to_port) in backward_run_edges {
-                                paint_edge(&layout, from_port, to_port, origin, window);
+                                paint_edge(&layout, from_port, to_port, false, origin, window);
                             }
                         }
                     },
