@@ -749,7 +749,7 @@ impl WorkflowCanvas {
             to_screen_point(&self.layout, handle_canvas.0, handle_canvas.1, canvas_origin);
         let dx = (screen_pt.x - handle_screen.x).as_f32();
         let dy = (screen_pt.y - handle_screen.y).as_f32();
-        if dx * dx + dy * dy <= (8.0 * self.layout.zoom).powi(2) {
+        if dx * dx + dy * dy <= 8.0_f32.powi(2) {
             Some(edge_key)
         } else {
             None
