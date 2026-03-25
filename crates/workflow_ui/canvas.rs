@@ -294,6 +294,41 @@ fn backward_edge_rail_y(
     }
 }
 
+/// Given an ordered slice of `(from_port, to_port)` canvas-coordinate pairs,
+/// returns per-edge `(above: bool, rail_index: usize)` assignments in the same order.
+/// Edges whose midpoint is closer to the top bounding box edge route above; others route below.
+/// Within each group, wider-span edges get lower rail indices (innermost rails).
+fn compute_backward_edge_rails(
+    port_pairs: &[((f32, f32), (f32, f32))],
+    bbox_top: f32,
+    bbox_bottom: f32,
+) -> Vec<(bool, usize)> {
+    let annotated: Vec<(usize, bool, f32)> = port_pairs
+        .iter()
+        .enumerate()
+        .map(|(index, (from, to))| {
+            let mid_y = (from.1 + to.1) / 2.0;
+            let above = (mid_y - bbox_top) <= (bbox_bottom - mid_y);
+            let span = (from.0 - to.0).abs();
+            (index, above, span)
+        })
+        .collect();
+
+    let mut above_group: Vec<_> = annotated.iter().filter(|(_, above, _)| *above).collect();
+    let mut below_group: Vec<_> = annotated.iter().filter(|(_, above, _)| !above).collect();
+    above_group.sort_by(|a, b| b.2.partial_cmp(&a.2).unwrap_or(std::cmp::Ordering::Equal));
+    below_group.sort_by(|a, b| b.2.partial_cmp(&a.2).unwrap_or(std::cmp::Ordering::Equal));
+
+    let mut result = vec![(true, 0usize); port_pairs.len()];
+    for (rail_index, (original_index, above, _)) in above_group.iter().enumerate() {
+        result[*original_index] = (*above, rail_index);
+    }
+    for (rail_index, (original_index, above, _)) in below_group.iter().enumerate() {
+        result[*original_index] = (*above, rail_index);
+    }
+    result
+}
+
 pub struct WorkflowCanvas {
     pub workflow: Option<WorkflowDefinitionRecord>,
     pub run: Option<TaskStatusResponse>,
@@ -566,7 +601,7 @@ impl WorkflowCanvas {
             return HashMap::new();
         };
 
-        let backward: Vec<_> = wf
+        let backward_edges: Vec<_> = wf
             .edges
             .iter()
             .filter_map(|edge| {
@@ -589,38 +624,22 @@ impl WorkflowCanvas {
                 if !is_backward_edge(from, to) {
                     return None;
                 }
-                let mid_y = (from.1 + to.1) / 2.0;
-                let cost_above = mid_y - bbox_top;
-                let cost_below = bbox_bottom - mid_y;
-                let above = cost_above <= cost_below;
-                let span = (from.0 - to.0).abs();
-                Some((edge, above, span))
+                Some((edge, from, to))
             })
             .collect();
 
-        let mut above_edges: Vec<_> = backward.iter().filter(|(_, above, _)| *above).collect();
-        let mut below_edges: Vec<_> = backward.iter().filter(|(_, above, _)| !above).collect();
-        above_edges.sort_by(|a, b| b.2.partial_cmp(&a.2).unwrap_or(std::cmp::Ordering::Equal));
-        below_edges.sort_by(|a, b| b.2.partial_cmp(&a.2).unwrap_or(std::cmp::Ordering::Equal));
+        let port_pairs: Vec<_> = backward_edges.iter().map(|(_, from, to)| (*from, *to)).collect();
+        let assignments = compute_backward_edge_rails(&port_pairs, bbox_top, bbox_bottom);
 
         let mut result = HashMap::new();
-        for (i, (edge, above, _)) in above_edges.iter().enumerate() {
+        for ((edge, _, _), (above, rail_index)) in backward_edges.iter().zip(assignments) {
             let key = (
                 edge.from_node_id.clone(),
                 edge.from_output_id.clone(),
                 edge.to_node_id.clone(),
                 edge.to_input_id.clone(),
             );
-            result.insert(key, (*above, i));
-        }
-        for (i, (edge, above, _)) in below_edges.iter().enumerate() {
-            let key = (
-                edge.from_node_id.clone(),
-                edge.from_output_id.clone(),
-                edge.to_node_id.clone(),
-                edge.to_input_id.clone(),
-            );
-            result.insert(key, (*above, i));
+            result.insert(key, (above, rail_index));
         }
         result
     }
@@ -2271,42 +2290,14 @@ impl gpui::Render for WorkflowCanvas {
                                 }
                             }
                             {
-                                let mut above_run: Vec<_> = backward_run_edges
-                                    .iter()
-                                    .filter(|(from, to)| {
-                                        let mid_y = (from.1 + to.1) / 2.0;
-                                        (mid_y - bbox_top) <= (bbox_bottom - mid_y)
-                                    })
-                                    .collect();
-                                let mut below_run: Vec<_> = backward_run_edges
-                                    .iter()
-                                    .filter(|(from, to)| {
-                                        let mid_y = (from.1 + to.1) / 2.0;
-                                        (mid_y - bbox_top) > (bbox_bottom - mid_y)
-                                    })
-                                    .collect();
-                                above_run.sort_by(|a, b| {
-                                    let span_a = (a.0.0 - a.1.0).abs();
-                                    let span_b = (b.0.0 - b.1.0).abs();
-                                    span_b.partial_cmp(&span_a).unwrap_or(std::cmp::Ordering::Equal)
-                                });
-                                below_run.sort_by(|a, b| {
-                                    let span_a = (a.0.0 - a.1.0).abs();
-                                    let span_b = (b.0.0 - b.1.0).abs();
-                                    span_b.partial_cmp(&span_a).unwrap_or(std::cmp::Ordering::Equal)
-                                });
+                                let run_rail_assignments =
+                                    compute_backward_edge_rails(&backward_run_edges, bbox_top, bbox_bottom);
                                 let edge_color = gpui::rgba(0x9ca3afff);
                                 let stroke_width = scaled(&layout, EDGE_STROKE.as_f32());
-                                for (i, (from_port, to_port)) in above_run.iter().enumerate() {
-                                    let rail_y = backward_edge_rail_y(bbox_top, bbox_bottom, i, true);
-                                    let from_pt = to_screen_point(&layout, from_port.0, from_port.1, origin);
-                                    let to_pt = to_screen_point(&layout, to_port.0, to_port.1, origin);
-                                    paint_arc_backward_edge(
-                                        &layout, from_pt, to_pt, rail_y, edge_color, stroke_width, false, origin, window,
-                                    );
-                                }
-                                for (i, (from_port, to_port)) in below_run.iter().enumerate() {
-                                    let rail_y = backward_edge_rail_y(bbox_top, bbox_bottom, i, false);
+                                for ((from_port, to_port), (above, rail_index)) in
+                                    backward_run_edges.iter().zip(run_rail_assignments)
+                                {
+                                    let rail_y = backward_edge_rail_y(bbox_top, bbox_bottom, rail_index, above);
                                     let from_pt = to_screen_point(&layout, from_port.0, from_port.1, origin);
                                     let to_pt = to_screen_point(&layout, to_port.0, to_port.1, origin);
                                     paint_arc_backward_edge(
