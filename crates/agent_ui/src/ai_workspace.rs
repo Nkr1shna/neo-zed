@@ -30,10 +30,10 @@ use zed_actions::agent::{
 use crate::agent_workspace_surface::attach_workspace_controller;
 use crate::ui::{AcpOnboardingModal, ClaudeCodeOnboardingModal, HoldForDefault};
 use crate::{
-    AddContextServer, ConversationView, CopyThreadToClipboard, CycleStartThreadIn, Follow,
-    InlineAssistant, LoadThreadFromClipboard, NewTextThread, NewThread, OpenActiveThreadAsMarkdown,
-    OpenAgentDiff, OpenHistory, ResetTrialEndUpsell, ResetTrialUpsell, StartThreadIn,
-    ToggleNavigationMenu, ToggleNewThreadMenu, ToggleOptionsMenu,
+    AddContextServer, ConversationView, CopyThreadToClipboard, CycleStartThreadIn, FloatChat,
+    Follow, InlineAssistant, LoadThreadFromClipboard, NewTextThread, NewThread,
+    OpenActiveThreadAsMarkdown, OpenAgentDiff, OpenHistory, ResetTrialEndUpsell, ResetTrialUpsell,
+    StartThreadIn, ToggleNavigationMenu, ToggleNewThreadMenu, ToggleOptionsMenu,
     agent_configuration::{AgentConfiguration, AssistantConfigurationEvent},
     agent_documentation_side,
     agent_workspace_surface::{
@@ -74,9 +74,10 @@ use extension::ExtensionEvents;
 use extension_host::ExtensionStore;
 use fs::Fs;
 use gpui::{
-    Action, Animation, AnimationExt, AnyElement, App, AsyncWindowContext, ClipboardItem, Corner,
-    DismissEvent, Entity, EventEmitter, ExternalPaths, FocusHandle, Focusable, KeyContext, Pixels,
-    Subscription, Task, UpdateGlobal, WeakEntity, prelude::*, pulsating_between,
+    Action, Animation, AnimationExt, AnyElement, App, AsyncWindowContext, Bounds, ClipboardItem,
+    Corner, DismissEvent, Entity, EventEmitter, ExternalPaths, FocusHandle, Focusable, KeyContext,
+    Pixels, Subscription, Task, TitlebarOptions, UpdateGlobal, WeakEntity, WindowBounds,
+    WindowOptions, prelude::*, pulsating_between,
 };
 use language::LanguageRegistry;
 use language_model::{ConfigurationError, LanguageModelRegistry};
@@ -93,8 +94,9 @@ use ui::{
 };
 use util::{ResultExt as _, debug_panic};
 use workspace::{
-    CollaboratorId, DraggedSelection, DraggedTab, OpenResult, PathList, SerializedPathList,
-    ToggleWorkspaceSidebar, ToggleZoom, ToolbarItemView, Workspace, WorkspaceId,
+    CollaboratorId, DraggedSelection, DraggedTab, MultiWorkspace, OpenResult, PathList,
+    SerializedPathList, ToggleWorkspaceSidebar, ToggleZoom, ToolbarItemView, Workspace,
+    WorkspaceId, WorkspaceSettings,
 };
 use zed_actions::{
     DecreaseBufferFontSize, IncreaseBufferFontSize, ResetBufferFontSize,
@@ -3825,6 +3827,7 @@ impl AiWorkspace {
         );
 
         let is_text_thread = matches!(&self.active_view, ActiveView::TextThread { .. });
+        let is_agent_thread = matches!(&self.active_view, ActiveView::AgentThread { .. });
 
         let use_v2_empty_toolbar =
             has_v2_flag && is_empty_state && !is_in_history_or_config && !is_text_thread;
@@ -3913,6 +3916,16 @@ impl AiWorkspace {
                                 cx,
                             ))
                         })
+                        .when(is_agent_thread, |this| {
+                            this.child(
+                                IconButton::new("float-chat-v2", IconName::ArrowUpRight)
+                                    .icon_size(IconSize::Small)
+                                    .tooltip(Tooltip::text("Float Chat Window"))
+                                    .on_click(cx.listener(|this, _, window, cx| {
+                                        this.float_chat(&FloatChat, window, cx);
+                                    })),
+                            )
+                        })
                         .child(self.render_panel_options_menu(window, cx)),
                 )
                 .into_any_element()
@@ -3964,6 +3977,16 @@ impl AiWorkspace {
                                 Corner::TopRight,
                                 cx,
                             ))
+                        })
+                        .when(is_agent_thread, |this| {
+                            this.child(
+                                IconButton::new("float-chat", IconName::ArrowUpRight)
+                                    .icon_size(IconSize::Small)
+                                    .tooltip(Tooltip::text("Float Chat Window"))
+                                    .on_click(cx.listener(|this, _, window, cx| {
+                                        this.float_chat(&FloatChat, window, cx);
+                                    })),
+                            )
                         })
                         .child(self.render_panel_options_menu(window, cx)),
                 )
@@ -4409,6 +4432,50 @@ impl AiWorkspace {
         }
         key_context
     }
+
+    fn float_chat(&mut self, _: &FloatChat, _window: &mut Window, cx: &mut Context<Self>) {
+        let Some(conversation_view) = self.active_conversation().cloned() else {
+            return;
+        };
+
+        for window in cx.windows() {
+            if let Some(pip_window) = window.downcast::<ChatPipWindow>() {
+                pip_window
+                    .update(cx, |_, window, _| window.activate_window())
+                    .log_err();
+                return;
+            }
+        }
+
+        let weak_self = cx.weak_entity();
+        let window_decorations = match WorkspaceSettings::get_global(cx).window_decorations {
+            settings::WindowDecorations::Server => gpui::WindowDecorations::Server,
+            settings::WindowDecorations::Client => gpui::WindowDecorations::Client,
+        };
+        let bounds = Bounds::centered(
+            None,
+            gpui::size(gpui::px(380.0), gpui::px(680.0)),
+            cx,
+        );
+        let window_background = cx.theme().window_background_appearance();
+
+        cx.open_window(
+            WindowOptions {
+                titlebar: Some(TitlebarOptions {
+                    title: None,
+                    appears_transparent: true,
+                    traffic_light_position: Some(gpui::point(gpui::px(8.0), gpui::px(10.0))),
+                }),
+                window_bounds: Some(WindowBounds::Windowed(bounds)),
+                window_background,
+                window_decorations: Some(window_decorations),
+                kind: gpui::WindowKind::Floating,
+                ..Default::default()
+            },
+            |_window, cx| cx.new(|cx| ChatPipWindow::new(conversation_view, weak_self, cx)),
+        )
+        .log_err();
+    }
 }
 
 impl Render for AiWorkspace {
@@ -4444,6 +4511,7 @@ impl Render for AiWorkspace {
             .on_action(cx.listener(Self::increase_font_size))
             .on_action(cx.listener(Self::decrease_font_size))
             .on_action(cx.listener(Self::reset_font_size))
+            .on_action(cx.listener(Self::float_chat))
             .on_action(cx.listener(|this, _: &ReauthenticateAgent, window, cx| {
                 if let Some(conversation_view) = this.active_conversation() {
                     conversation_view.update(cx, |conversation_view, cx| {
@@ -4792,6 +4860,107 @@ impl AiWorkspace {
     /// This is a test-only helper for visual tests.
     pub fn close_start_thread_in_menu_for_tests(&mut self, cx: &mut Context<Self>) {
         self.start_thread_in_menu_handle.hide(cx);
+    }
+}
+
+pub struct ChatPipWindow {
+    conversation_view: Entity<ConversationView>,
+    focus_handle: FocusHandle,
+    _subscriptions: Vec<Subscription>,
+}
+
+impl ChatPipWindow {
+    fn new(
+        conversation_view: Entity<ConversationView>,
+        ai_workspace: WeakEntity<AiWorkspace>,
+        cx: &mut Context<Self>,
+    ) -> Self {
+        let subscriptions = if let Some(workspace) = ai_workspace.upgrade() {
+            vec![cx.observe(&workspace, |this, workspace, cx| {
+                if let Some(conv) = workspace.read(cx).active_conversation().cloned() {
+                    if conv.entity_id() != this.conversation_view.entity_id() {
+                        this.conversation_view = conv;
+                        cx.notify();
+                    }
+                }
+            })]
+        } else {
+            vec![]
+        };
+
+        Self {
+            conversation_view,
+            focus_handle: cx.focus_handle(),
+            _subscriptions: subscriptions,
+        }
+    }
+
+    fn expand(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        let main_window = cx
+            .windows()
+            .into_iter()
+            .find_map(|w| w.downcast::<MultiWorkspace>());
+        if let Some(main_window) = main_window {
+            main_window
+                .update(cx, |_, window, _| window.activate_window())
+                .log_err();
+        }
+        window.remove_window();
+    }
+}
+
+impl Focusable for ChatPipWindow {
+    fn focus_handle(&self, _cx: &App) -> FocusHandle {
+        self.focus_handle.clone()
+    }
+}
+
+impl Render for ChatPipWindow {
+    fn render(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        let title = self.conversation_view.read(cx).title(cx);
+        v_flex()
+            .size_full()
+            .bg(cx.theme().colors().background)
+            .child(
+                h_flex()
+                    .h(rems(2.0))
+                    .items_center()
+                    .border_b_1()
+                    .border_color(cx.theme().colors().border)
+                    // Left spacer: reserve space for macOS traffic lights (3 buttons ~68px wide)
+                    .child(div().w(px(72.0)).flex_shrink_0())
+                    // Center: title, takes remaining space
+                    .child(
+                        div()
+                            .flex_1()
+                            .flex()
+                            .justify_center()
+                            .overflow_hidden()
+                            .child(
+                                Label::new(title)
+                                    .size(LabelSize::Small)
+                                    .color(Color::Muted)
+                                    .truncate(),
+                            ),
+                    )
+                    // Right: pop-in button, fixed width matching left spacer so title stays centered
+                    .child(
+                        div()
+                            .w(px(32.0))
+                            .flex_shrink_0()
+                            .flex()
+                            .justify_center()
+                            .child(
+                                IconButton::new("pip-expand", IconName::ArrowDownLeft)
+                                    .icon_size(IconSize::Small)
+                                    .tooltip(Tooltip::text("Open in Main Window"))
+                                    .on_click(cx.listener(|this, _, window, cx| {
+                                        this.expand(window, cx);
+                                    })),
+                            ),
+                    ),
+            )
+            .child(self.conversation_view.clone())
     }
 }
 

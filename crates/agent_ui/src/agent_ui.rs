@@ -195,6 +195,8 @@ actions!(
         ToggleThinkingEffortMenu,
         /// Toggles fast mode for models that support it.
         ToggleFastMode,
+        /// Opens the current chat thread in a floating picture-in-picture window.
+        FloatChat,
     ]
 );
 
