@@ -316,8 +316,8 @@ fn compute_backward_edge_rails(
 
     let mut above_group: Vec<_> = annotated.iter().filter(|(_, above, _)| *above).collect();
     let mut below_group: Vec<_> = annotated.iter().filter(|(_, above, _)| !above).collect();
-    above_group.sort_by(|a, b| b.2.partial_cmp(&a.2).unwrap_or(std::cmp::Ordering::Equal));
-    below_group.sort_by(|a, b| b.2.partial_cmp(&a.2).unwrap_or(std::cmp::Ordering::Equal));
+    above_group.sort_by(|a, b| b.2.total_cmp(&a.2));
+    below_group.sort_by(|a, b| b.2.total_cmp(&a.2));
 
     let mut result = vec![(true, 0usize); port_pairs.len()];
     for (rail_index, (original_index, above, _)) in above_group.iter().enumerate() {
@@ -2121,7 +2121,11 @@ impl gpui::Render for WorkflowCanvas {
         let is_edit = self.is_editable();
         let this_weak = cx.weak_entity();
         let (bbox_top, bbox_bottom) = nodes_bounding_box(&self.layout.node_positions, 40.0);
-        let backward_rails = self.backward_edge_rail_assignments(bbox_top, bbox_bottom);
+        let backward_rails = if self.workflow.is_some() {
+            self.backward_edge_rail_assignments(bbox_top, bbox_bottom)
+        } else {
+            Default::default()
+        };
 
         div()
             .size_full()
@@ -2290,22 +2294,6 @@ impl gpui::Render for WorkflowCanvas {
                                     }
                                 }
                             }
-                            {
-                                let run_rail_assignments =
-                                    compute_backward_edge_rails(&backward_run_edges, bbox_top, bbox_bottom);
-                                let edge_color = gpui::rgba(0x9ca3afff);
-                                let stroke_width = scaled(&layout, EDGE_STROKE.as_f32());
-                                for ((from_port, to_port), (above, rail_index)) in
-                                    backward_run_edges.iter().zip(run_rail_assignments)
-                                {
-                                    let rail_y = backward_edge_rail_y(bbox_top, bbox_bottom, rail_index, above);
-                                    let from_pt = to_screen_point(&layout, from_port.0, from_port.1, origin);
-                                    let to_pt = to_screen_point(&layout, to_port.0, to_port.1, origin);
-                                    paint_arc_backward_edge(
-                                        &layout, from_pt, to_pt, rail_y, edge_color, stroke_width, false, origin, window,
-                                    );
-                                }
-                            }
                             for node_status in &run_data.nodes {
                                 if node_status.node_type == WORKFLOW_GLOBALS_NODE_TYPE_ID {
                                     continue;
@@ -2346,6 +2334,22 @@ impl gpui::Render for WorkflowCanvas {
                                     window,
                                     cx,
                                 );
+                            }
+                            {
+                                let run_rail_assignments =
+                                    compute_backward_edge_rails(&backward_run_edges, bbox_top, bbox_bottom);
+                                let edge_color = gpui::rgba(0x9ca3afff);
+                                let stroke_width = scaled(&layout, EDGE_STROKE.as_f32());
+                                for ((from_port, to_port), (above, rail_index)) in
+                                    backward_run_edges.iter().zip(run_rail_assignments)
+                                {
+                                    let rail_y = backward_edge_rail_y(bbox_top, bbox_bottom, rail_index, above);
+                                    let from_pt = to_screen_point(&layout, from_port.0, from_port.1, origin);
+                                    let to_pt = to_screen_point(&layout, to_port.0, to_port.1, origin);
+                                    paint_arc_backward_edge(
+                                        &layout, from_pt, to_pt, rail_y, edge_color, stroke_width, false, origin, window,
+                                    );
+                                }
                             }
                         }
                     },
