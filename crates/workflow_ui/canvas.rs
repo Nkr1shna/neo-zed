@@ -1688,6 +1688,7 @@ fn paint_edge(
         to_pt,
         (to_pt.x - ctrl_b.x).as_f32(),
         (to_pt.y - ctrl_b.y).as_f32(),
+        edge_color,
         window,
     );
 }
@@ -1729,7 +1730,7 @@ fn paint_arc_backward_edge(
     if let Ok(path) = builder.build() {
         window.paint_path(path, edge_color);
     }
-    paint_arrowhead_directed(layout, to_pt, 1.0, 0.0, window);
+    paint_arrowhead_directed(layout, to_pt, 1.0, 0.0, edge_color, window);
 }
 
 // Polyline with rounded corners using cubic bezier approximation of quadratic arcs.
@@ -1788,6 +1789,7 @@ fn paint_arrowhead_directed(
     tip: Point<Pixels>,
     dir_x: f32,
     dir_y: f32,
+    color: gpui::Rgba,
     window: &mut Window,
 ) {
     let length = (dir_x * dir_x + dir_y * dir_y).sqrt();
@@ -1810,14 +1812,13 @@ fn paint_arrowhead_directed(
         tip.y - px(size * uy) - px(half * ux),
     );
 
-    let arrow_color = gpui::rgba(0x9ca3afff);
     let mut builder = gpui::PathBuilder::fill();
     builder.move_to(p1);
     builder.line_to(p2);
     builder.line_to(p3);
     builder.close();
     if let Ok(path) = builder.build() {
-        window.paint_path(path, arrow_color);
+        window.paint_path(path, color);
     }
 }
 
