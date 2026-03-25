@@ -259,6 +259,41 @@ pub fn to_canvas_point(
     )
 }
 
+/// Returns (min_y, max_y) in canvas coordinates covering all node rects,
+/// expanded by `padding` on each side.
+fn nodes_bounding_box(
+    node_positions: &HashMap<String, NodePos>,
+    padding: f32,
+) -> (f32, f32) {
+    let mut min_y = f32::MAX;
+    let mut max_y = f32::MIN;
+    for pos in node_positions.values() {
+        min_y = min_y.min(pos.y);
+        max_y = max_y.max(pos.y + NODE_HEIGHT_F);
+    }
+    if min_y == f32::MAX {
+        return (0.0, NODE_HEIGHT_F);
+    }
+    (min_y - padding, max_y + padding)
+}
+
+/// Compute the rail Y for a backward edge on the given side.
+/// `above=true` → above top rail, `above=false` → below bottom rail.
+/// `rail_index=0` is the innermost rail.
+fn backward_edge_rail_y(
+    bbox_top: f32,
+    bbox_bottom: f32,
+    rail_index: usize,
+    above: bool,
+) -> f32 {
+    let offset = rail_index as f32 * 12.0;
+    if above {
+        bbox_top - offset
+    } else {
+        bbox_bottom + offset
+    }
+}
+
 pub struct WorkflowCanvas {
     pub workflow: Option<WorkflowDefinitionRecord>,
     pub run: Option<TaskStatusResponse>,
@@ -522,12 +557,82 @@ impl WorkflowCanvas {
         None
     }
 
+    fn backward_edge_rail_assignments(
+        &self,
+        bbox_top: f32,
+        bbox_bottom: f32,
+    ) -> HashMap<(String, String, String, String), (bool, usize)> {
+        let Some(wf) = self.workflow.as_ref() else {
+            return HashMap::new();
+        };
+
+        let backward: Vec<_> = wf
+            .edges
+            .iter()
+            .filter_map(|edge| {
+                let from = port_position_for_node(
+                    &self.layout,
+                    wf,
+                    &self.node_types,
+                    &edge.from_node_id,
+                    &edge.from_output_id,
+                    false,
+                )?;
+                let to = port_position_for_node(
+                    &self.layout,
+                    wf,
+                    &self.node_types,
+                    &edge.to_node_id,
+                    &edge.to_input_id,
+                    true,
+                )?;
+                if !is_backward_edge(from, to) {
+                    return None;
+                }
+                let mid_y = (from.1 + to.1) / 2.0;
+                let cost_above = mid_y - bbox_top;
+                let cost_below = bbox_bottom - mid_y;
+                let above = cost_above <= cost_below;
+                let span = (from.0 - to.0).abs();
+                Some((edge, above, span))
+            })
+            .collect();
+
+        let mut above_edges: Vec<_> = backward.iter().filter(|(_, above, _)| *above).collect();
+        let mut below_edges: Vec<_> = backward.iter().filter(|(_, above, _)| !above).collect();
+        above_edges.sort_by(|a, b| b.2.partial_cmp(&a.2).unwrap_or(std::cmp::Ordering::Equal));
+        below_edges.sort_by(|a, b| b.2.partial_cmp(&a.2).unwrap_or(std::cmp::Ordering::Equal));
+
+        let mut result = HashMap::new();
+        for (i, (edge, above, _)) in above_edges.iter().enumerate() {
+            let key = (
+                edge.from_node_id.clone(),
+                edge.from_output_id.clone(),
+                edge.to_node_id.clone(),
+                edge.to_input_id.clone(),
+            );
+            result.insert(key, (*above, i));
+        }
+        for (i, (edge, above, _)) in below_edges.iter().enumerate() {
+            let key = (
+                edge.from_node_id.clone(),
+                edge.from_output_id.clone(),
+                edge.to_node_id.clone(),
+                edge.to_input_id.clone(),
+            );
+            result.insert(key, (*above, i));
+        }
+        result
+    }
+
     fn hit_test_edge(
         &self,
         screen_pt: Point<Pixels>,
         canvas_origin: Point<Pixels>,
     ) -> Option<WorkflowEdge> {
         let workflow = self.workflow.as_ref()?;
+        let (bbox_top, bbox_bottom) = nodes_bounding_box(&self.layout.node_positions, 40.0);
+        let rail_map = self.backward_edge_rail_assignments(bbox_top, bbox_bottom);
         for edge in &workflow.edges {
             let (Some(from_port), Some(to_port)) = (
                 port_position_for_node(
@@ -549,6 +654,28 @@ impl WorkflowCanvas {
             ) else {
                 continue;
             };
+
+            if is_backward_edge(from_port, to_port) {
+                let key = (
+                    edge.from_node_id.clone(),
+                    edge.from_output_id.clone(),
+                    edge.to_node_id.clone(),
+                    edge.to_input_id.clone(),
+                );
+                let (above, rail_index) = rail_map.get(&key).copied().unwrap_or((true, 0));
+                let rail_y = backward_edge_rail_y(bbox_top, bbox_bottom, rail_index, above);
+                if backward_arc_contains_screen_point(
+                    &self.layout,
+                    from_port,
+                    to_port,
+                    rail_y,
+                    screen_pt,
+                    canvas_origin,
+                ) {
+                    return Some(edge.clone());
+                }
+                continue;
+            }
 
             if edge_contains_screen_point(
                 &self.layout,
@@ -1517,75 +1644,72 @@ fn paint_edge(
     };
     let stroke_width = scaled(layout, if is_selected { 2.5 } else { EDGE_STROKE.as_f32() });
 
-    if is_backward_edge(from, to) {
-        paint_smoothstep_edge(layout, from_pt, to_pt, edge_color, stroke_width, is_selected, window);
-    } else {
-        let dx = (to_pt.x - from_pt.x).as_f32();
-        let off = px(bezier_ctrl_offset(dx));
-        let ctrl_a = gpui::point(from_pt.x + off, from_pt.y);
-        let ctrl_b = gpui::point(to_pt.x - off, to_pt.y);
-        if is_selected {
-            let glow_color = gpui::rgba(0xffffff40);
-            let glow_width = scaled(layout, 6.0);
-            let mut glow_builder = gpui::PathBuilder::stroke(glow_width);
-            glow_builder.move_to(from_pt);
-            glow_builder.cubic_bezier_to(to_pt, ctrl_a, ctrl_b);
-            if let Ok(glow_path) = glow_builder.build() {
-                window.paint_path(glow_path, glow_color);
-            }
-        }
-        let mut builder = gpui::PathBuilder::stroke(stroke_width);
-        builder.move_to(from_pt);
-        builder.cubic_bezier_to(to_pt, ctrl_a, ctrl_b);
-        if let Ok(path) = builder.build() {
-            window.paint_path(path, edge_color);
-        }
-        paint_arrowhead_directed(
-            layout,
-            to_pt,
-            (to_pt.x - ctrl_b.x).as_f32(),
-            (to_pt.y - ctrl_b.y).as_f32(),
-            window,
-        );
-    }
-}
-
-// Smoothstep elbow: follows React Flow's smoothstep edge algorithm.
-// Routes: source → (right, h_gap) → (down, elbow_y) → (left, h_gap) → (up, target_y) → target
-fn paint_smoothstep_edge(
-    layout: &CanvasLayout,
-    from_pt: Point<Pixels>,
-    to_pt: Point<Pixels>,
-    edge_color: gpui::Rgba,
-    stroke_width: Pixels,
-    is_selected: bool,
-    window: &mut Window,
-) {
-    let h_gap = px(layout.zoom * 40.0);
-    // Route below whichever port is lower, clearing the node height
-    let elbow_y = from_pt.y.max(to_pt.y) + px(layout.zoom * (NODE_HEIGHT_F * 0.5 + 50.0));
-    let corner_r = px(layout.zoom * 10.0);
-
-    let p1 = gpui::point(from_pt.x + h_gap, from_pt.y);
-    let p2 = gpui::point(from_pt.x + h_gap, elbow_y);
-    let p3 = gpui::point(to_pt.x - h_gap, elbow_y);
-    let p4 = gpui::point(to_pt.x - h_gap, to_pt.y);
-
+    let dx = (to_pt.x - from_pt.x).as_f32();
+    let off = px(bezier_ctrl_offset(dx));
+    let ctrl_a = gpui::point(from_pt.x + off, from_pt.y);
+    let ctrl_b = gpui::point(to_pt.x - off, to_pt.y);
     if is_selected {
         let glow_color = gpui::rgba(0xffffff40);
         let glow_width = scaled(layout, 6.0);
         let mut glow_builder = gpui::PathBuilder::stroke(glow_width);
-        paint_smoothstep_polyline(&mut glow_builder, &[from_pt, p1, p2, p3, p4, to_pt], corner_r);
+        glow_builder.move_to(from_pt);
+        glow_builder.cubic_bezier_to(to_pt, ctrl_a, ctrl_b);
         if let Ok(glow_path) = glow_builder.build() {
             window.paint_path(glow_path, glow_color);
         }
     }
     let mut builder = gpui::PathBuilder::stroke(stroke_width);
-    paint_smoothstep_polyline(&mut builder, &[from_pt, p1, p2, p3, p4, to_pt], corner_r);
+    builder.move_to(from_pt);
+    builder.cubic_bezier_to(to_pt, ctrl_a, ctrl_b);
     if let Ok(path) = builder.build() {
         window.paint_path(path, edge_color);
     }
-    // Arrowhead always points right into the input port
+    paint_arrowhead_directed(
+        layout,
+        to_pt,
+        (to_pt.x - ctrl_b.x).as_f32(),
+        (to_pt.y - ctrl_b.y).as_f32(),
+        window,
+    );
+}
+
+
+fn paint_arc_backward_edge(
+    layout: &CanvasLayout,
+    from_pt: Point<Pixels>,
+    to_pt: Point<Pixels>,
+    rail_y_canvas: f32,
+    edge_color: gpui::Rgba,
+    stroke_width: Pixels,
+    is_selected: bool,
+    origin: Point<Pixels>,
+    window: &mut Window,
+) {
+    let h_gap = px(layout.zoom * 16.0);
+    let rail_screen_y = to_screen_point(layout, 0.0, rail_y_canvas, origin).y;
+    let corner_r = px(layout.zoom * 12.0);
+
+    let p1 = gpui::point(from_pt.x + h_gap, from_pt.y);
+    let p2 = gpui::point(from_pt.x + h_gap, rail_screen_y);
+    let p3 = gpui::point(to_pt.x - h_gap, rail_screen_y);
+    let p4 = gpui::point(to_pt.x - h_gap, to_pt.y);
+    let pts = [from_pt, p1, p2, p3, p4, to_pt];
+
+    if is_selected {
+        let glow_color = gpui::rgba(0xffffff40);
+        let glow_width = scaled(layout, 6.0);
+        let mut glow_builder = gpui::PathBuilder::stroke(glow_width);
+        paint_smoothstep_polyline(&mut glow_builder, &pts, corner_r);
+        if let Ok(p) = glow_builder.build() {
+            window.paint_path(p, glow_color);
+        }
+    }
+
+    let mut builder = gpui::PathBuilder::stroke(stroke_width);
+    paint_smoothstep_polyline(&mut builder, &pts, corner_r);
+    if let Ok(path) = builder.build() {
+        window.paint_path(path, edge_color);
+    }
     paint_arrowhead_directed(layout, to_pt, 1.0, 0.0, window);
 }
 
@@ -1728,27 +1852,6 @@ fn edge_contains_screen_point(
     let to_pt = to_screen_point(layout, to.0, to.1, origin);
     let threshold = (EDGE_STROKE.as_f32() * layout.zoom + 8.0).max(8.0);
 
-    if is_backward_edge(from, to) {
-        // Sample along the smoothstep elbow polyline for hit-testing
-        let h_gap = px(layout.zoom * 40.0);
-        let elbow_y =
-            from_pt.y.max(to_pt.y) + px(layout.zoom * (NODE_HEIGHT_F * 0.5 + 50.0));
-        let pts = [
-            from_pt,
-            gpui::point(from_pt.x + h_gap, from_pt.y),
-            gpui::point(from_pt.x + h_gap, elbow_y),
-            gpui::point(to_pt.x - h_gap, elbow_y),
-            gpui::point(to_pt.x - h_gap, to_pt.y),
-            to_pt,
-        ];
-        for seg in pts.windows(2) {
-            if distance_to_segment(screen_point, seg[0], seg[1]) <= threshold {
-                return true;
-            }
-        }
-        return false;
-    }
-
     let dx = (to_pt.x - from_pt.x).as_f32();
     let off = px(bezier_ctrl_offset(dx));
     let ctrl_a = gpui::point(from_pt.x + off, from_pt.y);
@@ -1763,6 +1866,32 @@ fn edge_contains_screen_point(
         previous = current;
     }
     false
+}
+
+fn backward_arc_contains_screen_point(
+    layout: &CanvasLayout,
+    from: (f32, f32),
+    to: (f32, f32),
+    rail_y_canvas: f32,
+    screen_point: Point<Pixels>,
+    origin: Point<Pixels>,
+) -> bool {
+    let h_gap = layout.zoom * 16.0;
+    let from_pt = to_screen_point(layout, from.0, from.1, origin);
+    let to_pt = to_screen_point(layout, to.0, to.1, origin);
+    let rail_screen_y = to_screen_point(layout, 0.0, rail_y_canvas, origin).y;
+    let threshold = 8.0f32;
+
+    let pts = [
+        from_pt,
+        gpui::point(from_pt.x + px(h_gap), from_pt.y),
+        gpui::point(from_pt.x + px(h_gap), rail_screen_y),
+        gpui::point(to_pt.x - px(h_gap), rail_screen_y),
+        gpui::point(to_pt.x - px(h_gap), to_pt.y),
+        to_pt,
+    ];
+    pts.windows(2)
+        .any(|seg| distance_to_segment(screen_point, seg[0], seg[1]) <= threshold)
 }
 
 #[cfg(test)]
@@ -1971,6 +2100,8 @@ impl gpui::Render for WorkflowCanvas {
         let pending_connection_target = self.pending_connection_target;
         let is_edit = self.is_editable();
         let this_weak = cx.weak_entity();
+        let (bbox_top, bbox_bottom) = nodes_bounding_box(&self.layout.node_positions, 40.0);
+        let backward_rails = self.backward_edge_rail_assignments(bbox_top, bbox_bottom);
 
         div()
             .size_full()
@@ -2069,7 +2200,25 @@ impl gpui::Render for WorkflowCanvas {
                                             && tn_id == &edge.to_node_id
                                             && ti_id == &edge.to_input_id
                                     );
-                                    paint_edge(&layout, *from_port, *to_port, is_selected, origin, window);
+                                    let edge_color = if is_selected {
+                                        gpui::rgba(0xffffffff)
+                                    } else {
+                                        gpui::rgba(0x9ca3afff)
+                                    };
+                                    let stroke_width = scaled(&layout, if is_selected { 2.5 } else { EDGE_STROKE.as_f32() });
+                                    let from_pt = to_screen_point(&layout, from_port.0, from_port.1, origin);
+                                    let to_pt = to_screen_point(&layout, to_port.0, to_port.1, origin);
+                                    let key = (
+                                        edge.from_node_id.clone(),
+                                        edge.from_output_id.clone(),
+                                        edge.to_node_id.clone(),
+                                        edge.to_input_id.clone(),
+                                    );
+                                    let (above, rail_index) = backward_rails.get(&key).copied().unwrap_or((true, 0));
+                                    let rail_y = backward_edge_rail_y(bbox_top, bbox_bottom, rail_index, above);
+                                    paint_arc_backward_edge(
+                                        &layout, from_pt, to_pt, rail_y, edge_color, stroke_width, is_selected, origin, window,
+                                    );
                                 }
                             }
                             if let (Some(source), Some(target)) =
@@ -2121,6 +2270,50 @@ impl gpui::Render for WorkflowCanvas {
                                     }
                                 }
                             }
+                            {
+                                let mut above_run: Vec<_> = backward_run_edges
+                                    .iter()
+                                    .filter(|(from, to)| {
+                                        let mid_y = (from.1 + to.1) / 2.0;
+                                        (mid_y - bbox_top) <= (bbox_bottom - mid_y)
+                                    })
+                                    .collect();
+                                let mut below_run: Vec<_> = backward_run_edges
+                                    .iter()
+                                    .filter(|(from, to)| {
+                                        let mid_y = (from.1 + to.1) / 2.0;
+                                        (mid_y - bbox_top) > (bbox_bottom - mid_y)
+                                    })
+                                    .collect();
+                                above_run.sort_by(|a, b| {
+                                    let span_a = (a.0.0 - a.1.0).abs();
+                                    let span_b = (b.0.0 - b.1.0).abs();
+                                    span_b.partial_cmp(&span_a).unwrap_or(std::cmp::Ordering::Equal)
+                                });
+                                below_run.sort_by(|a, b| {
+                                    let span_a = (a.0.0 - a.1.0).abs();
+                                    let span_b = (b.0.0 - b.1.0).abs();
+                                    span_b.partial_cmp(&span_a).unwrap_or(std::cmp::Ordering::Equal)
+                                });
+                                let edge_color = gpui::rgba(0x9ca3afff);
+                                let stroke_width = scaled(&layout, EDGE_STROKE.as_f32());
+                                for (i, (from_port, to_port)) in above_run.iter().enumerate() {
+                                    let rail_y = backward_edge_rail_y(bbox_top, bbox_bottom, i, true);
+                                    let from_pt = to_screen_point(&layout, from_port.0, from_port.1, origin);
+                                    let to_pt = to_screen_point(&layout, to_port.0, to_port.1, origin);
+                                    paint_arc_backward_edge(
+                                        &layout, from_pt, to_pt, rail_y, edge_color, stroke_width, false, origin, window,
+                                    );
+                                }
+                                for (i, (from_port, to_port)) in below_run.iter().enumerate() {
+                                    let rail_y = backward_edge_rail_y(bbox_top, bbox_bottom, i, false);
+                                    let from_pt = to_screen_point(&layout, from_port.0, from_port.1, origin);
+                                    let to_pt = to_screen_point(&layout, to_port.0, to_port.1, origin);
+                                    paint_arc_backward_edge(
+                                        &layout, from_pt, to_pt, rail_y, edge_color, stroke_width, false, origin, window,
+                                    );
+                                }
+                            }
                             for node_status in &run_data.nodes {
                                 if node_status.node_type == WORKFLOW_GLOBALS_NODE_TYPE_ID {
                                     continue;
@@ -2161,9 +2354,6 @@ impl gpui::Render for WorkflowCanvas {
                                     window,
                                     cx,
                                 );
-                            }
-                            for (from_port, to_port) in backward_run_edges {
-                                paint_edge(&layout, from_port, to_port, false, origin, window);
                             }
                         }
                     },
@@ -3998,5 +4188,23 @@ mod tests {
             assert!(canvas.workflow.as_ref().unwrap().edges.is_empty());
             assert_eq!(canvas.selection, CanvasSelection::None);
         });
+    }
+
+    #[test]
+    fn test_nodes_bounding_box() {
+        let mut positions = HashMap::new();
+        positions.insert("a".to_string(), NodePos { x: 0.0, y: 50.0 });
+        positions.insert("b".to_string(), NodePos { x: 200.0, y: 100.0 });
+        let (top, bottom) = nodes_bounding_box(&positions, 40.0);
+        assert_eq!(top, 10.0);
+        assert_eq!(bottom, 296.0);
+    }
+
+    #[test]
+    fn test_backward_edge_rail_y() {
+        assert_eq!(backward_edge_rail_y(10.0, 296.0, 0, true), 10.0);
+        assert_eq!(backward_edge_rail_y(10.0, 296.0, 1, true), -2.0);
+        assert_eq!(backward_edge_rail_y(10.0, 296.0, 0, false), 296.0);
+        assert_eq!(backward_edge_rail_y(10.0, 296.0, 2, false), 320.0);
     }
 }
