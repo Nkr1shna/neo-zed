@@ -21,7 +21,7 @@ prompt_remove_preferences() {
     read -r response
     case "$response" in
         [nN]|[nN][oO])
-            rm -rf "$HOME/.config/zed"
+            rm -rf "$HOME/.config/neozed"
             echo "Preferences removed."
             ;;
         *)
@@ -90,14 +90,14 @@ linux() {
     rm -f "$HOME/.local/share/applications/${appid}.desktop"
 
     # Remove the database directory for this channel
-    rm -rf "$HOME/.local/share/zed/db/0-$db_suffix"
+    rm -rf "$HOME/.local/share/neozed/db/0-$db_suffix"
 
     # Remove socket file
-    rm -f "$HOME/.local/share/zed/zed-$db_suffix.sock"
+    rm -f "$HOME/.local/share/neozed/zed-$db_suffix.sock"
 
-    # Remove the entire Zed directory if no installations remain
+    # Remove the entire NeoZed directory if no installations remain
     if check_remaining_installations; then
-        rm -rf "$HOME/.local/share/zed"
+        rm -rf "$HOME/.local/share/neozed"
         prompt_remove_preferences
     fi
 
@@ -135,7 +135,7 @@ macos() {
     rm -f "$HOME/.local/bin/zed"
 
     # Remove the database directory for this channel
-    rm -rf "$HOME/Library/Application Support/Zed/db/0-$db_suffix"
+    rm -rf "$HOME/Library/Application Support/NeoZed/db/0-$db_suffix"
 
     # Remove app-specific files and directories
     rm -rf "$HOME/Library/Application Support/com.apple.sharedfilelist/com.apple.LSSharedFileList.ApplicationRecentDocuments/$app_id.sfl"*
@@ -146,7 +146,7 @@ macos() {
 
     # Remove the entire Zed directory if no installations remain
     if check_remaining_installations; then
-        rm -rf "$HOME/Library/Application Support/Zed"
+        rm -rf "$HOME/Library/Application Support/NeoZed"
         rm -rf "$HOME/Library/Logs/NeoZed"
 
         prompt_remove_preferences

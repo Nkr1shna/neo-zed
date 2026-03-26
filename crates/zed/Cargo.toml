@@ -6,7 +6,7 @@ version = "0.231.0"
 publish.workspace = true
 license = "GPL-3.0-or-later"
 authors = ["Zed Team <hi@zed.dev>"]
-default-run = "zed"
+default-run = "neozed"
 
 [lints]
 workspace = true
@@ -54,7 +54,7 @@ visual-tests = [
 ]
 
 [[bin]]
-name = "zed"
+name = "neozed"
 path = "src/main.rs"
 
 [[bin]]
@@ -158,7 +158,6 @@ nc.workspace = true
 node_runtime.workspace = true
 notifications.workspace = true
 onboarding.workspace = true
-orchestration_ui.workspace = true
 workflow_ui.workspace = true
 outline.workspace = true
 outline_panel.workspace = true
