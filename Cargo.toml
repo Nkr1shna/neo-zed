@@ -141,7 +141,6 @@ members = [
     "crates/open_path_prompt",
     "crates/open_router",
     "crates/orchestration",
-    "crates/orchestration_ui",
     "crates/outline",
     "crates/outline_panel",
     "crates/panel",
@@ -395,7 +394,6 @@ open_ai = { path = "crates/open_ai" }
 open_path_prompt = { path = "crates/open_path_prompt" }
 open_router = { path = "crates/open_router", features = ["schemars"] }
 orchestration = { path = "crates/orchestration" }
-orchestration_ui = { path = "crates/orchestration_ui" }
 outline = { path = "crates/outline" }
 outline_panel = { path = "crates/outline_panel" }
 panel = { path = "crates/panel" }
@@ -474,7 +472,7 @@ workspace = { path = "crates/workspace" }
 worktree = { path = "crates/worktree" }
 workflow_ui = { path = "crates/workflow_ui" }
 x_ai = { path = "crates/x_ai" }
-zed = { path = "crates/zed" }
+neozed = { path = "crates/zed" }
 zed_actions = { path = "crates/zed_actions" }
 zed_env_vars = { path = "crates/zed_env_vars" }
 edit_prediction = { path = "crates/edit_prediction" }
@@ -935,7 +933,7 @@ lto = "thin"
 codegen-units = 1
 
 [profile.release.package]
-zed = { codegen-units = 16 }
+neozed = { codegen-units = 16 }
 
 [profile.release-fast]
 inherits = "release"
