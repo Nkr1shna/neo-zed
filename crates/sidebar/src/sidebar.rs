@@ -2727,7 +2727,6 @@ impl Sidebar {
             .when(!no_open_projects, |this| {
                 this.border_b_1()
                     .border_color(cx.theme().colors().border)
-                    .child(self.render_sidebar_toggle_button(cx))
                     .child(Divider::vertical().color(ui::DividerColor::Border))
                     .child(
                         div().ml_1().child(
