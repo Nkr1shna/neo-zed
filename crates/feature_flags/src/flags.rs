@@ -20,6 +20,10 @@ impl FeatureFlag for AgentV2FeatureFlag {
     fn enabled_for_staff() -> bool {
         true
     }
+
+    fn enabled_for_all() -> bool {
+        true
+    }
 }
 
 /// A feature flag for granting access to beta ACP features.

@@ -419,7 +419,7 @@ pub fn init(
     .detach();
     cx.observe_new(ManageProfilesModal::register).detach();
 
-    // Update command palette filter based on AI settings
+    sync_agent_v2_default_panel_layout(cx.has_flag::<AgentV2FeatureFlag>(), cx);
     update_command_palette_filter(cx);
 
     // Watch for settings changes
@@ -437,6 +437,7 @@ pub fn init(
 
     cx.observe_flag::<AgentV2FeatureFlag, _>(|is_enabled, cx| {
         sync_agent_v2_default_panel_layout(is_enabled, cx);
+        update_command_palette_filter(cx);
     })
     .detach();
 }
@@ -788,7 +789,10 @@ mod tests {
             sync_agent_v2_default_panel_layout(true, cx);
 
             let defaults = SettingsStore::global(cx).raw_default_settings();
-            assert_eq!(defaults.agent.as_ref().unwrap().dock, Some(DockPosition::Left));
+            assert_eq!(
+                defaults.agent.as_ref().unwrap().dock,
+                Some(DockPosition::Left)
+            );
             assert_eq!(
                 defaults.project_panel.as_ref().unwrap().dock,
                 Some(DockSide::Right)
@@ -815,7 +819,10 @@ mod tests {
             sync_agent_v2_default_panel_layout(false, cx);
 
             let defaults = SettingsStore::global(cx).raw_default_settings();
-            assert_eq!(defaults.agent.as_ref().unwrap().dock, Some(DockPosition::Right));
+            assert_eq!(
+                defaults.agent.as_ref().unwrap().dock,
+                Some(DockPosition::Right)
+            );
             assert_eq!(
                 defaults.project_panel.as_ref().unwrap().dock,
                 Some(DockSide::Left)
@@ -835,6 +842,26 @@ mod tests {
             assert_eq!(
                 defaults.notification_panel.as_ref().unwrap().button,
                 Some(true)
+            );
+        });
+    }
+
+    #[gpui::test]
+    fn test_init_applies_agent_v2_default_panel_layout_immediately(cx: &mut TestAppContext) {
+        cx.update(|cx| {
+            let store = SettingsStore::test(cx);
+            cx.set_global(store);
+
+            sync_agent_v2_default_panel_layout(cx.has_flag::<AgentV2FeatureFlag>(), cx);
+
+            let defaults = SettingsStore::global(cx).raw_default_settings();
+            assert_eq!(
+                defaults.project_panel.as_ref().unwrap().dock,
+                Some(DockSide::Right)
+            );
+            assert_eq!(
+                defaults.git_panel.as_ref().unwrap().dock,
+                Some(DockPosition::Right)
             );
         });
     }

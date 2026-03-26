@@ -184,3 +184,16 @@ impl FeatureFlagAppExt for App {
         })
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::{AgentV2FeatureFlag, FeatureFlag, FeatureFlags};
+
+    #[test]
+    fn agent_v2_is_enabled_for_all() {
+        assert!(AgentV2FeatureFlag::enabled_for_all());
+
+        let feature_flags = FeatureFlags::default();
+        assert!(feature_flags.has_flag::<AgentV2FeatureFlag>());
+    }
+}
