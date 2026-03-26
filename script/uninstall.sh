@@ -1,13 +1,13 @@
 #!/usr/bin/env sh
 set -eu
 
-# Uninstalls Zed that was installed using the install.sh script
+# Uninstalls NeoZed that was installed using the install.sh script
 
 check_remaining_installations() {
     platform="$(uname -s)"
     if [ "$platform" = "Darwin" ]; then
-        # Check for any Zed variants in /Applications
-        remaining=$(ls -d /Applications/Zed*.app 2>/dev/null | wc -l)
+        # Check for any NeoZed variants in /Applications
+        remaining=$(ls -d /Applications/NeoZed*.app 2>/dev/null | wc -l)
         [ "$remaining" -eq 0 ]
     else
         # Check for any Zed variants in ~/.local
@@ -17,7 +17,7 @@ check_remaining_installations() {
 }
 
 prompt_remove_preferences() {
-    printf "Do you want to keep your Zed preferences? [Y/n] "
+    printf "Do you want to keep your NeoZed preferences? [Y/n] "
     read -r response
     case "$response" in
         [nN]|[nN][oO])
@@ -45,7 +45,7 @@ main() {
 
     "$platform"
 
-    echo "Zed has been uninstalled"
+    echo "NeoZed has been uninstalled"
 }
 
 linux() {
@@ -105,22 +105,22 @@ linux() {
 }
 
 macos() {
-    app="Zed.app"
+    app="NeoZed.app"
     db_suffix="stable"
     app_id="dev.zed.Zed"
     case "$channel" in
       nightly)
-        app="Zed Nightly.app"
+        app="NeoZed Nightly.app"
         db_suffix="nightly"
         app_id="dev.zed.Zed-Nightly"
         ;;
       preview)
-        app="Zed Preview.app"
+        app="NeoZed Preview.app"
         db_suffix="preview"
         app_id="dev.zed.Zed-Preview"
         ;;
       dev)
-        app="Zed Dev.app"
+        app="NeoZed Dev.app"
         db_suffix="dev"
         app_id="dev.zed.Zed-Dev"
         ;;
@@ -147,7 +147,7 @@ macos() {
     # Remove the entire Zed directory if no installations remain
     if check_remaining_installations; then
         rm -rf "$HOME/Library/Application Support/Zed"
-        rm -rf "$HOME/Library/Logs/Zed"
+        rm -rf "$HOME/Library/Logs/NeoZed"
 
         prompt_remove_preferences
     fi

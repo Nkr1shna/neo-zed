@@ -706,7 +706,7 @@ impl ThreadsArchiveView {
             .menu(move |window, cx| {
                 Some(ContextMenu::build(window, cx, |menu, _window, cx| {
                     menu.item(
-                        ContextMenuEntry::new("Zed Agent")
+                        ContextMenuEntry::new("NeoZed Agent")
                             .icon(IconName::ZedAgent)
                             .icon_color(Color::Muted)
                             .handler({

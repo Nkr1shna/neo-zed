@@ -50,7 +50,7 @@ use client::Client;
 use command_palette_hooks::CommandPaletteFilter;
 use feature_flags::{AgentV2FeatureFlag, FeatureFlagAppExt as _};
 use fs::Fs;
-use gpui::{Action, App, Context, Entity, SharedString, Window, actions};
+use gpui::{Action, App, Context, Entity, SharedString, UpdateGlobal, Window, actions};
 use language::{
     LanguageRegistry,
     language_settings::{AllLanguageSettings, EditPredictionProvider},
@@ -62,7 +62,7 @@ use project::{AgentId, DisableAiSettings};
 use prompt_store::PromptBuilder;
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
-use settings::{LanguageModelSelection, Settings as _, SettingsStore};
+use settings::{DockPosition, DockSide, LanguageModelSelection, Settings as _, SettingsStore};
 use std::any::TypeId;
 use workspace::Workspace;
 
@@ -430,7 +430,13 @@ pub fn init(
     .detach();
 
     cx.on_flags_ready(|_, cx| {
+        sync_agent_v2_default_panel_layout(cx.has_flag::<AgentV2FeatureFlag>(), cx);
         update_command_palette_filter(cx);
+    })
+    .detach();
+
+    cx.observe_flag::<AgentV2FeatureFlag, _>(|is_enabled, cx| {
+        sync_agent_v2_default_panel_layout(is_enabled, cx);
     })
     .detach();
 }
@@ -512,6 +518,30 @@ fn update_command_palette_filter(cx: &mut App) {
         } else {
             filter.hide_namespace("multi_workspace");
         }
+    });
+}
+
+fn sync_agent_v2_default_panel_layout(is_enabled: bool, cx: &mut App) {
+    SettingsStore::update_global(cx, |store, cx| {
+        store.update_default_settings(cx, |defaults| {
+            if is_enabled {
+                defaults.agent.get_or_insert_default().dock = Some(DockPosition::Left);
+                defaults.project_panel.get_or_insert_default().dock = Some(DockSide::Right);
+                defaults.outline_panel.get_or_insert_default().dock = Some(DockSide::Right);
+                defaults.collaboration_panel.get_or_insert_default().dock =
+                    Some(DockPosition::Right);
+                defaults.git_panel.get_or_insert_default().dock = Some(DockPosition::Right);
+                defaults.notification_panel.get_or_insert_default().button = Some(false);
+            } else {
+                defaults.agent.get_or_insert_default().dock = Some(DockPosition::Right);
+                defaults.project_panel.get_or_insert_default().dock = Some(DockSide::Left);
+                defaults.outline_panel.get_or_insert_default().dock = Some(DockSide::Left);
+                defaults.collaboration_panel.get_or_insert_default().dock =
+                    Some(DockPosition::Left);
+                defaults.git_panel.get_or_insert_default().dock = Some(DockPosition::Left);
+                defaults.notification_panel.get_or_insert_default().button = Some(true);
+            }
+        });
     });
 }
 
@@ -607,10 +637,10 @@ mod tests {
     use agent_settings::{AgentProfileId, AgentSettings};
     use command_palette_hooks::CommandPaletteFilter;
     use editor::actions::AcceptEditPrediction;
-    use gpui::{BorrowAppContext, TestAppContext, px};
+    use gpui::{BorrowAppContext, ReadGlobal, TestAppContext, px};
     use project::DisableAiSettings;
     use settings::{
-        DefaultAgentView, DockPosition, NotifyWhenAgentWaiting, Settings, SettingsStore,
+        DefaultAgentView, DockPosition, DockSide, NotifyWhenAgentWaiting, Settings, SettingsStore,
     };
 
     #[gpui::test]
@@ -743,6 +773,68 @@ mod tests {
             assert!(
                 filter.is_hidden(&AcceptEditPrediction),
                 "EditPrediction should be hidden when provider is None"
+            );
+        });
+    }
+
+    #[gpui::test]
+    fn test_sync_agent_v2_default_panel_layout(cx: &mut TestAppContext) {
+        cx.update(|cx| {
+            let store = SettingsStore::test(cx);
+            cx.set_global(store);
+        });
+
+        cx.update(|cx| {
+            sync_agent_v2_default_panel_layout(true, cx);
+
+            let defaults = SettingsStore::global(cx).raw_default_settings();
+            assert_eq!(defaults.agent.as_ref().unwrap().dock, Some(DockPosition::Left));
+            assert_eq!(
+                defaults.project_panel.as_ref().unwrap().dock,
+                Some(DockSide::Right)
+            );
+            assert_eq!(
+                defaults.outline_panel.as_ref().unwrap().dock,
+                Some(DockSide::Right)
+            );
+            assert_eq!(
+                defaults.collaboration_panel.as_ref().unwrap().dock,
+                Some(DockPosition::Right)
+            );
+            assert_eq!(
+                defaults.git_panel.as_ref().unwrap().dock,
+                Some(DockPosition::Right)
+            );
+            assert_eq!(
+                defaults.notification_panel.as_ref().unwrap().button,
+                Some(false)
+            );
+        });
+
+        cx.update(|cx| {
+            sync_agent_v2_default_panel_layout(false, cx);
+
+            let defaults = SettingsStore::global(cx).raw_default_settings();
+            assert_eq!(defaults.agent.as_ref().unwrap().dock, Some(DockPosition::Right));
+            assert_eq!(
+                defaults.project_panel.as_ref().unwrap().dock,
+                Some(DockSide::Left)
+            );
+            assert_eq!(
+                defaults.outline_panel.as_ref().unwrap().dock,
+                Some(DockSide::Left)
+            );
+            assert_eq!(
+                defaults.collaboration_panel.as_ref().unwrap().dock,
+                Some(DockPosition::Left)
+            );
+            assert_eq!(
+                defaults.git_panel.as_ref().unwrap().dock,
+                Some(DockPosition::Left)
+            );
+            assert_eq!(
+                defaults.notification_panel.as_ref().unwrap().button,
+                Some(true)
             );
         });
     }

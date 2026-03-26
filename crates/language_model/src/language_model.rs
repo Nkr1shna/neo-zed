@@ -60,7 +60,7 @@ pub const X_AI_PROVIDER_NAME: LanguageModelProviderName = LanguageModelProviderN
 
 pub const ZED_CLOUD_PROVIDER_ID: LanguageModelProviderId = LanguageModelProviderId::new("zed.dev");
 pub const ZED_CLOUD_PROVIDER_NAME: LanguageModelProviderName =
-    LanguageModelProviderName::new("Zed");
+    LanguageModelProviderName::new("NeoZed");
 
 pub fn init(user_store: Entity<UserStore>, client: Arc<Client>, cx: &mut App) {
     init_settings(cx);
