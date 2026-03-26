@@ -12,7 +12,6 @@ const TOKEN_URL = "https://auth.openai.com/oauth/token";
 const REDIRECT_URI = "http://localhost:1455/auth/callback";
 const OAUTH_SCOPE = "openid profile email offline_access";
 const ACCOUNT_ID_CLAIM = "https://api.openai.com/auth";
-const USAGE_URL = "https://chatgpt.com/backend-api/wham/usage";
 const STATE_PATH = path.join(process.cwd(), "codex-chatgpt-auth.json");
 const SUCCESS_HTML = "<!doctype html><html><body><p>Authentication successful. Return to Zed.</p></body></html>";
 
@@ -88,10 +87,6 @@ async function handleLine(line) {
 
 async function handleMethod(method, _params) {
   switch (method) {
-    case "usage.snapshot":
-      return await snapshotUsage(false);
-    case "usage.refresh":
-      return await snapshotUsage(true);
     case "auth.begin-login":
       return await beginLogin();
     case "auth.logout":
@@ -125,6 +120,7 @@ function loadPersistedState() {
         : null;
 
     return {
+      authStatus: typeof parsed.auth_status === "string" ? parsed.auth_status : tokens ? "authenticated" : "signed-out",
       tokens,
       lastSnapshot: parsed.last_snapshot && typeof parsed.last_snapshot === "object" ? parsed.last_snapshot : null,
       lastFetchedAt: typeof parsed.last_fetched_at === "number" ? parsed.last_fetched_at : 0,
@@ -137,6 +133,7 @@ function loadPersistedState() {
 
 function defaultPersistedState() {
   return {
+    authStatus: "signed-out",
     tokens: null,
     lastSnapshot: null,
     lastFetchedAt: 0,
@@ -149,6 +146,7 @@ function persistState() {
     STATE_PATH,
     JSON.stringify(
       {
+        auth_status: runtime.authStatus,
         access_token: runtime.tokens?.accessToken ?? null,
         refresh_token: runtime.tokens?.refreshToken ?? null,
         account_id: runtime.tokens?.accountId ?? null,
@@ -165,59 +163,43 @@ function persistState() {
   );
 }
 
-async function snapshotUsage(forceRefresh) {
-  if (runtime.loginPromise) {
-    return pendingSnapshot("Waiting for the ChatGPT OAuth callback.");
-  }
-
-  if (!runtime.tokens?.refreshToken) {
-    return runtime.lastSnapshot || signedOutSnapshot();
-  }
-
-  if (!forceRefresh && runtime.lastSnapshot) {
-    return runtime.lastSnapshot;
-  }
-
-  const snapshot = await fetchUsageSnapshot(forceRefresh);
-  runtime.lastSnapshot = snapshot;
-  runtime.lastFetchedAt = Date.now();
-  runtime.lastError = null;
-  persistState();
-  return snapshot;
-}
-
 async function beginLogin() {
   if (runtime.loginPromise) {
-    return pendingSnapshot("Waiting for the ChatGPT OAuth callback.");
+    return { auth_status: "pending" };
   }
 
+  runtime.authStatus = "pending";
+  runtime.lastError = null;
+  runtime.lastSnapshot = null;
+  runtime.lastFetchedAt = 0;
+  persistState();
+
   runtime.loginPromise = runLoginFlow()
-    .then(async () => {
-      runtime.lastSnapshot = await fetchUsageSnapshot(true);
-      runtime.lastFetchedAt = Date.now();
+    .then(() => {
+      runtime.authStatus = "authenticated";
       runtime.lastError = null;
       persistState();
     })
     .catch((error) => {
+      runtime.authStatus = "error";
       runtime.lastError = error instanceof Error ? error.message : String(error);
-      runtime.lastSnapshot = errorSnapshot(runtime.lastError);
-      runtime.lastFetchedAt = Date.now();
       persistState();
     })
     .finally(() => {
       runtime.loginPromise = null;
     });
 
-  return pendingSnapshot("Opened ChatGPT sign-in in your browser.");
+  return { auth_status: "pending" };
 }
 
 async function logout() {
+  runtime.authStatus = "signed-out";
   runtime.tokens = null;
-  runtime.lastSnapshot = signedOutSnapshot();
-  runtime.lastFetchedAt = Date.now();
+  runtime.lastSnapshot = null;
+  runtime.lastFetchedAt = 0;
   runtime.lastError = null;
   persistState();
-  return runtime.lastSnapshot;
+  return { auth_status: "signed-out" };
 }
 
 async function runLoginFlow() {
