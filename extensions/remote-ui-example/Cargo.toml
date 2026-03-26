@@ -14,3 +14,4 @@ crate-type = ["cdylib"]
 
 [dependencies]
 zed_extension_api = { path = "../../crates/extension_api" }
+urlencoding.workspace = true

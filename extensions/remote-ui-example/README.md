@@ -2,12 +2,21 @@
 
 This example now uses the managed extension sidecar contract instead of the
 older one-shot `process:exec` helper. The wasm extension renders host-owned
-titlebar, footer, and panel views, while `sidecar.js` handles:
+titlebar, footer, and panel views. `sidecar.js` is now scoped to auth kickoff
+only, while the wasm extension performs the usage fetch and snapshot refresh
+through the extension HTTP client.
+
+The sidecar handles:
 
 - ChatGPT Codex OAuth through the same PKCE flow used by the referenced CLI
 - refresh-token persistence in the extension work directory
-- periodic usage reads through `https://chatgpt.com/backend-api/wham/usage`
 - newline-delimited stdio JSON-RPC back to the wasm guest
+
+The wasm extension handles:
+
+- access-token refresh through `https://auth.openai.com/oauth/token`
+- usage reads through `https://chatgpt.com/backend-api/wham/usage`
+- cached snapshot persistence and bounded host-driven refresh
 
 Currently exercised host surfaces:
 
