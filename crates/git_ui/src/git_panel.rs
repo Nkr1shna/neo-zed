@@ -12,7 +12,6 @@ use crate::{
 use agent_settings::AgentSettings;
 use anyhow::Context as _;
 use askpass::AskPassDelegate;
-use cloud_llm_client::CompletionIntent;
 use collections::{BTreeMap, HashMap, HashSet};
 use db::kvp::KeyValueStore;
 use editor::{
@@ -20,6 +19,7 @@ use editor::{
     actions::ExpandAllDiffHunks,
 };
 use editor::{EditorStyle, RewrapOptions};
+use feature_flags::{FeatureFlagAppExt as _, GitGraphFeatureFlag};
 use file_icons::FileIcons;
 use futures::StreamExt as _;
 use git::commit::ParsedCommitMessage;
@@ -44,7 +44,8 @@ use gpui::{
 use itertools::Itertools;
 use language::{Buffer, File};
 use language_model::{
-    ConfiguredModel, LanguageModelRegistry, LanguageModelRequest, LanguageModelRequestMessage, Role,
+    CompletionIntent, ConfiguredModel, LanguageModelRegistry, LanguageModelRequest,
+    LanguageModelRequestMessage, Role,
 };
 use menu;
 use multi_buffer::ExcerptInfo;
@@ -258,7 +259,6 @@ pub enum Event {
 
 #[derive(Serialize, Deserialize)]
 struct SerializedGitPanel {
-    width: Option<Pixels>,
     #[serde(default)]
     amend_pending: bool,
     #[serde(default)]
@@ -645,7 +645,6 @@ pub struct GitPanel {
     tracked_count: usize,
     tracked_staged_count: usize,
     update_visible_entries_task: Task<()>,
-    width: Option<Pixels>,
     pub(crate) workspace: WeakEntity<Workspace>,
     context_menu: Option<(Entity<ContextMenu>, Point<Pixels>, Subscription)>,
     modal_open: bool,
@@ -832,7 +831,6 @@ impl GitPanel {
                 tracked_count: 0,
                 tracked_staged_count: 0,
                 update_visible_entries_task: Task::ready(()),
-                width: None,
                 show_placeholders: false,
                 local_committer: None,
                 local_committer_task: None,
@@ -951,7 +949,6 @@ impl GitPanel {
                     kvp.write_kvp(
                         serialization_key,
                         serde_json::to_string(&SerializedGitPanel {
-                            width: None,
                             amend_pending,
                             signoff_enabled,
                         })?,
@@ -4523,7 +4520,7 @@ impl GitPanel {
 
     fn render_previous_commit(
         &self,
-        window: &mut Window,
+        _window: &mut Window,
         cx: &mut Context<Self>,
     ) -> Option<impl IntoElement> {
         let active_repository = self.active_repository.as_ref()?;
@@ -4531,6 +4528,7 @@ impl GitPanel {
         let commit = branch.most_recent_commit.as_ref()?.clone();
         let workspace = self.workspace.clone();
         let this = cx.entity();
+        let can_open_git_graph = cx.has_flag::<GitGraphFeatureFlag>();
 
         Some(
             h_flex()
@@ -4608,7 +4606,7 @@ impl GitPanel {
                                     ),
                             )
                         })
-                        .when(window.is_action_available(&Open, cx), |this| {
+                        .when(can_open_git_graph, |this| {
                             this.child(
                                 panel_icon_button("git-graph-button", IconName::GitGraph)
                                     .icon_size(IconSize::Small)
@@ -5563,7 +5561,6 @@ impl GitPanel {
 
             if let Some(serialized_panel) = serialized_panel {
                 panel.update(cx, |panel, cx| {
-                    panel.width = serialized_panel.width;
                     panel.amend_pending = serialized_panel.amend_pending;
                     panel.signoff_enabled = serialized_panel.signoff_enabled;
                     cx.notify();
@@ -5792,8 +5789,8 @@ impl Panel for GitPanel {
         });
     }
 
-    fn legacy_dock_size(&self, _: &Window, _cx: &App) -> Option<Pixels> {
-        self.width
+    fn default_size(&self, _: &Window, cx: &App) -> Pixels {
+        GitPanelSettings::get_global(cx).default_width
     }
 
     fn icon(&self, _: &Window, cx: &App) -> Option<ui::IconName> {

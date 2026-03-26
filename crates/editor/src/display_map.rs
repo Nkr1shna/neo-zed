@@ -97,7 +97,11 @@ use gpui::{
     App, Context, Entity, EntityId, Font, HighlightStyle, LineLayout, Pixels, UnderlineStyle,
     WeakEntity,
 };
-use language::{Point, Subscription as BufferSubscription, language_settings::language_settings};
+use language::{
+    Point, Subscription as BufferSubscription,
+    language_settings::{AllLanguageSettings, LanguageSettings},
+};
+
 use multi_buffer::{
     Anchor, AnchorRangeExt, ExcerptId, MultiBuffer, MultiBufferOffset, MultiBufferOffsetUtf16,
     MultiBufferPoint, MultiBufferRow, MultiBufferSnapshot, RowInfo, ToOffset, ToPoint,
@@ -105,6 +109,7 @@ use multi_buffer::{
 use project::project_settings::DiagnosticSeverity;
 use project::{InlayId, lsp_store::LspFoldingRange, lsp_store::TokenType};
 use serde::Deserialize;
+use settings::Settings;
 use smallvec::SmallVec;
 use sum_tree::{Bias, TreeMap};
 use text::{BufferId, LineIndent, Patch};
@@ -1443,12 +1448,11 @@ impl DisplayMap {
 
     #[instrument(skip_all)]
     fn tab_size(buffer: &Entity<MultiBuffer>, cx: &App) -> NonZeroU32 {
-        let buffer = buffer.read(cx).as_singleton().map(|buffer| buffer.read(cx));
-        let language = buffer
-            .and_then(|buffer| buffer.language())
-            .map(|l| l.name());
-        let file = buffer.and_then(|buffer| buffer.file());
-        language_settings(language, file, cx).tab_size
+        if let Some(buffer) = buffer.read(cx).as_singleton().map(|buffer| buffer.read(cx)) {
+            LanguageSettings::for_buffer(buffer, cx).tab_size
+        } else {
+            AllLanguageSettings::get_global(cx).defaults.tab_size
+        }
     }
 
     #[cfg(test)]
@@ -1667,11 +1671,7 @@ impl DisplaySnapshot {
         else {
             return false;
         };
-        let settings = language_settings(
-            buffer_snapshot.language().map(|l| l.name()),
-            buffer_snapshot.file(),
-            cx,
-        );
+        let settings = LanguageSettings::for_buffer_snapshot(&buffer_snapshot, None, cx);
         settings.semantic_tokens.use_tree_sitter()
     }
 
@@ -1906,7 +1906,7 @@ impl DisplaySnapshot {
         .flat_map(|chunk| {
             let syntax_highlight_style = chunk
                 .syntax_highlight_id
-                .and_then(|id| id.style(&editor_style.syntax));
+                .and_then(|id| editor_style.syntax.get(id).cloned());
 
             let chunk_highlight = chunk.highlight_style.map(|chunk_highlight| {
                 HighlightStyle {
@@ -2000,7 +2000,8 @@ impl DisplaySnapshot {
 
             let syntax_style = chunk
                 .syntax_highlight_id
-                .and_then(|id| id.style(syntax_theme));
+                .and_then(|id| syntax_theme.get(id).cloned());
+
             let overlay_style = chunk.highlight_style;
 
             let combined = match (syntax_style, overlay_style) {
@@ -4016,7 +4017,8 @@ pub mod tests {
         for chunk in snapshot.chunks(rows, true, HighlightStyles::default()) {
             let syntax_color = chunk
                 .syntax_highlight_id
-                .and_then(|id| id.style(theme)?.color);
+                .and_then(|id| theme.get(id)?.color);
+
             let highlight_color = chunk.highlight_style.and_then(|style| style.color);
             if let Some((last_chunk, last_syntax_color, last_highlight_color)) = chunks.last_mut()
                 && syntax_color == *last_syntax_color

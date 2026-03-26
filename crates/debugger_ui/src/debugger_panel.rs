@@ -1570,6 +1570,9 @@ impl Panel for DebugPanel {
         });
     }
 
+    fn default_size(&self, _window: &Window, _: &App) -> Pixels {
+        px(300.)
+    }
     fn remote_id() -> Option<proto::PanelId> {
         Some(proto::PanelId::DebugPanel)
     }

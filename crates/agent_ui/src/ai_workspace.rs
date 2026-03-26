@@ -1138,7 +1138,8 @@ impl AiWorkspace {
     }
 
     pub fn new_thread(&mut self, _action: &NewThread, window: &mut Window, cx: &mut Context<Self>) {
-        self.new_agent_thread(AgentType::NativeAgent, window, cx);
+        self.reset_start_thread_in_to_default(cx);
+        self.external_thread(None, None, None, None, None, true, window, cx);
     }
 
     pub(crate) fn new_native_agent_thread_from_summary(
@@ -4452,11 +4453,7 @@ impl AiWorkspace {
             settings::WindowDecorations::Server => gpui::WindowDecorations::Server,
             settings::WindowDecorations::Client => gpui::WindowDecorations::Client,
         };
-        let bounds = Bounds::centered(
-            None,
-            gpui::size(gpui::px(380.0), gpui::px(680.0)),
-            cx,
-        );
+        let bounds = Bounds::centered(None, gpui::size(gpui::px(380.0), gpui::px(680.0)), cx);
         let window_background = cx.theme().window_background_appearance();
 
         cx.open_window(
@@ -5018,7 +5015,7 @@ mod tests {
 
         let cx = &mut VisualTestContext::from_window(multi_workspace.into(), cx);
 
-        // --- Set up workspace A: width=300, with an active thread ---
+        // --- Set up workspace A: with an active thread ---
         let panel_a = workspace_a.update_in(cx, |workspace, window, cx| {
             let text_thread_store = cx.new(|cx| TextThreadStore::fake(project_a.clone(), cx));
             cx.new(|cx| AiWorkspace::new(workspace, text_thread_store, None, window, cx))

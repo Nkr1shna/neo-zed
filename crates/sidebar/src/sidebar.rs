@@ -196,21 +196,17 @@ fn fuzzy_match_positions(query: &str, candidate: &str) -> Option<Vec<usize>> {
 fn root_repository_snapshots(
     workspace: &Entity<Workspace>,
     cx: &App,
-) -> Vec<project::git_store::RepositorySnapshot> {
+) -> impl Iterator<Item = project::git_store::RepositorySnapshot> {
     let path_list = workspace_path_list(workspace, cx);
     let project = workspace.read(cx).project().read(cx);
-    project
-        .repositories(cx)
-        .values()
-        .filter_map(|repo| {
-            let snapshot = repo.read(cx).snapshot();
-            let is_root = path_list
-                .paths()
-                .iter()
-                .any(|p| p.as_path() == snapshot.work_directory_abs_path.as_ref());
-            is_root.then_some(snapshot)
-        })
-        .collect()
+    project.repositories(cx).values().filter_map(move |repo| {
+        let snapshot = repo.read(cx).snapshot();
+        let is_root = path_list
+            .paths()
+            .iter()
+            .any(|p| p.as_path() == snapshot.work_directory_abs_path.as_ref());
+        is_root.then_some(snapshot)
+    })
 }
 
 fn workspace_path_list(workspace: &Entity<Workspace>, cx: &App) -> PathList {
@@ -486,25 +482,6 @@ impl Sidebar {
         result.push_str(remaining);
         result
     }
-    fn all_thread_infos_for_workspace(
-        workspace: &Entity<Workspace>,
-        cx: &App,
-    ) -> Vec<ActiveThreadInfo> {
-        thread_summaries(&workspace.read(cx), cx)
-            .into_iter()
-            .map(|summary: AgentThreadSummary| ActiveThreadInfo {
-                session_id: summary.session_id,
-                title: summary.title,
-                status: summary.status,
-                icon: summary.icon,
-                icon_from_external_svg: summary.icon_from_external_svg,
-                is_background: summary.is_background,
-                is_title_generating: summary.is_title_generating,
-                diff_stats: summary.diff_stats,
-            })
-            .collect()
-    }
-
     /// When modifying this thread, aim for a single forward pass over workspaces
     /// and threads plus an O(T log T) sort. Avoid adding extra scans over the data.
     fn rebuild_contents(&mut self, cx: &App) {
@@ -522,6 +499,19 @@ impl Sidebar {
 
         let query = self.filter_editor.read(cx).text(cx);
 
+        // Re-derive ai_surface_visible from the active workspace so it stays
+        // correct after workspace switches.
+        self.ai_surface_visible = active_workspace
+            .as_ref()
+            .map_or(false, |ws| AiWorkspace::is_visible(ws, cx));
+
+        // Derive active_thread_is_draft before focused_thread so draft
+        // activations do not overwrite the eagerly updated focus state.
+        self.active_thread_is_draft = active_workspace
+            .as_ref()
+            .and_then(|ws| workspace_controller(&ws.read(cx), cx))
+            .map_or(false, |panel| panel.read(cx).active_thread_is_draft(cx));
+
         // Derive focused_thread from the active workspace's AI surface.
         // Only update when the controller gives us a positive signal — if the
         // controller returns None (e.g. still loading after a thread activation),
@@ -535,20 +525,9 @@ impl Sidebar {
                     .active_conversation()
                     .and_then(|cv| cv.read(cx).parent_id(cx))
             });
-        if panel_focused.is_some() {
+        if panel_focused.is_some() && !self.active_thread_is_draft {
             self.focused_thread = panel_focused;
         }
-
-        // Re-derive ai_surface_visible from the active workspace so it stays
-        // correct after workspace switches.
-        self.ai_surface_visible = active_workspace
-            .as_ref()
-            .map_or(false, |ws| AiWorkspace::is_visible(ws, cx));
-
-        self.active_thread_is_draft = active_workspace
-            .as_ref()
-            .and_then(|ws| workspace_controller(&ws.read(cx), cx))
-            .map_or(false, |panel| panel.read(cx).active_thread_is_draft(cx));
 
         let previous = mem::take(&mut self.contents);
 
@@ -576,13 +555,49 @@ impl Sidebar {
         let mut absorbed: HashMap<usize, (usize, SharedString)> = HashMap::new();
         let mut pending: HashMap<Arc<Path>, Vec<(usize, SharedString, Arc<Path>)>> = HashMap::new();
         let mut absorbed_workspace_by_path: HashMap<Arc<Path>, usize> = HashMap::new();
+        let workspace_indices_by_path: HashMap<Arc<Path>, Vec<usize>> = workspaces
+            .iter()
+            .enumerate()
+            .flat_map(|(index, workspace)| {
+                let paths = workspace_path_list(workspace, cx).paths().to_vec();
+                paths
+                    .into_iter()
+                    .map(move |path| (Arc::from(path.as_path()), index))
+            })
+            .fold(HashMap::new(), |mut map, (path, index)| {
+                map.entry(path).or_default().push(index);
+                map
+            });
 
         for (i, workspace) in workspaces.iter().enumerate() {
             for snapshot in root_repository_snapshots(workspace, cx) {
-                if snapshot.work_directory_abs_path == snapshot.original_repo_abs_path {
+                if snapshot.is_main_worktree() {
                     main_repo_workspace
                         .entry(snapshot.work_directory_abs_path.clone())
                         .or_insert(i);
+
+                    for git_worktree in snapshot.linked_worktrees() {
+                        let worktree_path: Arc<Path> = Arc::from(git_worktree.path.as_path());
+                        if let Some(worktree_indices) =
+                            workspace_indices_by_path.get(worktree_path.as_ref())
+                        {
+                            for &worktree_idx in worktree_indices {
+                                if worktree_idx == i {
+                                    continue;
+                                }
+
+                                let worktree_name = linked_worktree_short_name(
+                                    &snapshot.original_repo_abs_path,
+                                    &git_worktree.path,
+                                )
+                                .unwrap_or_default();
+                                absorbed.insert(worktree_idx, (i, worktree_name.clone()));
+                                absorbed_workspace_by_path
+                                    .insert(worktree_path.clone(), worktree_idx);
+                            }
+                        }
+                    }
+
                     if let Some(waiting) = pending.remove(&snapshot.work_directory_abs_path) {
                         for (ws_idx, name, ws_path) in waiting {
                             absorbed.insert(ws_idx, (i, name));
@@ -632,7 +647,7 @@ impl Sidebar {
             let is_collapsed = self.collapsed_groups.contains(&path_list);
             let should_load_threads = !is_collapsed || !query.is_empty();
 
-            let mut live_infos = Self::all_thread_infos_for_workspace(workspace, cx);
+            let mut live_infos = all_thread_infos_for_workspace(workspace, cx);
 
             let mut threads: Vec<ThreadEntry> = Vec::new();
             let mut has_running_threads = false;
@@ -689,7 +704,7 @@ impl Sidebar {
                     let mut linked_worktree_queries: Vec<(PathList, SharedString, Arc<Path>)> =
                         Vec::new();
                     for snapshot in root_repository_snapshots(workspace, cx) {
-                        if snapshot.work_directory_abs_path != snapshot.original_repo_abs_path {
+                        if snapshot.is_linked_worktree() {
                             continue;
                         }
 
@@ -710,17 +725,16 @@ impl Sidebar {
                     for (worktree_path_list, worktree_name, worktree_path) in
                         &linked_worktree_queries
                     {
-                        let target_workspace =
-                            match absorbed_workspace_by_path.get(worktree_path.as_ref()) {
-                                Some(&idx) => {
-                                    live_infos.extend(Self::all_thread_infos_for_workspace(
-                                        &workspaces[idx],
-                                        cx,
-                                    ));
-                                    ThreadEntryWorkspace::Open(workspaces[idx].clone())
-                                }
-                                None => ThreadEntryWorkspace::Closed(worktree_path_list.clone()),
-                            };
+                        let target_workspace = match absorbed_workspace_by_path
+                            .get(worktree_path.as_ref())
+                        {
+                            Some(&idx) => {
+                                live_infos
+                                    .extend(all_thread_infos_for_workspace(&workspaces[idx], cx));
+                                ThreadEntryWorkspace::Open(workspaces[idx].clone())
+                            }
+                            None => ThreadEntryWorkspace::Closed(worktree_path_list.clone()),
+                        };
 
                         let worktree_rows: Vec<_> = thread_store
                             .read(cx)
@@ -1465,7 +1479,7 @@ impl Sidebar {
         let mut known_worktree_paths: HashSet<std::path::PathBuf> = HashSet::new();
         for workspace in &workspaces {
             for snapshot in root_repository_snapshots(workspace, cx) {
-                if snapshot.work_directory_abs_path != snapshot.original_repo_abs_path {
+                if snapshot.is_linked_worktree() {
                     continue;
                 }
                 for git_worktree in snapshot.linked_worktrees() {
@@ -1484,12 +1498,10 @@ impl Sidebar {
             if path_list.paths().len() != 1 {
                 continue;
             }
-            let should_prune = root_repository_snapshots(workspace, cx)
-                .iter()
-                .any(|snapshot| {
-                    snapshot.work_directory_abs_path != snapshot.original_repo_abs_path
-                        && !known_worktree_paths.contains(snapshot.work_directory_abs_path.as_ref())
-                });
+            let should_prune = root_repository_snapshots(workspace, cx).any(|snapshot| {
+                snapshot.is_linked_worktree()
+                    && !known_worktree_paths.contains(snapshot.work_directory_abs_path.as_ref())
+            });
             if should_prune {
                 to_remove.push(workspace.clone());
             }
@@ -1534,6 +1546,26 @@ impl Sidebar {
             self.collapsed_groups.insert(path_list.clone());
         }
         self.update_entries(cx);
+    }
+
+    fn dispatch_context(&self, window: &Window, cx: &Context<Self>) -> KeyContext {
+        let mut dispatch_context = KeyContext::new_with_defaults();
+        dispatch_context.add("ThreadsSidebar");
+        dispatch_context.add("menu");
+
+        let is_editing = matches!(self.view, SidebarView::WorkflowDefs)
+            && self
+                .workflow_defs_view
+                .as_ref()
+                .is_some_and(|view| view.read(cx).rename_editor_is_focused(window, cx));
+
+        dispatch_context.add(if is_editing { "editing" } else { "not_editing" });
+        dispatch_context.add(if self.filter_editor.focus_handle(cx).is_focused(window) {
+            "searching"
+        } else {
+            "not_searching"
+        });
+        dispatch_context
     }
 
     fn focus_in(&mut self, window: &mut Window, cx: &mut Context<Self>) {
@@ -1953,6 +1985,7 @@ impl Sidebar {
 
         cx.spawn_in(window, async move |this, cx| {
             let workspace = open_task.await?;
+
             this.update_in(cx, |this, window, cx| {
                 this.activate_thread(agent, session_info, &workspace, window, cx);
             })?;
@@ -1989,14 +2022,12 @@ impl Sidebar {
         cx: &mut Context<Self>,
     ) {
         // Eagerly save thread metadata so that the sidebar is updated immediately
-        SidebarThreadMetadataStore::global(cx)
-            .update(cx, |store, cx| {
-                store.save(
-                    ThreadMetadata::from_session_info(agent.id(), &session_info),
-                    cx,
-                )
-            })
-            .detach_and_log_err(cx);
+        SidebarThreadMetadataStore::global(cx).update(cx, |store, cx| {
+            store.save(
+                ThreadMetadata::from_session_info(agent.id(), &session_info),
+                cx,
+            )
+        });
 
         if let Some(path_list) = &session_info.work_dirs {
             if let Some(workspace) = self.find_current_workspace_for_path_list(path_list, cx) {
@@ -2258,8 +2289,7 @@ impl Sidebar {
         }
 
         SidebarThreadMetadataStore::global(cx)
-            .update(cx, |store, cx| store.delete(session_id.clone(), cx))
-            .detach_and_log_err(cx);
+            .update(cx, |store, cx| store.delete(session_id.clone(), cx));
     }
 
     fn remove_selected_thread(
@@ -2948,20 +2978,6 @@ impl Sidebar {
         view.update(cx, |view, cx| view.focus_filter_editor(window, cx));
         cx.notify();
     }
-
-    fn dispatch_context(&self, window: &Window, cx: &Context<Self>) -> KeyContext {
-        let mut dispatch_context = KeyContext::new_with_defaults();
-        dispatch_context.add("ThreadsSidebar");
-
-        let is_editing = matches!(self.view, SidebarView::WorkflowDefs)
-            && self
-                .workflow_defs_view
-                .as_ref()
-                .is_some_and(|view| view.read(cx).rename_editor_is_focused(window, cx));
-
-        dispatch_context.add(if is_editing { "editing" } else { "not_editing" });
-        dispatch_context
-    }
 }
 
 impl WorkspaceSidebar for Sidebar {
@@ -3117,6 +3133,25 @@ impl Render for Sidebar {
     }
 }
 
+fn all_thread_infos_for_workspace(
+    workspace: &Entity<Workspace>,
+    cx: &App,
+) -> Vec<ActiveThreadInfo> {
+    thread_summaries(&workspace.read(cx), cx)
+        .into_iter()
+        .map(|summary: AgentThreadSummary| ActiveThreadInfo {
+            session_id: summary.session_id,
+            title: summary.title,
+            status: summary.status,
+            icon: summary.icon,
+            icon_from_external_svg: summary.icon_from_external_svg,
+            is_background: summary.is_background,
+            is_title_generating: summary.is_title_generating,
+            diff_stats: summary.diff_stats,
+        })
+        .collect()
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -3244,10 +3279,10 @@ mod tests {
             created_at: None,
             folder_paths: path_list,
         };
-        let task = cx.update(|cx| {
+        cx.update(|cx| {
             SidebarThreadMetadataStore::global(cx).update(cx, |store, cx| store.save(metadata, cx))
         });
-        task.await.unwrap();
+        cx.run_until_parked();
     }
 
     fn open_and_focus_sidebar(sidebar: &Entity<Sidebar>, cx: &mut gpui::VisualTestContext) {
@@ -5902,6 +5937,167 @@ mod tests {
             PathList::new(&[std::path::PathBuf::from("/wt-feature-a")]),
             "the new workspace should have been opened for the worktree path",
         );
+    }
+
+    #[gpui::test]
+    async fn test_clicking_worktree_thread_does_not_briefly_render_as_separate_project(
+        cx: &mut TestAppContext,
+    ) {
+        init_test(cx);
+        let fs = FakeFs::new(cx.executor());
+
+        fs.insert_tree(
+            "/project",
+            serde_json::json!({
+                ".git": {
+                    "worktrees": {
+                        "feature-a": {
+                            "commondir": "../../",
+                            "HEAD": "ref: refs/heads/feature-a",
+                        },
+                    },
+                },
+                "src": {},
+            }),
+        )
+        .await;
+
+        fs.insert_tree(
+            "/wt-feature-a",
+            serde_json::json!({
+                ".git": "gitdir: /project/.git/worktrees/feature-a",
+                "src": {},
+            }),
+        )
+        .await;
+
+        fs.with_git_state(std::path::Path::new("/project/.git"), false, |state| {
+            state.worktrees.push(git::repository::Worktree {
+                path: std::path::PathBuf::from("/wt-feature-a"),
+                ref_name: Some("refs/heads/feature-a".into()),
+                sha: "aaa".into(),
+            });
+        })
+        .unwrap();
+
+        cx.update(|cx| <dyn fs::Fs>::set_global(fs.clone(), cx));
+
+        let main_project = project::Project::test(fs.clone(), ["/project".as_ref()], cx).await;
+        main_project
+            .update(cx, |p, cx| p.git_scans_complete(cx))
+            .await;
+
+        let (multi_workspace, cx) = cx.add_window_view(|window, cx| {
+            MultiWorkspace::test_new(main_project.clone(), window, cx)
+        });
+        let sidebar = setup_sidebar(&multi_workspace, cx);
+
+        let paths_wt = PathList::new(&[std::path::PathBuf::from("/wt-feature-a")]);
+        save_named_thread_metadata("thread-wt", "WT Thread", &paths_wt, cx).await;
+
+        multi_workspace.update_in(cx, |_, _window, cx| cx.notify());
+        cx.run_until_parked();
+
+        assert_eq!(
+            visible_entries_as_strings(&sidebar, cx),
+            vec!["v [project]", "  WT Thread {wt-feature-a}"],
+        );
+
+        open_and_focus_sidebar(&sidebar, cx);
+        sidebar.update_in(cx, |sidebar, _window, _cx| {
+            sidebar.selection = Some(1);
+        });
+
+        let assert_sidebar_state = |sidebar: &mut Sidebar, _cx: &mut Context<Sidebar>| {
+            let mut project_headers = sidebar.contents.entries.iter().filter_map(|entry| {
+                if let ListEntry::ProjectHeader { label, .. } = entry {
+                    Some(label.as_ref())
+                } else {
+                    None
+                }
+            });
+
+            let Some(project_header) = project_headers.next() else {
+                panic!("expected exactly one sidebar project header named `project`, found none");
+            };
+            assert_eq!(
+                project_header, "project",
+                "expected the only sidebar project header to be `project`"
+            );
+            if let Some(unexpected_header) = project_headers.next() {
+                panic!(
+                    "expected exactly one sidebar project header named `project`, found extra header `{unexpected_header}`"
+                );
+            }
+
+            let mut saw_expected_thread = false;
+            for entry in &sidebar.contents.entries {
+                match entry {
+                    ListEntry::ProjectHeader { label, .. } => {
+                        assert_eq!(
+                            label.as_ref(),
+                            "project",
+                            "expected the only sidebar project header to be `project`"
+                        );
+                    }
+                    ListEntry::Thread(thread)
+                        if thread
+                            .session_info
+                            .title
+                            .as_ref()
+                            .map(|title| title.as_ref())
+                            == Some("WT Thread")
+                            && thread.worktree_name.as_ref().map(|name| name.as_ref())
+                                == Some("wt-feature-a") =>
+                    {
+                        saw_expected_thread = true;
+                    }
+                    ListEntry::Thread(thread) => {
+                        let title = thread
+                            .session_info
+                            .title
+                            .as_ref()
+                            .map(|title| title.as_ref())
+                            .unwrap_or("Untitled");
+                        let worktree_name = thread
+                            .worktree_name
+                            .as_ref()
+                            .map(|name| name.as_ref())
+                            .unwrap_or("<none>");
+                        panic!(
+                            "unexpected sidebar thread while opening linked worktree thread: title=`{title}`, worktree=`{worktree_name}`"
+                        );
+                    }
+                    ListEntry::ViewMore { .. } => {
+                        panic!("unexpected `View More` entry while opening linked worktree thread");
+                    }
+                    ListEntry::NewThread { .. } => {
+                        panic!(
+                            "unexpected `New Thread` entry while opening linked worktree thread"
+                        );
+                    }
+                }
+            }
+
+            assert!(
+                saw_expected_thread,
+                "expected the sidebar to keep showing `WT Thread {{wt-feature-a}}` under `project`"
+            );
+        };
+
+        sidebar
+            .update(cx, |_, cx| cx.observe_self(assert_sidebar_state))
+            .detach();
+
+        let window = cx.windows()[0];
+        cx.update_window(window, |_, window, cx| {
+            window.dispatch_action(Confirm.boxed_clone(), cx);
+        })
+        .unwrap();
+
+        cx.run_until_parked();
+
+        sidebar.update(cx, assert_sidebar_state);
     }
 
     #[gpui::test]

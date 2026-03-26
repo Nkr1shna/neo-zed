@@ -121,21 +121,22 @@ pub fn auto_layout(nodes: &[WorkflowNode], edges: &[WorkflowEdge]) -> HashMap<St
         .iter()
         .filter(|e| {
             let from_ord = node_order.get(&e.from_node_id).copied().unwrap_or(0);
-            let to_ord = node_order
-                .get(&e.to_node_id)
-                .copied()
-                .unwrap_or(usize::MAX);
+            let to_ord = node_order.get(&e.to_node_id).copied().unwrap_or(usize::MAX);
             from_ord > to_ord
         })
         .map(|e| (e.from_node_id.clone(), e.to_node_id.clone()))
         .collect();
 
     // Build forward-only adjacency (skip back edges to break cycles for layering)
-    let mut forward_adj: HashMap<String, Vec<String>> = nodes.iter().map(|n| (n.id.clone(), vec![])).collect();
+    let mut forward_adj: HashMap<String, Vec<String>> =
+        nodes.iter().map(|n| (n.id.clone(), vec![])).collect();
     let mut in_degree: HashMap<String, usize> = nodes.iter().map(|n| (n.id.clone(), 0)).collect();
     for edge in edges {
         if !back_edges.contains(&(edge.from_node_id.clone(), edge.to_node_id.clone())) {
-            forward_adj.entry(edge.from_node_id.clone()).or_default().push(edge.to_node_id.clone());
+            forward_adj
+                .entry(edge.from_node_id.clone())
+                .or_default()
+                .push(edge.to_node_id.clone());
             *in_degree.entry(edge.to_node_id.clone()).or_insert(0) += 1;
         }
     }
@@ -177,10 +178,14 @@ pub fn auto_layout(nodes: &[WorkflowNode], edges: &[WorkflowEdge]) -> HashMap<St
     }
 
     // Build predecessor adjacency for barycenter pass
-    let mut pred_adj: HashMap<String, Vec<String>> = nodes.iter().map(|n| (n.id.clone(), vec![])).collect();
+    let mut pred_adj: HashMap<String, Vec<String>> =
+        nodes.iter().map(|n| (n.id.clone(), vec![])).collect();
     for edge in edges {
         if !back_edges.contains(&(edge.from_node_id.clone(), edge.to_node_id.clone())) {
-            pred_adj.entry(edge.to_node_id.clone()).or_default().push(edge.from_node_id.clone());
+            pred_adj
+                .entry(edge.to_node_id.clone())
+                .or_default()
+                .push(edge.from_node_id.clone());
         }
     }
 
@@ -196,16 +201,27 @@ pub fn auto_layout(nodes: &[WorkflowNode], edges: &[WorkflowEdge]) -> HashMap<St
     for col_idx in 1..=max_col {
         let col_nodes = columns[col_idx].clone();
         let empty_preds: Vec<String> = vec![];
-        let mut barycenters: Vec<(String, f32)> = col_nodes.iter().map(|node_id| {
-            let preds = pred_adj.get(node_id.as_str()).unwrap_or(&empty_preds);
-            let bc = if preds.is_empty() {
-                row_pos.get(node_id.as_str()).copied().unwrap_or(0.0)
-            } else {
-                preds.iter().map(|p| row_pos.get(p.as_str()).copied().unwrap_or(0.0)).sum::<f32>() / preds.len() as f32
-            };
-            (node_id.clone(), bc)
-        }).collect();
-        barycenters.sort_by(|a, b| a.1.partial_cmp(&b.1).unwrap_or(std::cmp::Ordering::Equal).then(a.0.cmp(&b.0)));
+        let mut barycenters: Vec<(String, f32)> = col_nodes
+            .iter()
+            .map(|node_id| {
+                let preds = pred_adj.get(node_id.as_str()).unwrap_or(&empty_preds);
+                let bc = if preds.is_empty() {
+                    row_pos.get(node_id.as_str()).copied().unwrap_or(0.0)
+                } else {
+                    preds
+                        .iter()
+                        .map(|p| row_pos.get(p.as_str()).copied().unwrap_or(0.0))
+                        .sum::<f32>()
+                        / preds.len() as f32
+                };
+                (node_id.clone(), bc)
+            })
+            .collect();
+        barycenters.sort_by(|a, b| {
+            a.1.partial_cmp(&b.1)
+                .unwrap_or(std::cmp::Ordering::Equal)
+                .then(a.0.cmp(&b.0))
+        });
         columns[col_idx] = barycenters.into_iter().map(|(id, _)| id).collect();
         for (row, node_id) in columns[col_idx].iter().enumerate() {
             row_pos.insert(node_id.clone(), row as f32);
@@ -222,10 +238,13 @@ pub fn auto_layout(nodes: &[WorkflowNode], edges: &[WorkflowEdge]) -> HashMap<St
         let col_h = count as f32 * (NODE_HEIGHT_F + NODE_V_GAP) - NODE_V_GAP;
         let start_y = 40.0 + (max_h - col_h) * 0.5;
         for (row_idx, node_id) in col_nodes.iter().enumerate() {
-            positions.insert(node_id.clone(), NodePos {
-                x: col_idx as f32 * (NODE_WIDTH_F + NODE_H_GAP) + 40.0,
-                y: start_y + row_idx as f32 * (NODE_HEIGHT_F + NODE_V_GAP),
-            });
+            positions.insert(
+                node_id.clone(),
+                NodePos {
+                    x: col_idx as f32 * (NODE_WIDTH_F + NODE_H_GAP) + 40.0,
+                    y: start_y + row_idx as f32 * (NODE_HEIGHT_F + NODE_V_GAP),
+                },
+            );
         }
     }
     positions
@@ -265,10 +284,7 @@ pub fn to_canvas_point(
 
 /// Returns (min_y, max_y) in canvas coordinates covering all node rects,
 /// expanded by `padding` on each side.
-fn nodes_bounding_box(
-    node_positions: &HashMap<String, NodePos>,
-    padding: f32,
-) -> (f32, f32) {
+fn nodes_bounding_box(node_positions: &HashMap<String, NodePos>, padding: f32) -> (f32, f32) {
     let mut min_y = f32::MAX;
     let mut max_y = f32::MIN;
     for pos in node_positions.values() {
@@ -284,12 +300,7 @@ fn nodes_bounding_box(
 /// Compute the rail Y for a backward edge on the given side.
 /// `above=true` → above top rail, `above=false` → below bottom rail.
 /// `rail_index=0` is the innermost rail.
-fn backward_edge_rail_y(
-    bbox_top: f32,
-    bbox_bottom: f32,
-    rail_index: usize,
-    above: bool,
-) -> f32 {
+fn backward_edge_rail_y(bbox_top: f32, bbox_bottom: f32, rail_index: usize, above: bool) -> f32 {
     let offset = rail_index as f32 * 12.0;
     if above {
         bbox_top - offset
@@ -636,7 +647,10 @@ impl WorkflowCanvas {
             })
             .collect();
 
-        let port_pairs: Vec<_> = backward_edges.iter().map(|(_, from, to)| (*from, *to)).collect();
+        let port_pairs: Vec<_> = backward_edges
+            .iter()
+            .map(|(_, from, to)| (*from, *to))
+            .collect();
         let assignments = compute_backward_edge_rails(&port_pairs, bbox_top, bbox_bottom);
 
         let mut result = HashMap::new();
@@ -745,8 +759,12 @@ impl WorkflowCanvas {
             .copied()
             .unwrap_or_else(|| edge_canvas_midpoint(from, to));
 
-        let handle_screen =
-            to_screen_point(&self.layout, handle_canvas.0, handle_canvas.1, canvas_origin);
+        let handle_screen = to_screen_point(
+            &self.layout,
+            handle_canvas.0,
+            handle_canvas.1,
+            canvas_origin,
+        );
         let dx = (screen_pt.x - handle_screen.x).as_f32();
         let dy = (screen_pt.y - handle_screen.y).as_f32();
         if dx * dx + dy * dy <= 8.0_f32.powi(2) {
@@ -958,8 +976,7 @@ impl WorkflowCanvas {
 
         if let Some(key) = self.drag_edge_waypoint_key.clone() {
             let origin = self.canvas_origin();
-            let canvas_pos =
-                to_canvas_point(&self.layout, position.x, position.y, origin);
+            let canvas_pos = to_canvas_point(&self.layout, position.x, position.y, origin);
             self.layout.edge_waypoints.insert(key, canvas_pos);
             cx.notify();
         }
@@ -1729,7 +1746,14 @@ fn paint_edge(
     } else {
         gpui::rgba(0x9ca3afff)
     };
-    let stroke_width = scaled(layout, if is_selected { 2.5 } else { EDGE_STROKE.as_f32() });
+    let stroke_width = scaled(
+        layout,
+        if is_selected {
+            2.5
+        } else {
+            EDGE_STROKE.as_f32()
+        },
+    );
 
     if let Some(wp) = waypoint {
         let wp_pt = to_screen_point(layout, wp.0, wp.1, origin);
@@ -1825,7 +1849,6 @@ fn paint_edge(
     }
 }
 
-
 fn paint_arc_backward_edge(
     layout: &CanvasLayout,
     from_pt: Point<Pixels>,
@@ -1893,9 +1916,7 @@ fn paint_smoothstep_polyline(
             let dy = (after.y - next.y).as_f32();
             (dx * dx + dy * dy).sqrt()
         };
-        let r = corner_r
-            .min(px(seg1_len * 0.45))
-            .min(px(seg2_len * 0.45));
+        let r = corner_r.min(px(seg1_len * 0.45)).min(px(seg2_len * 0.45));
         if r.as_f32() < 0.5 {
             builder.line_to(next);
             continue;

@@ -698,7 +698,6 @@
       "left": "menu::SelectParent",
       "right": "menu::SelectChild",
       "enter": "menu::Confirm",
-      "space": "menu::Confirm",
       "ctrl-f": "agents_sidebar::FocusSidebarFilter",
       "ctrl-g": "agents_sidebar::ToggleArchive",
       "shift-backspace": "agent::RemoveSelectedThread",
@@ -710,6 +709,13 @@
       "enter": "menu::Confirm",
       "escape": "menu::Cancel"
     }
+  },
+  {
+    "context": "ThreadsSidebar && not_searching",
+    "use_key_equivalents": true,
+    "bindings": {
+      "space": "menu::Confirm",
+    },
   },
   {
     "context": "Workspace && debugger_running",
@@ -803,7 +809,7 @@
     },
   },
   {
-    "context": "Editor && edit_prediction && edit_prediction_mode == eager",
+    "context": "Editor && edit_prediction && edit_prediction_mode == eager && !showing_completions",
     "bindings": {
       "tab": "editor::AcceptEditPrediction",
     },

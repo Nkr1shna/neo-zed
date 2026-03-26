@@ -2360,6 +2360,10 @@ impl Panel for NodeInspectorPanel {
         cx.notify();
     }
 
+    fn default_size(&self, _window: &Window, _cx: &App) -> Pixels {
+        px(320.)
+    }
+
     fn icon(&self, _window: &Window, _cx: &App) -> Option<IconName> {
         Some(IconName::Sliders)
     }

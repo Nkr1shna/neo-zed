@@ -1245,6 +1245,10 @@ impl Panel for RemoteUiPanel {
         cx.notify();
     }
 
+    fn default_size(&self, _window: &Window, _cx: &App) -> Pixels {
+        self.position.default_size()
+    }
+
     fn icon(&self, _window: &Window, _cx: &App) -> Option<ui::IconName> {
         None
     }
