@@ -22,6 +22,12 @@ use util::path_list::PathList;
 use uuid::Uuid;
 use workspace::{MultiWorkspace, Toast, Workspace, notifications::NotificationId};
 
+#[cfg(test)]
+use crate::client::{
+    WORKFLOW_CONDITIONAL_NODE_TYPE_ID, WORKFLOW_EXECUTE_SHELL_COMMAND_NODE_TYPE_ID,
+    WORKFLOW_LLM_NODE_TYPE_ID,
+};
+
 const NODE_WIDTH_F: f32 = 300.0;
 const NODE_HEIGHT_F: f32 = 156.0;
 const NODE_H_GAP: f32 = 96.0;
@@ -2232,6 +2238,29 @@ fn run_failure_message(run: &TaskStatusResponse) -> Option<String> {
 struct WorkflowRunFailureToast;
 struct WorkflowRunConversationToast;
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+enum RunNodeActivationTarget {
+    Conversation,
+    Output(String),
+    None,
+}
+
+fn run_node_activation_target(node: &crate::client::TaskNodeStatus) -> RunNodeActivationTarget {
+    match node.primitive_kind() {
+        WorkflowNodePrimitive::Llm => RunNodeActivationTarget::Conversation,
+        WorkflowNodePrimitive::ExecuteShellCommand => node
+            .output
+            .as_deref()
+            .map(str::trim)
+            .filter(|output| !output.is_empty())
+            .map(|output| RunNodeActivationTarget::Output(output.to_string()))
+            .unwrap_or(RunNodeActivationTarget::None),
+        WorkflowNodePrimitive::Conditional | WorkflowNodePrimitive::Globals => {
+            RunNodeActivationTarget::None
+        }
+    }
+}
+
 fn canvas_matches_run_task_id(canvas: &WorkflowCanvas, task_id: Uuid) -> bool {
     canvas
         .run
@@ -2710,7 +2739,10 @@ pub fn open_run(
             WorkflowCanvasEvent::NodeActivated(node_id) => {
                 open_run_node_conversation(
                     canvas.downgrade(),
+                    workspace,
                     workspace.weak_handle(),
+                    workspace.project().clone(),
+                    workspace.app_state().languages.clone(),
                     node_id.clone(),
                     window,
                     cx,
@@ -2725,10 +2757,13 @@ pub fn open_run(
 
 fn open_run_node_conversation(
     canvas: gpui::WeakEntity<WorkflowCanvas>,
-    workspace: gpui::WeakEntity<Workspace>,
+    workspace: &mut Workspace,
+    workspace_handle: gpui::WeakEntity<Workspace>,
+    project: gpui::Entity<project::Project>,
+    languages: Arc<language::LanguageRegistry>,
     node_id: String,
     window: &mut Window,
-    cx: &mut App,
+    cx: &mut Context<Workspace>,
 ) {
     let Ok(Some((run_title, task_id, node, client))) = canvas.read_with(cx, |canvas, _cx| {
         let run = canvas.run.as_ref()?;
@@ -2743,19 +2778,53 @@ fn open_run_node_conversation(
         return;
     };
 
+    match run_node_activation_target(&node) {
+        RunNodeActivationTarget::Conversation => {}
+        RunNodeActivationTarget::Output(content) => {
+            open_read_only_text_item(
+                format!("{run_title} / {} - output", node.label),
+                content,
+                workspace_handle,
+                project,
+                window,
+                cx,
+            );
+            return;
+        }
+        RunNodeActivationTarget::None => {
+            workspace.show_toast(
+                Toast::new(
+                    NotificationId::composite::<WorkflowRunConversationToast>(format!(
+                        "{task_id}:{}:output",
+                        node.id
+                    )),
+                    format!("No output available for {}", node.label),
+                )
+                .autohide(),
+                cx,
+            );
+            return;
+        }
+    }
+
     window
         .spawn(cx, async move |cx| {
             let conversation = client.get_task_node_conversation(task_id, &node.id).await;
 
             match conversation {
                 Ok(conversation) => {
-                    workspace.update_in(cx, |workspace, window, cx| {
+                    workspace_handle.update_in(cx, |workspace, window, cx| {
                         let title = format!("{run_title} / {} - conversation", node.label);
                         let work_dirs =
                             conversation_work_dirs(conversation.workspace_path.as_deref());
+                        let current_workspace = cx.entity();
+                        let current_workspace_paths = PathList::new(&workspace.root_paths(cx));
+                        let app_state = workspace.app_state().clone();
 
                         if try_open_run_node_in_center(
-                            cx.entity(),
+                            current_workspace,
+                            current_workspace_paths,
+                            app_state,
                             &conversation.session_id,
                             work_dirs.clone(),
                             conversation.remote_target.clone(),
@@ -2770,15 +2839,15 @@ fn open_run_node_conversation(
                             title,
                             conversation.markdown,
                             workspace.weak_handle(),
-                            workspace.project().clone(),
-                            workspace.app_state().languages.clone(),
+                            project.clone(),
+                            languages.clone(),
                             window,
                             cx,
                         );
                     })?;
                 }
                 Err(error) => {
-                    workspace.update_in(cx, |workspace, _window, cx| {
+                    workspace_handle.update_in(cx, |workspace, _window, cx| {
                         workspace.show_toast(
                             Toast::new(
                                 NotificationId::composite::<WorkflowRunConversationToast>(format!(
@@ -2801,6 +2870,8 @@ fn open_run_node_conversation(
 
 fn try_open_run_node_in_center(
     current_workspace: gpui::Entity<Workspace>,
+    current_workspace_paths: PathList,
+    app_state: Arc<workspace::AppState>,
     session_id: &str,
     work_dirs: Option<PathList>,
     remote_target: Option<TaskRemoteTarget>,
@@ -2814,9 +2885,13 @@ fn try_open_run_node_in_center(
     let session_id = session_id.to_string();
     let current_window = window.window_handle().downcast::<MultiWorkspace>();
 
-    if let Some(target) =
-        find_run_node_workspace_target(&current_workspace, work_dirs.as_ref(), window, cx)
-    {
+    if let Some(target) = find_run_node_workspace_target(
+        &current_workspace,
+        &current_workspace_paths,
+        work_dirs.as_ref(),
+        window,
+        cx,
+    ) {
         return open_run_node_session_in_target(
             target,
             session_id,
@@ -2832,7 +2907,7 @@ fn try_open_run_node_in_center(
     {
         return open_run_node_session_in_remote_workspace(
             current_workspace.downgrade(),
-            current_workspace.read(cx).app_state().clone(),
+            app_state,
             current_window,
             session_id,
             work_dirs.expect("remote attachment requires work dirs"),
@@ -2881,6 +2956,7 @@ struct RunNodeRemoteAttachment {
 
 fn find_run_node_workspace_target(
     current_workspace: &gpui::Entity<Workspace>,
+    current_workspace_paths: &PathList,
     work_dirs: Option<&PathList>,
     window: &mut Window,
     cx: &App,
@@ -2893,7 +2969,7 @@ fn find_run_node_workspace_target(
         });
     };
 
-    if workspace_path_list(current_workspace, cx).paths() == work_dirs.paths() {
+    if current_workspace_matches_work_dirs(current_workspace_paths, Some(work_dirs)) {
         return Some(RunNodeWorkspaceTarget {
             window: current_window,
             workspace: current_workspace.clone(),
@@ -2913,6 +2989,13 @@ fn find_run_node_workspace_target(
             workspace,
         }
     })
+}
+
+fn current_workspace_matches_work_dirs(
+    current_workspace_paths: &PathList,
+    work_dirs: Option<&PathList>,
+) -> bool {
+    work_dirs.is_some_and(|work_dirs| current_workspace_paths.paths() == work_dirs.paths())
 }
 
 fn open_run_node_session_in_target(
@@ -3208,6 +3291,47 @@ fn open_markdown_conversation(
         .detach_and_log_err(cx);
 }
 
+fn open_read_only_text_item(
+    title: String,
+    content: String,
+    workspace: gpui::WeakEntity<Workspace>,
+    project: gpui::Entity<project::Project>,
+    window: &mut Window,
+    cx: &mut App,
+) {
+    window
+        .spawn(cx, async move |cx| {
+            let buffer = project
+                .update(cx, |project, cx| project.create_buffer(None, false, cx))
+                .await?;
+
+            buffer.update(cx, |buffer, cx| {
+                buffer.set_text(content, cx);
+                buffer.set_capability(language::Capability::ReadOnly, cx);
+            });
+
+            workspace.update_in(cx, |workspace, window, cx| {
+                let multibuffer =
+                    cx.new(|cx| MultiBuffer::singleton(buffer, cx).with_title(title.clone()));
+                workspace.add_item_to_active_pane(
+                    Box::new(cx.new(|cx| {
+                        let mut editor =
+                            Editor::for_multibuffer(multibuffer, Some(project.clone()), window, cx);
+                        editor.set_read_only(true);
+                        editor
+                    })),
+                    None,
+                    true,
+                    window,
+                    cx,
+                );
+            })?;
+
+            anyhow::Ok(())
+        })
+        .detach_and_log_err(cx);
+}
+
 impl workspace::Item for WorkflowCanvas {
     type Event = WorkflowCanvasEvent;
 
@@ -3227,11 +3351,24 @@ impl workspace::Item for WorkflowCanvas {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use client::{Client, UserStore};
+    use clock::RealSystemClock;
+    use db::kvp::KeyValueStore;
+    use fs::{Fs, RealFs};
+    use gpui::{App, Context, Entity};
+    use http_client::FakeHttpClient;
+    use language::LanguageRegistry;
+    use node_runtime::NodeRuntime;
+    use project::Project;
+    use session::{AppSession, Session};
     use std::cell::RefCell;
+    use std::panic::AssertUnwindSafe;
     use std::rc::Rc;
+    use std::sync::Arc;
 
     fn init_test(cx: &mut gpui::TestAppContext) {
         cx.update(|cx| {
+            cx.set_global(db::AppDatabase::test_new());
             let settings_store = settings::SettingsStore::test(cx);
             cx.set_global(settings_store);
             theme::init(theme::LoadThemes::JustBase, cx);
@@ -3253,8 +3390,8 @@ mod tests {
                 name: "Sample workflow".into(),
                 nodes: vec![WorkflowNode {
                     id: "node-1".into(),
-                    node_type: "task".into(),
-                    label: "Build".into(),
+                    node_type: WORKFLOW_LLM_NODE_TYPE_ID.into(),
+                    label: "Plan".into(),
                     configuration: serde_json::json!({}),
                     runtime: serde_json::json!({}),
                 }],
@@ -3268,10 +3405,10 @@ mod tests {
             remote_target: None,
             nodes: vec![crate::client::TaskNodeStatus {
                 id: "node-1".into(),
-                node_type: "task".into(),
-                primitive: None,
-                category: Some(WorkflowNodeTypeCategory::Task),
-                label: "Build".into(),
+                node_type: WORKFLOW_LLM_NODE_TYPE_ID.into(),
+                primitive: Some(crate::client::WorkflowNodePrimitive::Llm),
+                category: None,
+                label: "Plan".into(),
                 status: TaskLifecycleStatus::Running,
                 output: None,
                 session_id: Some("session-1".into()),
@@ -3287,14 +3424,113 @@ mod tests {
         }
     }
 
+    fn sample_output_run(task_id: Uuid, output: Option<&str>) -> TaskStatusResponse {
+        TaskStatusResponse {
+            task: crate::client::TaskRecord {
+                id: task_id,
+                title: "Shell run".into(),
+                source_repo: "/tmp/demo".into(),
+                status: TaskLifecycleStatus::Completed,
+                workflow_id: None,
+                task_description: None,
+            },
+            workflow: Some(WorkflowDefinitionRecord {
+                id: Uuid::new_v4(),
+                name: "Shell workflow".into(),
+                nodes: vec![WorkflowNode {
+                    id: "node-1".into(),
+                    node_type: WORKFLOW_EXECUTE_SHELL_COMMAND_NODE_TYPE_ID.into(),
+                    label: "Execute shell command".into(),
+                    configuration: serde_json::json!({}),
+                    runtime: serde_json::json!({}),
+                }],
+                edges: vec![],
+                node_policies: vec![],
+                retry_behavior: crate::client::RetryBehavior::default(),
+                validation_policy_ref: None,
+                trigger_metadata: Default::default(),
+            }),
+            workspace_path: Some("/tmp/demo".into()),
+            remote_target: None,
+            nodes: vec![crate::client::TaskNodeStatus {
+                id: "node-1".into(),
+                node_type: WORKFLOW_EXECUTE_SHELL_COMMAND_NODE_TYPE_ID.into(),
+                primitive: Some(crate::client::WorkflowNodePrimitive::ExecuteShellCommand),
+                category: None,
+                label: "Execute shell command".into(),
+                status: TaskLifecycleStatus::Completed,
+                output: output.map(ToOwned::to_owned),
+                session_id: None,
+                artifacts: Default::default(),
+            }],
+            outcome: None,
+            agent: None,
+            lease: None,
+            validation: None,
+            integration: None,
+            failure_message: None,
+            agents: None,
+        }
+    }
+
+    async fn create_test_workspace(
+        cx: &mut gpui::TestAppContext,
+    ) -> (Entity<Workspace>, &mut gpui::VisualTestContext) {
+        let session = Session::new(
+            Uuid::new_v4().to_string(),
+            cx.update(|cx: &mut App| KeyValueStore::global(cx)),
+        )
+        .await;
+
+        cx.add_window_view(move |window, cx| {
+            let fs: Arc<dyn Fs> = Arc::new(RealFs::new(None, cx.background_executor().clone()));
+            <dyn Fs>::set_global(fs.clone(), cx);
+
+            let languages = Arc::new(LanguageRegistry::new(cx.background_executor().clone()));
+            let client = Client::new(
+                Arc::new(RealSystemClock),
+                FakeHttpClient::with_404_response(),
+                cx,
+            );
+            client::init(&client, cx);
+
+            let session = cx.new(|cx| AppSession::new(session, cx));
+            let user_store = cx.new(|cx| UserStore::new(client.clone(), cx));
+            let workspace_store =
+                cx.new(|cx| workspace::WorkspaceStore::new(client.clone(), cx));
+            let app_state = Arc::new(workspace::AppState {
+                languages: languages.clone(),
+                client: client.clone(),
+                user_store: user_store.clone(),
+                workspace_store,
+                fs: fs.clone(),
+                build_window_options: |_, _| Default::default(),
+                node_runtime: NodeRuntime::unavailable(),
+                session,
+            });
+            let project = Project::local(
+                client,
+                NodeRuntime::unavailable(),
+                user_store,
+                languages,
+                fs,
+                None,
+                project::LocalProjectFlags::default(),
+                cx,
+            );
+
+            Workspace::new(None, project, app_state, window, cx)
+        })
+    }
+
     fn sample_node_types() -> Vec<WorkflowNodeType> {
         editor_node_types(vec![
             WorkflowNodeType {
-                id: "task".into(),
-                label: "Task".into(),
+                id: WORKFLOW_LLM_NODE_TYPE_ID.into(),
+                label: "LLM".into(),
                 primitive: Some(crate::client::WorkflowNodePrimitive::Llm),
                 category: None,
-                is_primitive: false,
+                is_primitive: true,
                 inputs: vec![crate::client::WorkflowNodePort {
                     id: "default".into(),
                     label: "Input".into(),
@@ -3307,18 +3543,18 @@ mod tests {
                 runtime_fields: vec![],
             },
             WorkflowNodeType {
-                id: "validation".into(),
-                label: "Validation".into(),
+                id: WORKFLOW_CONDITIONAL_NODE_TYPE_ID.into(),
+                label: "Conditional".into(),
                 primitive: Some(crate::client::WorkflowNodePrimitive::Conditional),
                 category: None,
-                is_primitive: false,
+                is_primitive: true,
                 inputs: vec![crate::client::WorkflowNodePort {
                     id: "default".into(),
                     label: "Input".into(),
                 }],
                 outputs: vec![crate::client::WorkflowNodePort {
-                    id: "passed".into(),
-                    label: "Passed".into(),
+                    id: "if_1".into(),
+                    label: "If".into(),
                 }],
                 configure_time_fields: vec![],
                 runtime_fields: vec![],
@@ -3330,7 +3566,7 @@ mod tests {
     fn test_auto_layout_single_node() {
         let nodes = vec![WorkflowNode {
             id: "a".into(),
-            node_type: "task".into(),
+            node_type: WORKFLOW_LLM_NODE_TYPE_ID.into(),
             label: "A".into(),
             configuration: serde_json::json!({}),
             runtime: serde_json::json!({}),
@@ -3347,21 +3583,21 @@ mod tests {
         let nodes = vec![
             WorkflowNode {
                 id: "a".into(),
-                node_type: "task".into(),
+                node_type: WORKFLOW_LLM_NODE_TYPE_ID.into(),
                 label: "A".into(),
                 configuration: serde_json::json!({}),
                 runtime: serde_json::json!({}),
             },
             WorkflowNode {
                 id: "b".into(),
-                node_type: "validation".into(),
+                node_type: WORKFLOW_CONDITIONAL_NODE_TYPE_ID.into(),
                 label: "B".into(),
                 configuration: serde_json::json!({}),
                 runtime: serde_json::json!({}),
             },
             WorkflowNode {
                 id: "c".into(),
-                node_type: "integration".into(),
+                node_type: WORKFLOW_EXECUTE_SHELL_COMMAND_NODE_TYPE_ID.into(),
                 label: "C".into(),
                 configuration: serde_json::json!({}),
                 runtime: serde_json::json!({}),
@@ -3430,10 +3666,10 @@ mod tests {
             remote_target: None,
             nodes: vec![crate::client::TaskNodeStatus {
                 id: "node-1".into(),
-                node_type: "task".into(),
-                primitive: None,
-                category: Some(WorkflowNodeTypeCategory::Task),
-                label: "Build".into(),
+                node_type: WORKFLOW_LLM_NODE_TYPE_ID.into(),
+                primitive: Some(crate::client::WorkflowNodePrimitive::Llm),
+                category: None,
+                label: "Plan".into(),
                 status: TaskLifecycleStatus::Failed,
                 output: Some("node output".into()),
                 session_id: None,
@@ -3470,10 +3706,10 @@ mod tests {
             remote_target: None,
             nodes: vec![crate::client::TaskNodeStatus {
                 id: "node-1".into(),
-                node_type: "task".into(),
-                primitive: None,
-                category: Some(WorkflowNodeTypeCategory::Task),
-                label: "Build".into(),
+                node_type: WORKFLOW_LLM_NODE_TYPE_ID.into(),
+                primitive: Some(crate::client::WorkflowNodePrimitive::Llm),
+                category: None,
+                label: "Plan".into(),
                 status: TaskLifecycleStatus::Failed,
                 output: Some("missing green background".into()),
                 session_id: None,
@@ -3515,6 +3751,112 @@ mod tests {
     #[test]
     fn test_try_open_run_node_in_center_passes_trimmed_session_id_to_opener() {
         assert_eq!(normalized_session_id(" session-1 "), Some("session-1"));
+    }
+
+    #[test]
+    fn test_run_node_activation_target_uses_conversation_for_llm_nodes() {
+        let node = crate::client::TaskNodeStatus {
+            id: "node-1".into(),
+            node_type: WORKFLOW_LLM_NODE_TYPE_ID.into(),
+            primitive: Some(crate::client::WorkflowNodePrimitive::Llm),
+            category: None,
+            label: "Plan".into(),
+            status: TaskLifecycleStatus::Completed,
+            output: Some("drafted plan".into()),
+            session_id: Some("session-1".into()),
+            artifacts: Default::default(),
+        };
+
+        assert_eq!(
+            run_node_activation_target(&node),
+            RunNodeActivationTarget::Conversation
+        );
+    }
+
+    #[test]
+    fn test_run_node_activation_target_uses_output_for_shell_nodes() {
+        let node = crate::client::TaskNodeStatus {
+            id: "node-2".into(),
+            node_type: WORKFLOW_EXECUTE_SHELL_COMMAND_NODE_TYPE_ID.into(),
+            primitive: Some(crate::client::WorkflowNodePrimitive::ExecuteShellCommand),
+            category: None,
+            label: "Execute shell command".into(),
+            status: TaskLifecycleStatus::Completed,
+            output: Some("npm test\nok".into()),
+            session_id: None,
+            artifacts: Default::default(),
+        };
+
+        assert_eq!(
+            run_node_activation_target(&node),
+            RunNodeActivationTarget::Output("npm test\nok".into())
+        );
+    }
+
+    #[test]
+    fn test_run_node_activation_target_trims_shell_output() {
+        let node = crate::client::TaskNodeStatus {
+            id: "node-3".into(),
+            node_type: WORKFLOW_EXECUTE_SHELL_COMMAND_NODE_TYPE_ID.into(),
+            primitive: Some(crate::client::WorkflowNodePrimitive::ExecuteShellCommand),
+            category: None,
+            label: "Execute shell command".into(),
+            status: TaskLifecycleStatus::Completed,
+            output: Some("  npm test\nok\n  ".into()),
+            session_id: None,
+            artifacts: Default::default(),
+        };
+
+        assert_eq!(
+            run_node_activation_target(&node),
+            RunNodeActivationTarget::Output("npm test\nok".into())
+        );
+    }
+
+    #[test]
+    fn test_run_node_activation_target_returns_none_for_blank_shell_output() {
+        let node = crate::client::TaskNodeStatus {
+            id: "node-4".into(),
+            node_type: WORKFLOW_EXECUTE_SHELL_COMMAND_NODE_TYPE_ID.into(),
+            primitive: Some(crate::client::WorkflowNodePrimitive::ExecuteShellCommand),
+            category: None,
+            label: "Execute shell command".into(),
+            status: TaskLifecycleStatus::Completed,
+            output: Some("   ".into()),
+            session_id: None,
+            artifacts: Default::default(),
+        };
+
+        assert_eq!(
+            run_node_activation_target(&node),
+            RunNodeActivationTarget::None
+        );
+    }
+
+    #[test]
+    fn test_current_workspace_matches_work_dirs_only_for_equal_paths() {
+        let current_workspace_paths = PathList::new(&[
+            PathBuf::from("/workspaces/demo"),
+            PathBuf::from("/workspaces/shared"),
+        ]);
+        let matching_work_dirs = PathList::new(&[
+            PathBuf::from("/workspaces/demo"),
+            PathBuf::from("/workspaces/shared"),
+        ]);
+        let different_work_dirs = PathList::new(&[PathBuf::from("/workspaces/other")]);
+
+        assert!(current_workspace_matches_work_dirs(
+            &current_workspace_paths,
+            Some(&matching_work_dirs),
+        ));
+        assert!(!current_workspace_matches_work_dirs(
+            &current_workspace_paths,
+            Some(&different_work_dirs),
+        ));
+        assert!(!current_workspace_matches_work_dirs(
+            &current_workspace_paths,
+            None,
+        ));
     }
 
     #[test]
@@ -3603,7 +3945,7 @@ mod tests {
         let node_types = sample_node_types();
         let node = WorkflowNode {
             id: "conditional-1".into(),
-            node_type: "validation".into(),
+            node_type: WORKFLOW_CONDITIONAL_NODE_TYPE_ID.into(),
             label: "Conditional".into(),
             configuration: serde_json::json!({
                 "branches": [
@@ -3692,6 +4034,44 @@ mod tests {
     }
 
     #[gpui::test]
+    async fn test_activating_run_node_without_output_does_not_reenter_workspace(
+        cx: &mut gpui::TestAppContext,
+    ) {
+        init_test(cx);
+
+        let task_id = Uuid::new_v4();
+        let (workspace, cx): (Entity<Workspace>, &mut gpui::VisualTestContext) =
+            create_test_workspace(cx).await;
+        let workflow_client = WorkflowClient::with_http_client(FakeHttpClient::with_404_response());
+
+        workspace.update_in(cx, |workspace, window, cx| {
+            open_run(
+                sample_output_run(task_id, Some("   ")),
+                workflow_client.clone(),
+                workspace,
+                window,
+                cx,
+            );
+        });
+
+        let canvas: Entity<WorkflowCanvas> = workspace.read_with(cx, |workspace: &Workspace, cx| {
+                workspace
+                    .items_of_type::<WorkflowCanvas>(cx)
+                    .next()
+                    .expect("run canvas")
+            });
+
+        let panic_result = std::panic::catch_unwind(AssertUnwindSafe(|| {
+            canvas.update(cx, |_canvas, cx: &mut Context<WorkflowCanvas>| {
+                cx.emit(WorkflowCanvasEvent::NodeActivated("node-1".into()));
+            });
+        }));
+        cx.executor().run_until_parked();
+
+        assert!(panic_result.is_ok());
+    }
+
+    #[gpui::test]
     async fn test_mouse_select_emits_node_selected_event(cx: &mut gpui::TestAppContext) {
         use gpui::{Bounds, Modifiers, MouseButton, MouseDownEvent, size};
 
@@ -3704,8 +4084,8 @@ mod tests {
             name: "Workflow".into(),
             nodes: vec![WorkflowNode {
                 id: "node-1".into(),
-                node_type: "task".into(),
-                label: "Task".into(),
+                node_type: WORKFLOW_LLM_NODE_TYPE_ID.into(),
+                label: "Plan".into(),
                 configuration: serde_json::json!({}),
                 runtime: serde_json::json!({}),
             }],
@@ -3877,15 +4257,15 @@ mod tests {
             nodes: vec![
                 WorkflowNode {
                     id: "node-1".into(),
-                    node_type: "task".into(),
-                    label: "Task".into(),
+                    node_type: WORKFLOW_LLM_NODE_TYPE_ID.into(),
+                    label: "Plan".into(),
                     configuration: serde_json::json!({}),
                     runtime: serde_json::json!({}),
                 },
                 WorkflowNode {
                     id: "node-2".into(),
-                    node_type: "validation".into(),
-                    label: "Validation".into(),
+                    node_type: WORKFLOW_CONDITIONAL_NODE_TYPE_ID.into(),
+                    label: "Conditional".into(),
                     configuration: serde_json::json!({}),
                     runtime: serde_json::json!({}),
                 },
@@ -4046,18 +4426,18 @@ mod tests {
         if let Some(workflow) = run.workflow.as_mut() {
             workflow.nodes.push(WorkflowNode {
                 id: "node-2".into(),
-                node_type: "validation".into(),
-                label: "Validation".into(),
+                node_type: WORKFLOW_CONDITIONAL_NODE_TYPE_ID.into(),
+                label: "Conditional".into(),
                 configuration: serde_json::json!({}),
                 runtime: serde_json::json!({}),
             });
         }
         run.nodes.push(crate::client::TaskNodeStatus {
             id: "node-2".into(),
-            node_type: "validation".into(),
-            primitive: None,
-            category: Some(WorkflowNodeTypeCategory::Validation),
-            label: "Validation".into(),
+            node_type: WORKFLOW_CONDITIONAL_NODE_TYPE_ID.into(),
+            primitive: Some(crate::client::WorkflowNodePrimitive::Conditional),
+            category: None,
+            label: "Conditional".into(),
             status: TaskLifecycleStatus::Queued,
             output: None,
             session_id: None,
@@ -4143,15 +4523,15 @@ mod tests {
             nodes: vec![
                 WorkflowNode {
                     id: "node-1".into(),
-                    node_type: "task".into(),
-                    label: "Task".into(),
+                    node_type: WORKFLOW_LLM_NODE_TYPE_ID.into(),
+                    label: "Plan".into(),
                     configuration: serde_json::json!({}),
                     runtime: serde_json::json!({}),
                 },
                 WorkflowNode {
                     id: "node-2".into(),
-                    node_type: "validation".into(),
-                    label: "Validation".into(),
+                    node_type: WORKFLOW_CONDITIONAL_NODE_TYPE_ID.into(),
+                    label: "Conditional".into(),
                     configuration: serde_json::json!({}),
                     runtime: serde_json::json!({}),
                 },
@@ -4235,8 +4615,8 @@ mod tests {
             name: "Workflow".into(),
             nodes: vec![WorkflowNode {
                 id: "node-1".into(),
-                node_type: "task".into(),
-                label: "Task".into(),
+                node_type: WORKFLOW_LLM_NODE_TYPE_ID.into(),
+                label: "Plan".into(),
                 configuration: serde_json::json!({}),
                 runtime: serde_json::json!({}),
             }],
@@ -4288,15 +4668,15 @@ mod tests {
             nodes: vec![
                 WorkflowNode {
                     id: "node-1".into(),
-                    node_type: "task".into(),
-                    label: "Task".into(),
+                    node_type: WORKFLOW_LLM_NODE_TYPE_ID.into(),
+                    label: "Plan".into(),
                     configuration: serde_json::json!({}),
                     runtime: serde_json::json!({}),
                 },
                 WorkflowNode {
                     id: "node-2".into(),
-                    node_type: "validation".into(),
-                    label: "Validation".into(),
+                    node_type: WORKFLOW_CONDITIONAL_NODE_TYPE_ID.into(),
+                    label: "Conditional".into(),
                     configuration: serde_json::json!({}),
                     runtime: serde_json::json!({}),
                 },

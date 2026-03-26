@@ -7,7 +7,9 @@ mod runs;
 pub use canvas::{CanvasSelection, WorkflowCanvas, WorkflowCanvasEvent, open_run, open_workflow};
 pub use client::{
     NodePolicy, RetryBehavior, TaskLifecycleStatus, TaskNodeStatus, TaskRecord, TaskStatusResponse,
-    WorkflowClient, WorkflowComparisonOperator, WorkflowConditionGroup, WorkflowConditionGroupMode,
+    WORKFLOW_CONDITIONAL_NODE_TYPE_ID, WORKFLOW_EXECUTE_SHELL_COMMAND_NODE_TYPE_ID,
+    WORKFLOW_GLOBALS_NODE_TYPE_ID, WORKFLOW_LLM_NODE_TYPE_ID, WorkflowClient,
+    WorkflowComparisonOperator, WorkflowConditionGroup, WorkflowConditionGroupMode,
     WorkflowConditionNode, WorkflowConditionPredicate, WorkflowConditionalBranch,
     WorkflowConditionalBranchKind, WorkflowConditionalConfiguration, WorkflowDefinitionRecord,
     WorkflowDefinitionRequest, WorkflowEdge, WorkflowGlobalVariable, WorkflowGlobalsConfiguration,

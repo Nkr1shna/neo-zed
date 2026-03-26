@@ -40,5 +40,12 @@ uuid.workspace = true
 futures.workspace = true
 
 [dev-dependencies]
+client.workspace = true
+clock.workspace = true
+db = { workspace = true, features = ["test-support"] }
+fs.workspace = true
 gpui = { workspace = true, features = ["test-support"] }
+http_client = { workspace = true, features = ["test-support"] }
+node_runtime.workspace = true
+session.workspace = true
 settings = { workspace = true, features = ["test-support"] }

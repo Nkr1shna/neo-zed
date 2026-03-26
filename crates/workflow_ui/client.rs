@@ -112,6 +112,9 @@ pub struct WorkflowNodePort {
     pub label: String,
 }
 
+pub const WORKFLOW_LLM_NODE_TYPE_ID: &str = "llm";
+pub const WORKFLOW_EXECUTE_SHELL_COMMAND_NODE_TYPE_ID: &str = "execute_shell_command";
+pub const WORKFLOW_CONDITIONAL_NODE_TYPE_ID: &str = "conditional";
 pub const WORKFLOW_GLOBALS_NODE_TYPE_ID: &str = "workflow_globals";
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -652,8 +655,10 @@ pub(crate) fn infer_workflow_node_primitive(
     }
 
     match node_type_id {
-        "execute_shell_command" | "integration" => WorkflowNodePrimitive::ExecuteShellCommand,
-        "conditional" | "validation" => WorkflowNodePrimitive::Conditional,
+        WORKFLOW_EXECUTE_SHELL_COMMAND_NODE_TYPE_ID | "integration" => {
+            WorkflowNodePrimitive::ExecuteShellCommand
+        }
+        WORKFLOW_CONDITIONAL_NODE_TYPE_ID | "validation" => WorkflowNodePrimitive::Conditional,
         WORKFLOW_GLOBALS_NODE_TYPE_ID => WorkflowNodePrimitive::Globals,
         _ => WorkflowNodePrimitive::Llm,
     }
@@ -679,6 +684,11 @@ impl WorkflowClient {
                 None,
             )),
         })
+    }
+
+    #[cfg(any(test, feature = "test-support"))]
+    pub fn with_http_client(http: Arc<HttpClientWithUrl>) -> Arc<Self> {
+        Arc::new(Self { http })
     }
 
     async fn get_json<T: for<'de> Deserialize<'de>>(&self, path: &str) -> Result<T> {
@@ -939,7 +949,7 @@ mod tests {
             name: "my-workflow".to_string(),
             nodes: vec![WorkflowNode {
                 id: "n1".to_string(),
-                node_type: "task".to_string(),
+                node_type: WORKFLOW_LLM_NODE_TYPE_ID.to_string(),
                 label: "Build".to_string(),
                 configuration: serde_json::json!({
                     "repo": "example/runtime",
@@ -1038,7 +1048,7 @@ mod tests {
             "nodes": [
                 {
                     "id": "n1",
-                    "node_type": "task",
+                    "node_type": WORKFLOW_LLM_NODE_TYPE_ID,
                     "label": "Build",
                     "configuration": {"repo": "example/runtime"}
                 }
@@ -1058,7 +1068,7 @@ mod tests {
         }))
         .unwrap();
 
-        assert_eq!(workflow.nodes[0].node_type, "task");
+        assert_eq!(workflow.nodes[0].node_type, WORKFLOW_LLM_NODE_TYPE_ID);
         assert_eq!(workflow.nodes[0].configuration["repo"], "example/runtime");
         assert_eq!(workflow.edges[0].from_output_id, "success");
         assert_eq!(workflow.edges[0].to_input_id, "default");
@@ -1093,6 +1103,26 @@ mod tests {
         assert_eq!(workflow.edges[0].to_node_id, "n2");
         assert!(workflow.edges[0].from_output_id.is_empty());
         assert!(workflow.edges[0].to_input_id.is_empty());
+    }
+
+    #[test]
+    fn test_infer_workflow_node_primitive_supports_canonical_runtime_ids() {
+        assert_eq!(
+            infer_workflow_node_primitive(WORKFLOW_LLM_NODE_TYPE_ID, None, None),
+            WorkflowNodePrimitive::Llm
+        );
+        assert_eq!(
+            infer_workflow_node_primitive(WORKFLOW_EXECUTE_SHELL_COMMAND_NODE_TYPE_ID, None, None),
+            WorkflowNodePrimitive::ExecuteShellCommand
+        );
+        assert_eq!(
+            infer_workflow_node_primitive(WORKFLOW_CONDITIONAL_NODE_TYPE_ID, None, None),
+            WorkflowNodePrimitive::Conditional
+        );
+        assert_eq!(
+            infer_workflow_node_primitive(WORKFLOW_GLOBALS_NODE_TYPE_ID, None, None),
+            WorkflowNodePrimitive::Globals
+        );
     }
 
     #[test]

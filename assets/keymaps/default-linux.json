@@ -955,6 +955,12 @@
     },
   },
   {
+    "context": "(ProjectPanel && editing) > Editor",
+    "bindings": {
+      "space": "project_panel::InsertSpace",
+    },
+  },
+  {
     "context": "GitPanel && ChangesList",
     "bindings": {
       "left": "git_panel::CollapseSelectedEntry",

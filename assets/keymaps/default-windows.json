@@ -950,6 +950,13 @@
     },
   },
   {
+    "context": "(ProjectPanel && editing) > Editor",
+    "use_key_equivalents": true,
+    "bindings": {
+      "space": "project_panel::InsertSpace",
+    },
+  },
+  {
     "context": "GitPanel && ChangesList",
     "use_key_equivalents": true,
     "bindings": {

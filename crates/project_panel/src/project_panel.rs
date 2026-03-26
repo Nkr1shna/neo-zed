@@ -367,6 +367,8 @@ actions!(
         OpenSplitVertical,
         /// Opens the selected file in a horizontal split.
         OpenSplitHorizontal,
+        /// Inserts a space character while renaming files/directories.
+        InsertSpace,
         /// Toggles visibility of git-ignored files.
         ToggleHideGitIgnore,
         /// Toggles visibility of hidden files.
@@ -2040,6 +2042,13 @@ impl ProjectPanel {
             focus_opened_item,
             allow_preview,
         });
+    }
+
+    fn insert_space(&mut self, _: &InsertSpace, window: &mut Window, cx: &mut Context<Self>) {
+        if self.state.edit_state.is_some() {
+            self.filename_editor
+                .update(cx, |filename_editor, cx| filename_editor.insert(" ", window, cx));
+        }
     }
 
     fn split_entry(
@@ -6239,7 +6248,12 @@ impl ProjectPanel {
         dispatch_context.add("ProjectPanel");
         dispatch_context.add("menu");
 
-        let identifier = if self.filename_editor.focus_handle(cx).is_focused(window) {
+        let identifier = if self.state.edit_state.is_some()
+            || self
+                .filename_editor
+                .focus_handle(cx)
+                .is_focused(window)
+        {
             "editing"
         } else {
             "not_editing"
@@ -6644,6 +6658,7 @@ impl Render for ProjectPanel {
                 .on_action(cx.listener(Self::open_permanent))
                 .on_action(cx.listener(Self::open_split_vertical))
                 .on_action(cx.listener(Self::open_split_horizontal))
+                .on_action(cx.listener(Self::insert_space))
                 .on_action(cx.listener(Self::confirm))
                 .on_action(cx.listener(Self::cancel))
                 .on_action(cx.listener(Self::copy_path))

@@ -26,6 +26,11 @@ use uuid::Uuid;
 use workspace::dock::{DockPosition, PanelEvent};
 use workspace::{Panel, Workspace};
 
+#[cfg(test)]
+use crate::client::{
+    WORKFLOW_CONDITIONAL_NODE_TYPE_ID, WORKFLOW_EXECUTE_SHELL_COMMAND_NODE_TYPE_ID,
+};
+
 struct WorkflowDefsCache(Entity<WorkflowDefsCacheStore>);
 
 impl Global for WorkflowDefsCache {}
@@ -2669,18 +2674,18 @@ mod tests {
 
     fn conditional_node_type() -> crate::client::WorkflowNodeType {
         crate::client::WorkflowNodeType {
-            id: "validation".into(),
-            label: "Validation".into(),
+            id: WORKFLOW_CONDITIONAL_NODE_TYPE_ID.into(),
+            label: "Conditional".into(),
             primitive: Some(crate::client::WorkflowNodePrimitive::Conditional),
             category: None,
-            is_primitive: false,
+            is_primitive: true,
             inputs: vec![crate::client::WorkflowNodePort {
                 id: "default".into(),
                 label: "Input".into(),
             }],
             outputs: vec![crate::client::WorkflowNodePort {
-                id: "passed".into(),
-                label: "Passed".into(),
+                id: "if_1".into(),
+                label: "If".into(),
             }],
             configure_time_fields: vec![],
             runtime_fields: vec![],
@@ -2857,14 +2862,14 @@ mod tests {
             nodes: vec![
                 crate::client::WorkflowNode {
                     id: "shell".into(),
-                    node_type: "execute_shell_command".into(),
+                    node_type: WORKFLOW_EXECUTE_SHELL_COMMAND_NODE_TYPE_ID.into(),
                     label: "Build".into(),
                     configuration: serde_json::json!({}),
                     runtime: serde_json::json!({}),
                 },
                 crate::client::WorkflowNode {
                     id: "condition".into(),
-                    node_type: "validation".into(),
+                    node_type: WORKFLOW_CONDITIONAL_NODE_TYPE_ID.into(),
                     label: "Route".into(),
                     configuration: serde_json::to_value(
                         crate::client::WorkflowConditionalConfiguration::default(),
@@ -2890,7 +2895,7 @@ mod tests {
             panel.node_types = crate::client::editor_node_types(vec![
                 conditional_node_type(),
                 crate::client::WorkflowNodeType {
-                    id: "execute_shell_command".into(),
+                    id: WORKFLOW_EXECUTE_SHELL_COMMAND_NODE_TYPE_ID.into(),
                     label: "Execute Shell Command".into(),
                     primitive: Some(crate::client::WorkflowNodePrimitive::ExecuteShellCommand),
                     category: None,

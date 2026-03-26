@@ -83,24 +83,32 @@ mod inspector;
 mod picker;
 mod runs;
 
-pub use canvas::WorkflowCanvas;
-pub use client::{WorkflowClient, WorkflowNodeKind, TaskLifecycleStatus};
-pub use inspector::{NodeInspectorPanel, WorkflowDefsView};
-pub use runs::{WorkflowRunsView, WorkflowPicker, RunCreationModal};
+pub use canvas::{CanvasSelection, WorkflowCanvas, WorkflowCanvasEvent, open_run, open_workflow};
+pub use client::{
+    TaskLifecycleStatus, WorkflowClient, WorkflowNodePrimitive, WorkflowNodeType,
+};
+pub use inspector::{NewWorkflow, NodeInspectorPanel, OpenWorkflowDef, WorkflowDefsView};
+pub use picker::{WorkflowPicker, WorkflowPickerDelegate};
+pub use runs::{OpenWorkflowPicker, OpenWorkflowRun, WorkflowRunsView};
 
-use gpui::{App, Window};
+use gpui::App;
 use workspace::Workspace;
 
-pub fn init(_cx: &mut App) {
-    // Reserved for future global init (feature flags, settings, etc.)
-    // Do NOT register a GPUI Global here — pass Arc<WorkflowClient>
-    // explicitly to each view constructor instead.
+pub fn init(cx: &mut App) {
+    cx.observe_new(|workspace: &mut Workspace, window, cx| {
+        register(workspace, window, cx);
+    })
+    .detach();
 }
 
-pub fn register(workspace: &mut Workspace, window: &mut Window, cx: &mut gpui::Context<Workspace>) {
+pub fn register(
+    workspace: &mut Workspace,
+    window: Option<&mut gpui::Window>,
+    cx: &mut gpui::Context<Workspace>,
+) {
     inspector::register(workspace, window, cx);
-    runs::register(workspace, window, cx);
-    canvas::register(workspace, window, cx);
+    runs::register(workspace, None, cx);
+    picker::register(workspace, None, cx);
 }
 ```
 
@@ -108,32 +116,33 @@ pub fn register(workspace: &mut Workspace, window: &mut Window, cx: &mut gpui::C
 
 ## Data models (`client.rs`)
 
-Mirror the runtime API types exactly, including proper enums for `kind` and `status` fields.
+Mirror the runtime API types exactly. The canonical workflow graph shape uses
+`node_type` plus port-aware edges; the editor should only rely on legacy
+`kind`/`from`/`to` aliases for backward-compatible deserialization.
 
 ```rust
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 use std::collections::BTreeMap;
-use std::sync::Arc;
 
 // ── Enums ───────────────────────────────────────────────────────────────────
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
-pub enum WorkflowNodeKind {
-    Task,
-    Validation,
-    Review,
-    Integration,
+pub enum WorkflowNodePrimitive {
+    Llm,
+    ExecuteShellCommand,
+    Conditional,
+    Globals,
 }
 
-impl WorkflowNodeKind {
+impl WorkflowNodePrimitive {
     pub fn display_name(&self) -> &'static str {
         match self {
-            Self::Task => "Task",
-            Self::Validation => "Validation",
-            Self::Review => "Review",
-            Self::Integration => "Integration",
+            Self::Llm => "LLM",
+            Self::ExecuteShellCommand => "Execute Shell Command",
+            Self::Conditional => "Conditional",
+            Self::Globals => "Globals",
         }
     }
 }
@@ -158,14 +167,25 @@ impl TaskLifecycleStatus {
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct WorkflowNode {
     pub id: String,
-    pub kind: WorkflowNodeKind,
+    #[serde(alias = "kind")]
+    pub node_type: String,
     pub label: String,
+    #[serde(default, alias = "config", alias = "configure_time")]
+    pub configuration: serde_json::Value,
+    #[serde(default)]
+    pub runtime: serde_json::Value,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct WorkflowEdge {
-    pub from: String,
-    pub to: String,
+    #[serde(alias = "from")]
+    pub from_node_id: String,
+    #[serde(default)]
+    pub from_output_id: String,
+    #[serde(alias = "to")]
+    pub to_node_id: String,
+    #[serde(default)]
+    pub to_input_id: String,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -229,7 +249,9 @@ pub struct TaskRecord {
 #[derive(Clone, Debug, Deserialize)]
 pub struct TaskNodeStatus {
     pub id: String,
-    pub kind: WorkflowNodeKind,
+    pub node_type: String,
+    #[serde(default)]
+    pub primitive: Option<WorkflowNodePrimitive>,
     pub label: String,
     pub status: TaskLifecycleStatus,
     pub output: Option<String>,
@@ -251,12 +273,10 @@ pub struct TaskStatusResponse {
 }
 ```
 
-> **Intentional use of `serde_json::Value` for unused fields:** The runtime's
-> `TaskStatusResponse` has additional fields (`outcome`, `agent`, `lease`, etc.)
-> that the UI does not yet consume. Capturing them as `Value` ensures
-> deserialization succeeds even if the runtime adds sub-fields, and documents
-> the presence of these fields for future implementers. Replace with typed
-> structs as the UI evolves.
+> **Compatibility note:** `client.rs` should accept legacy workflow payloads,
+> but editor-created requests should serialize the runtime's canonical
+> primitive-node contract (`node_type`, `configuration`, `runtime`,
+> `from_node_id`, `from_output_id`, `to_node_id`, `to_input_id`).
 
 ---
 
@@ -413,8 +433,8 @@ fn show_error<E: Debug + Display>(&mut self, err: &E, cx: &mut Context<Self>)
 
 ## Testing checklist
 
-- `list_workflows()` deserializes a valid response including `WorkflowNodeKind` enum
-- `create_workflow()` serializes `WorkflowNodeKind` as snake_case in the JSON body
+- `list_workflows()` deserializes canonical `node_type` workflow nodes and port-aware edges
+- `create_workflow()` serializes canonical primitive node IDs and edge port fields
 - `run_workflow()` sends `task_description: null` when `None` (not omitted)
 - `get_task_status()` deserializes `TaskStatusResponse` with all fields present
 - `TaskLifecycleStatus::is_terminal()` returns `true` for `Completed`/`Failed` only

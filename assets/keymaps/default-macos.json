@@ -1014,6 +1014,13 @@
     },
   },
   {
+    "context": "(ProjectPanel && editing) > Editor",
+    "use_key_equivalents": true,
+    "bindings": {
+      "space": "project_panel::InsertSpace",
+    },
+  },
+  {
     "context": "VariableList",
     "use_key_equivalents": true,
     "bindings": {
