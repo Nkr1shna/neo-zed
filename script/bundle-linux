@@ -173,17 +173,17 @@ export APP_CLI="zed"
 export APP_ICON="zed"
 export APP_ARGS="%U"
 if [[ "$channel" == "preview" ]]; then
-  export APP_NAME="Zed Preview"
-  APP_ID="dev.zed.Zed-Preview"
+  export APP_NAME="NeoZed Preview"
+  APP_ID="dev.neozed.NeoZed-Preview"
 elif [[ "$channel" == "nightly" ]]; then
-  export APP_NAME="Zed Nightly"
-  APP_ID="dev.zed.Zed-Nightly"
+  export APP_NAME="NeoZed Nightly"
+  APP_ID="dev.neozed.NeoZed-Nightly"
 elif [[ "$channel" == "dev" ]]; then
-  export APP_NAME="Zed Devel"
-  APP_ID="dev.zed.Zed-Dev"
+  export APP_NAME="NeoZed Dev"
+  APP_ID="dev.neozed.NeoZed-Dev"
 else
-  export APP_NAME="Zed"
-  APP_ID="dev.zed.Zed"
+  export APP_NAME="NeoZed"
+  APP_ID="dev.neozed.NeoZed"
 fi
 
 mkdir -p "${zed_dir}/share/applications"
@@ -202,4 +202,4 @@ remove_match="zed(-[a-zA-Z0-9]+)?-linux-$(uname -m)\.tar\.gz"
 ls "${target_dir}/release" | grep -E ${remove_match} | xargs -d "\n" -I {} rm -f "${target_dir}/release/{}" || true
 tar -czvf "${target_dir}/release/$archive" -C ${temp_dir} "zed$suffix.app"
 
-gzip -f --stdout --best "${target_dir}/${remote_server_triple}/release/remote_server" > "${target_dir}/zed-remote-server-linux-${arch}.gz"
+gzip -f --stdout --best "${target_dir}/${remote_server_triple}/release/remote_server" > "${target_dir}/neozed-remote-server-linux-${arch}.gz"

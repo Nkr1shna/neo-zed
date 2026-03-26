@@ -58,24 +58,24 @@ linux() {
     db_suffix="stable"
     case "$channel" in
       stable)
-        appid="dev.zed.Zed"
+        appid="dev.neozed.NeoZed"
         db_suffix="stable"
         ;;
       nightly)
-        appid="dev.zed.Zed-Nightly"
+        appid="dev.neozed.NeoZed-Nightly"
         db_suffix="nightly"
         ;;
       preview)
-        appid="dev.zed.Zed-Preview"
+        appid="dev.neozed.NeoZed-Preview"
         db_suffix="preview"
         ;;
       dev)
-        appid="dev.zed.Zed-Dev"
+        appid="dev.neozed.NeoZed-Dev"
         db_suffix="dev"
         ;;
       *)
         echo "Unknown release channel: ${channel}. Using stable app ID."
-        appid="dev.zed.Zed"
+        appid="dev.neozed.NeoZed"
         db_suffix="stable"
         ;;
     esac
@@ -93,7 +93,7 @@ linux() {
     rm -rf "$HOME/.local/share/neozed/db/0-$db_suffix"
 
     # Remove socket file
-    rm -f "$HOME/.local/share/neozed/zed-$db_suffix.sock"
+    rm -f "$HOME/.local/share/neozed/neozed-$db_suffix.sock"
 
     # Remove the entire NeoZed directory if no installations remain
     if check_remaining_installations; then
@@ -101,28 +101,28 @@ linux() {
         prompt_remove_preferences
     fi
 
-    rm -rf $HOME/.zed_server
+    rm -rf $HOME/.neozed_server
 }
 
 macos() {
     app="NeoZed.app"
     db_suffix="stable"
-    app_id="dev.zed.Zed"
+    app_id="dev.neozed.NeoZed"
     case "$channel" in
       nightly)
         app="NeoZed Nightly.app"
         db_suffix="nightly"
-        app_id="dev.zed.Zed-Nightly"
+        app_id="dev.neozed.NeoZed-Nightly"
         ;;
       preview)
         app="NeoZed Preview.app"
         db_suffix="preview"
-        app_id="dev.zed.Zed-Preview"
+        app_id="dev.neozed.NeoZed-Preview"
         ;;
       dev)
         app="NeoZed Dev.app"
         db_suffix="dev"
-        app_id="dev.zed.Zed-Dev"
+        app_id="dev.neozed.NeoZed-Dev"
         ;;
     esac
 
@@ -144,7 +144,7 @@ macos() {
     rm -rf "$HOME/Library/Preferences/$app_id.plist"
     rm -rf "$HOME/Library/Saved Application State/$app_id.savedState"
 
-    # Remove the entire Zed directory if no installations remain
+    # Remove the entire NeoZed directory if no installations remain
     if check_remaining_installations; then
         rm -rf "$HOME/Library/Application Support/NeoZed"
         rm -rf "$HOME/Library/Logs/NeoZed"
@@ -152,7 +152,7 @@ macos() {
         prompt_remove_preferences
     fi
 
-    rm -rf $HOME/.zed_server
+    rm -rf $HOME/.neozed_server
 }
 
 main "$@"

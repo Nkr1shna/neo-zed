@@ -28,10 +28,10 @@ pub static RELEASE_CHANNEL: LazyLock<ReleaseChannel> =
 #[cfg(target_os = "windows")]
 pub fn app_identifier() -> &'static str {
     match *RELEASE_CHANNEL {
-        ReleaseChannel::Dev => "Zed-Editor-Dev",
-        ReleaseChannel::Nightly => "Zed-Editor-Nightly",
-        ReleaseChannel::Preview => "Zed-Editor-Preview",
-        ReleaseChannel::Stable => "Zed-Editor-Stable",
+        ReleaseChannel::Dev => "NeoZed-Editor-Dev",
+        ReleaseChannel::Nightly => "NeoZed-Editor-Nightly",
+        ReleaseChannel::Preview => "NeoZed-Editor-Preview",
+        ReleaseChannel::Stable => "NeoZed-Editor-Stable",
     }
 }
 
@@ -118,12 +118,12 @@ impl AppVersion {
     }
 }
 
-/// A Zed release channel.
+/// A NeoZed release channel.
 #[derive(Debug, Copy, Clone, PartialEq, Eq, Default)]
 pub enum ReleaseChannel {
     /// The development release channel.
     ///
-    /// Used for local debug builds of Zed.
+    /// Used for local debug builds of NeoZed.
     #[default]
     Dev,
 
@@ -192,13 +192,13 @@ impl ReleaseChannel {
 
     /// Returns the application ID that's used by Wayland as application ID
     /// and WM_CLASS on X11.
-    /// This also has to match the bundle identifier for Zed on macOS.
+    /// This also has to match the bundle identifier for NeoZed on macOS.
     pub fn app_id(&self) -> &'static str {
         match self {
-            ReleaseChannel::Dev => "dev.zed.Zed-Dev",
-            ReleaseChannel::Nightly => "dev.zed.Zed-Nightly",
-            ReleaseChannel::Preview => "dev.zed.Zed-Preview",
-            ReleaseChannel::Stable => "dev.zed.Zed",
+            ReleaseChannel::Dev => "dev.neozed.NeoZed-Dev",
+            ReleaseChannel::Nightly => "dev.neozed.NeoZed-Nightly",
+            ReleaseChannel::Preview => "dev.neozed.NeoZed-Preview",
+            ReleaseChannel::Stable => "dev.neozed.NeoZed",
         }
     }
 
@@ -228,5 +228,32 @@ impl FromStr for ReleaseChannel {
             "stable" => ReleaseChannel::Stable,
             _ => return Err(InvalidReleaseChannel),
         })
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::ReleaseChannel;
+
+    #[test]
+    fn display_names_use_neozed_branding() {
+        assert_eq!(ReleaseChannel::Dev.display_name(), "NeoZed Dev");
+        assert_eq!(ReleaseChannel::Nightly.display_name(), "NeoZed Nightly");
+        assert_eq!(ReleaseChannel::Preview.display_name(), "NeoZed Preview");
+        assert_eq!(ReleaseChannel::Stable.display_name(), "NeoZed");
+    }
+
+    #[test]
+    fn app_ids_use_neozed_branding() {
+        assert_eq!(ReleaseChannel::Dev.app_id(), "dev.neozed.NeoZed-Dev");
+        assert_eq!(
+            ReleaseChannel::Nightly.app_id(),
+            "dev.neozed.NeoZed-Nightly"
+        );
+        assert_eq!(
+            ReleaseChannel::Preview.app_id(),
+            "dev.neozed.NeoZed-Preview"
+        );
+        assert_eq!(ReleaseChannel::Stable.app_id(), "dev.neozed.NeoZed");
     }
 }

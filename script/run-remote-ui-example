@@ -9,13 +9,13 @@ user_data_dir="${REMOTE_UI_EXAMPLE_USER_DATA_DIR:-}"
 if [[ -n "${user_data_dir}" ]]; then
     install_root="${user_data_dir}/extensions/installed/${extension_id}"
 else
-    install_root="${HOME}/Library/Application Support/Zed/extensions/installed/${extension_id}"
+    install_root="${HOME}/Library/Application Support/NeoZed/extensions/installed/${extension_id}"
 fi
 icon_root="${install_root}/icons"
 
 cd "${repo_root}"
 
-pkill -f '/Applications/Zed.app/Contents/MacOS/zed' || true
+pkill -f '/Applications/NeoZed.app/Contents/MacOS/zed' || true
 pkill -f 'target/debug/zed' || true
 
 cargo build -p zed
@@ -57,7 +57,7 @@ if [[ -n "${user_data_dir}" ]]; then
     RUST_LOG="${RUST_LOG:-extension_host=info,zed::zed::remote_ui_extension=info}" \
         "${cargo_target_dir}/debug/zed" --user-data-dir "${user_data_dir}" "${repo_root}"
 else
-    rm -f "${HOME}/Library/Application Support/Zed/extensions/index.json"
+    rm -f "${HOME}/Library/Application Support/NeoZed/extensions/index.json"
     RUST_LOG="${RUST_LOG:-extension_host=info,zed::zed::remote_ui_extension=info}" \
         "${cargo_target_dir}/debug/zed" "${repo_root}"
 fi

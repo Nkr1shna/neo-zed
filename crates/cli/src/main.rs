@@ -78,11 +78,11 @@ struct Args {
     reuse: bool,
     /// Sets a custom directory for all user data (e.g., database, extensions, logs).
     /// This overrides the default platform-specific data directory location:
-    #[cfg_attr(target_os = "macos", doc = "`~/Library/Application Support/Zed`.")]
-    #[cfg_attr(target_os = "windows", doc = "`%LOCALAPPDATA%\\Zed`.")]
+    #[cfg_attr(target_os = "macos", doc = "`~/Library/Application Support/NeoZed`.")]
+    #[cfg_attr(target_os = "windows", doc = "`%LOCALAPPDATA%\\NeoZed`.")]
     #[cfg_attr(
         not(any(target_os = "windows", target_os = "macos")),
-        doc = "`$XDG_DATA_HOME/zed`."
+        doc = "`$XDG_DATA_HOME/neozed`."
     )]
     #[arg(long, value_name = "DIR")]
     user_data_dir: Option<String>,
@@ -843,7 +843,7 @@ mod linux {
                 .unwrap_or_else(|| paths::data_dir().clone());
 
             let sock_path = data_dir.join(format!(
-                "zed-{}.sock",
+                "neozed-{}.sock",
                 *release_channel::RELEASE_CHANNEL_NAME
             ));
             let sock = UnixDatagram::unbound()?;
@@ -982,7 +982,7 @@ mod flatpak {
 
     pub fn set_bin_if_no_escape(mut args: super::Args) -> super::Args {
         if env::var(NO_ESCAPE_ENV_NAME).is_ok()
-            && env::var("FLATPAK_ID").is_ok_and(|id| id.starts_with("dev.zed.Zed"))
+            && env::var("FLATPAK_ID").is_ok_and(|id| id.starts_with("dev.neozed.NeoZed"))
             && args.zed.is_none()
         {
             args.zed = Some("/app/libexec/zed-editor".into());
@@ -997,7 +997,7 @@ mod flatpak {
         }
 
         if let Ok(flatpak_id) = env::var("FLATPAK_ID") {
-            if !flatpak_id.starts_with("dev.zed.Zed") {
+            if !flatpak_id.starts_with("dev.neozed.NeoZed") {
                 return None;
             }
 

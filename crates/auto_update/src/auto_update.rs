@@ -498,7 +498,7 @@ impl AutoUpdater {
         true
     }
 
-    // If you are packaging Zed and need to override the place it downloads SSH remotes from,
+    // If you are packaging NeoZed and need to override the place it downloads SSH remotes from,
     // you can override this function. You should also update get_remote_server_release_url to return
     // Ok(None).
     pub async fn download_remote_server_release(
@@ -521,7 +521,7 @@ impl AutoUpdater {
             &this,
             release_channel,
             version,
-            "zed-remote-server",
+            "neozed-remote-server",
             os,
             arch,
             cx,
@@ -538,7 +538,7 @@ impl AutoUpdater {
 
         if smol::fs::metadata(&version_path).await.is_err() {
             log::info!(
-                "downloading zed-remote-server {os} {arch} version {}",
+                "downloading neozed-remote-server {os} {arch} version {}",
                 release.version
             );
             set_status("Downloading remote server", cx);
@@ -573,7 +573,7 @@ impl AutoUpdater {
         })?;
 
         let release =
-            Self::get_release_asset(&this, channel, version, "zed-remote-server", os, arch, cx)
+            Self::get_release_asset(&this, channel, version, "neozed-remote-server", os, arch, cx)
                 .await?;
 
         Ok(Some(release.url))

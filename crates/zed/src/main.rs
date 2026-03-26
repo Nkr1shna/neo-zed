@@ -150,7 +150,7 @@ fn fail_to_open_window(e: anyhow::Error, _cx: &mut App) {
                 process::exit(1);
             };
 
-            let notification_id = "dev.zed.Oops";
+            let notification_id = "dev.neozed.Oops";
             proxy
                 .add_notification(
                     notification_id,
@@ -1601,9 +1601,9 @@ struct Args {
     /// Sets a custom directory for all user data (e.g., database, extensions, logs).
     ///
     /// This overrides the default platform-specific data directory location.
-    /// On macOS, the default is `~/Library/Application Support/Zed`.
-    /// On Linux/FreeBSD, the default is `$XDG_DATA_HOME/zed`.
-    /// On Windows, the default is `%LOCALAPPDATA%\Zed`.
+    /// On macOS, the default is `~/Library/Application Support/NeoZed`.
+    /// On Linux/FreeBSD, the default is `$XDG_DATA_HOME/neozed`.
+    /// On Windows, the default is `%LOCALAPPDATA%\NeoZed`.
     #[arg(long, value_name = "DIR", verbatim_doc_comment)]
     user_data_dir: Option<String>,
 

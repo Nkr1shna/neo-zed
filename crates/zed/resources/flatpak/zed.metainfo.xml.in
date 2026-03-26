@@ -6,7 +6,7 @@
 
     <name>$APP_NAME</name>
     <summary>High-performance, multiplayer code editor</summary>
-    <developer id="dev.zed">
+    <developer id="dev.neozed">
         <name translate="no">Zed Industries, Inc.</name>
     </developer>
     <description>
