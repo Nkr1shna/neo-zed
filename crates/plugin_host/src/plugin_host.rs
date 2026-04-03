@@ -131,7 +131,9 @@ mod host {
     use std::{
         any::TypeId,
         collections::{BTreeMap, BTreeSet},
-        path::PathBuf,
+        env,
+        ffi::OsString,
+        path::{Path, PathBuf},
         process::Stdio,
         time::Duration,
     };
@@ -3381,33 +3383,257 @@ mod host {
         }
     }
 
-    fn build_command(plugin: &InstalledPlugin) -> Result<Command> {
+    #[derive(Clone, Debug, PartialEq, Eq)]
+    struct PluginLaunchSpec {
+        program: OsString,
+        args: Vec<OsString>,
+        current_dir: PathBuf,
+        cargo_target_dir: Option<PathBuf>,
+    }
+
+    fn cargo_target_dir(plugin_root: &Path) -> PathBuf {
+        plugin_root.join(".zed-plugin-target")
+    }
+
+    fn build_launch_spec(plugin: &InstalledPlugin) -> Result<PluginLaunchSpec> {
         let plugin_root = plugin.installation.root.clone();
         let cargo_manifest = plugin_root.join("Cargo.toml");
 
-        let mut command = if cargo_manifest.exists() {
-            let mut command = Command::new("cargo");
-            command
-                .arg("run")
-                .arg("--quiet")
-                .arg("--manifest-path")
-                .arg(cargo_manifest)
-                .arg("--bin")
-                .arg(plugin.manifest.entrypoint.to_string_lossy().to_string())
-                .arg("--features")
-                .arg("mirror");
-            command
+        if cargo_manifest.exists() {
+            return Ok(PluginLaunchSpec {
+                program: OsString::from("cargo"),
+                args: vec![
+                    OsString::from("run"),
+                    OsString::from("--quiet"),
+                    OsString::from("--manifest-path"),
+                    cargo_manifest.into_os_string(),
+                    OsString::from("--bin"),
+                    plugin.manifest.entrypoint.as_os_str().to_os_string(),
+                    OsString::from("--features"),
+                    OsString::from("mirror"),
+                ],
+                current_dir: plugin_root.clone(),
+                cargo_target_dir: Some(cargo_target_dir(&plugin_root)),
+            });
+        }
+
+        let executable_path = if plugin.manifest.entrypoint.is_absolute() {
+            plugin.manifest.entrypoint.clone()
         } else {
-            let executable_path = if plugin.manifest.entrypoint.is_absolute() {
-                plugin.manifest.entrypoint.clone()
-            } else {
-                plugin_root.join(&plugin.manifest.entrypoint)
-            };
-            Command::new(executable_path)
+            plugin_root.join(&plugin.manifest.entrypoint)
         };
 
+        Ok(PluginLaunchSpec {
+            program: executable_path.into_os_string(),
+            args: Vec::new(),
+            current_dir: plugin_root,
+            cargo_target_dir: None,
+        })
+    }
+
+    #[cfg(target_os = "macos")]
+    fn insert_home_runtime_paths(paths: &mut BTreeSet<PathBuf>) {
+        paths.insert(env::temp_dir());
+
+        if let Some(tmpdir) = env::var_os("TMPDIR").map(PathBuf::from) {
+            paths.insert(tmpdir);
+        }
+
+        let home_dir = env::var_os("HOME")
+            .map(PathBuf::from)
+            .unwrap_or_else(|| paths::home_dir().clone());
+        if !home_dir.as_os_str().is_empty() {
+            paths.insert(home_dir.join("Library").join("Keychains"));
+            paths.insert(home_dir.join("Library").join("Preferences"));
+        }
+    }
+
+    #[cfg(target_os = "macos")]
+    fn sandbox_readable_paths(
+        plugin: &InstalledPlugin,
+        launch_spec: &PluginLaunchSpec,
+    ) -> Vec<PathBuf> {
+        let mut paths = BTreeSet::from([
+            PathBuf::from("/System"),
+            PathBuf::from("/usr"),
+            PathBuf::from("/bin"),
+            PathBuf::from("/sbin"),
+            PathBuf::from("/Library"),
+            PathBuf::from("/private/etc"),
+            PathBuf::from("/private/var"),
+            PathBuf::from("/dev"),
+            PathBuf::from("/opt/homebrew"),
+            plugin.installation.root.clone(),
+        ]);
+        insert_home_runtime_paths(&mut paths);
+
+        if let Some(cargo_target_dir) = &launch_spec.cargo_target_dir {
+            paths.insert(cargo_target_dir.clone());
+            paths.extend(cargo_workspace_write_paths(&plugin.installation.root));
+            paths.insert(
+                env::var_os("CARGO_HOME")
+                    .map(PathBuf::from)
+                    .unwrap_or_else(|| paths::home_dir().join(".cargo")),
+            );
+            paths.insert(
+                env::var_os("RUSTUP_HOME")
+                    .map(PathBuf::from)
+                    .unwrap_or_else(|| paths::home_dir().join(".rustup")),
+            );
+        }
+
+        paths.into_iter().collect()
+    }
+
+    #[cfg(target_os = "macos")]
+    fn sandbox_writable_paths(
+        plugin: &InstalledPlugin,
+        launch_spec: &PluginLaunchSpec,
+    ) -> Vec<PathBuf> {
+        let mut paths = BTreeSet::new();
+        paths.insert(plugin.installation.root.clone());
+        paths.insert(
+            paths::data_dir()
+                .join("plugins")
+                .join(plugin.manifest.id.as_str()),
+        );
+        paths.insert(
+            paths::temp_dir()
+                .join("plugins")
+                .join(plugin.manifest.id.as_str()),
+        );
+        insert_home_runtime_paths(&mut paths);
+
+        if let Some(cargo_target_dir) = &launch_spec.cargo_target_dir {
+            paths.insert(cargo_target_dir.clone());
+            paths.extend(cargo_workspace_write_paths(&plugin.installation.root));
+            paths.insert(
+                env::var_os("CARGO_HOME")
+                    .map(PathBuf::from)
+                    .unwrap_or_else(|| paths::home_dir().join(".cargo")),
+            );
+            paths.insert(
+                env::var_os("RUSTUP_HOME")
+                    .map(PathBuf::from)
+                    .unwrap_or_else(|| paths::home_dir().join(".rustup")),
+            );
+        }
+
+        paths.into_iter().collect()
+    }
+
+    #[cfg(target_os = "macos")]
+    fn cargo_workspace_write_paths(plugin_root: &Path) -> Vec<PathBuf> {
+        plugin_root
+            .ancestors()
+            .filter(|ancestor| {
+                ancestor.join("Cargo.toml").exists() || ancestor.join("Cargo.lock").exists()
+            })
+            .map(Path::to_path_buf)
+            .collect()
+    }
+
+    #[cfg(target_os = "macos")]
+    fn sbpl_quote(value: &str) -> String {
+        let escaped = value.replace('\\', "\\\\").replace('\"', "\\\"");
+        format!("\"{escaped}\"")
+    }
+
+    #[cfg(target_os = "macos")]
+    fn plugin_sandbox_profile(plugin: &InstalledPlugin, launch_spec: &PluginLaunchSpec) -> String {
+        let mut profile = String::from(
+            r#"(version 1)
+(deny default)
+(import "system.sb")
+(import "com.apple.corefoundation.sb")
+(corefoundation)
+(allow process-info* (target self))
+"#,
+        );
+
+        let readable_paths = sandbox_readable_paths(plugin, launch_spec);
+        profile.push_str("(allow file-read*\n");
+        for path in readable_paths {
+            profile.push_str(&format!(
+                "       (subpath {})\n",
+                sbpl_quote(path.as_os_str().to_string_lossy().as_ref())
+            ));
+        }
+        profile.push_str(")\n");
+
+        let writable_paths = sandbox_writable_paths(plugin, launch_spec);
+        profile.push_str("(allow file-write*\n");
+        for path in writable_paths {
+            profile.push_str(&format!(
+                "       (subpath {})\n",
+                sbpl_quote(path.as_os_str().to_string_lossy().as_ref())
+            ));
+        }
+        profile.push_str(")\n");
+        profile.push_str(
+            r#"(allow network*)
+(allow process-fork)
+(allow process-exec*)
+(allow lsopen)
+(allow mach-lookup
+       (global-name "com.apple.SecurityServer")
+       (global-name "com.apple.SystemConfiguration.configd")
+       (global-name "com.apple.coreservices.quarantine-resolver")
+       (global-name "com.apple.dnssd.service")
+       (global-name "com.apple.lsd.mapdb")
+       (global-name "com.apple.securityd.xpc")
+       (global-name "com.apple.system.opendirectoryd.api"))
+"#,
+        );
+        profile
+    }
+
+    #[cfg(target_os = "macos")]
+    fn sandbox_launch_spec(
+        plugin: &InstalledPlugin,
+        launch_spec: PluginLaunchSpec,
+    ) -> Result<PluginLaunchSpec> {
+        let sandbox_executable = PathBuf::from("/usr/bin/sandbox-exec");
+        if !sandbox_executable.exists() {
+            anyhow::bail!(
+                "plugin sandbox executable {} is not available",
+                sandbox_executable.display()
+            );
+        }
+
+        let mut args = Vec::with_capacity(launch_spec.args.len() + 3);
+        args.push(OsString::from("-p"));
+        args.push(OsString::from(plugin_sandbox_profile(plugin, &launch_spec)));
+        args.push(launch_spec.program.clone());
+        args.extend(launch_spec.args.clone());
+
+        Ok(PluginLaunchSpec {
+            program: sandbox_executable.into_os_string(),
+            args,
+            current_dir: launch_spec.current_dir,
+            cargo_target_dir: launch_spec.cargo_target_dir,
+        })
+    }
+
+    #[cfg(not(target_os = "macos"))]
+    fn sandbox_launch_spec(
+        _plugin: &InstalledPlugin,
+        launch_spec: PluginLaunchSpec,
+    ) -> Result<PluginLaunchSpec> {
+        Ok(launch_spec)
+    }
+
+    fn build_command(plugin: &InstalledPlugin) -> Result<Command> {
+        let launch_spec = sandbox_launch_spec(plugin, build_launch_spec(plugin)?)?;
+        let mut command = Command::new(&launch_spec.program);
+        command.args(&launch_spec.args);
+
+        if let Some(cargo_target_dir) = launch_spec.cargo_target_dir {
+            command.env("CARGO_TARGET_DIR", cargo_target_dir);
+        }
+
         command
-            .current_dir(plugin_root)
+            .current_dir(launch_spec.current_dir)
             .stdin(Stdio::piped())
             .stdout(Stdio::piped())
             .stderr(Stdio::piped())
@@ -3961,6 +4187,190 @@ edition = "2021"
                 registration_timeout_for_plugin(&plugin, true),
                 Duration::from_millis(75)
             );
+        }
+
+        #[cfg(target_os = "macos")]
+        #[test]
+        fn build_command_wraps_plugins_in_sandbox_exec_on_macos() {
+            let temp_dir = TempDir::new().expect("temp plugin dir");
+            let plugin_root = temp_dir.path().join("sandboxed-plugin");
+            write_fake_plugin(
+                &plugin_root,
+                r#"
+id = "sandboxed-plugin"
+name = "Sandboxed Plugin"
+version = "0.1.0"
+schema_version = 1
+entry = "fake-plugin"
+"#,
+            )
+            .expect("write fake plugin");
+
+            let plugin = plugin::InstalledPlugin {
+                manifest: plugin::PluginManifest {
+                    id: PluginId::new("sandboxed-plugin"),
+                    name: "Sandboxed Plugin".into(),
+                    version: "0.1.0".into(),
+                    schema_version: 1,
+                    description: None,
+                    authors: Vec::new(),
+                    repository: None,
+                    homepage: None,
+                    entrypoint: PathBuf::from("fake-plugin"),
+                    panels: Vec::new(),
+                    titlebar_widgets: Vec::new(),
+                },
+                state: PluginInstallState::Installed,
+                installation: plugin::PluginInstallation {
+                    root: plugin_root.clone(),
+                    source: plugin::PluginInstallSource::Directory(plugin_root.clone()),
+                },
+                error_message: None,
+            };
+
+            let command = build_command(&plugin).expect("build sandboxed command");
+            let args = command
+                .get_args()
+                .map(|argument| argument.to_string_lossy().into_owned())
+                .collect::<Vec<_>>();
+
+            assert_eq!(
+                command.get_program().to_string_lossy(),
+                "/usr/bin/sandbox-exec"
+            );
+            assert_eq!(args[0], "-p");
+            assert!(args[1].contains("(allow file-write*"));
+            assert!(args[1].contains(plugin_root.to_string_lossy().as_ref()));
+            assert_eq!(args[2], plugin_root.join("fake-plugin").to_string_lossy());
+        }
+
+        #[cfg(target_os = "macos")]
+        #[test]
+        fn cargo_backed_plugins_use_sandbox_exec_with_isolated_target_dir() {
+            let temp_dir = TempDir::new().expect("temp plugin dir");
+            let plugin_root = temp_dir.path().join("cargo-plugin");
+            fs::create_dir_all(&plugin_root).expect("create plugin root");
+            fs::write(
+                plugin_root.join("Cargo.toml"),
+                r#"
+[package]
+name = "cargo-plugin"
+version = "0.1.0"
+edition = "2021"
+"#,
+            )
+            .expect("write Cargo.toml");
+
+            let plugin = plugin::InstalledPlugin {
+                manifest: plugin::PluginManifest {
+                    id: PluginId::new("cargo-plugin"),
+                    name: "Cargo Plugin".into(),
+                    version: "0.1.0".into(),
+                    schema_version: 1,
+                    description: None,
+                    authors: Vec::new(),
+                    repository: None,
+                    homepage: None,
+                    entrypoint: PathBuf::from("cargo-plugin"),
+                    panels: Vec::new(),
+                    titlebar_widgets: Vec::new(),
+                },
+                state: PluginInstallState::Development,
+                installation: plugin::PluginInstallation {
+                    root: plugin_root.clone(),
+                    source: plugin::PluginInstallSource::Directory(plugin_root.clone()),
+                },
+                error_message: None,
+            };
+
+            let command = build_command(&plugin).expect("build sandboxed cargo command");
+            let args = command
+                .get_args()
+                .map(|argument| argument.to_string_lossy().into_owned())
+                .collect::<Vec<_>>();
+            let target_dir = command
+                .get_envs()
+                .find_map(|(key, value)| {
+                    (key == "CARGO_TARGET_DIR").then_some(value.expect("target dir should be set"))
+                })
+                .expect("cargo target dir should be present")
+                .to_string_lossy()
+                .into_owned();
+
+            assert_eq!(
+                command.get_program().to_string_lossy(),
+                "/usr/bin/sandbox-exec"
+            );
+            assert_eq!(args[0], "-p");
+            assert_eq!(args[2], "cargo");
+            assert_eq!(args[3], "run");
+            assert_eq!(target_dir, cargo_target_dir(&plugin_root).to_string_lossy());
+        }
+
+        #[cfg(target_os = "macos")]
+        #[test]
+        fn sandboxed_plugin_process_cannot_write_outside_plugin_root() {
+            let temp_dir = TempDir::new().expect("temp plugin dir");
+            let plugin_root = temp_dir.path().join("sandboxed-plugin");
+            let outside_path = env::current_dir()
+                .expect("current dir")
+                .join(".plugin-sandbox-write-denied");
+            fs::remove_file(&outside_path).ok();
+
+            write_plugin(
+                &plugin_root,
+                r#"
+id = "sandboxed-plugin"
+name = "Sandboxed Plugin"
+version = "0.1.0"
+schema_version = 1
+entry = "fake-plugin"
+"#,
+                &format!(
+                    "#!/bin/sh\nset -e\nprintf 'sandbox test' > '{}'\n",
+                    outside_path.display()
+                ),
+            )
+            .expect("write sandbox test plugin");
+
+            let plugin = plugin::InstalledPlugin {
+                manifest: plugin::PluginManifest {
+                    id: PluginId::new("sandboxed-plugin"),
+                    name: "Sandboxed Plugin".into(),
+                    version: "0.1.0".into(),
+                    schema_version: 1,
+                    description: None,
+                    authors: Vec::new(),
+                    repository: None,
+                    homepage: None,
+                    entrypoint: PathBuf::from("fake-plugin"),
+                    panels: Vec::new(),
+                    titlebar_widgets: Vec::new(),
+                },
+                state: PluginInstallState::Installed,
+                installation: plugin::PluginInstallation {
+                    root: plugin_root.clone(),
+                    source: plugin::PluginInstallSource::Directory(plugin_root),
+                },
+                error_message: None,
+            };
+
+            let sandboxed_command = build_command(&plugin).expect("build sandboxed command");
+            let mut command = std::process::Command::new(sandboxed_command.get_program());
+            command.args(sandboxed_command.get_args());
+            if let Some(current_dir) = sandboxed_command.get_current_dir() {
+                command.current_dir(current_dir);
+            }
+            command.envs(
+                sandboxed_command
+                    .get_envs()
+                    .filter_map(|(key, value)| value.map(|value| (key, value))),
+            );
+            let output = command.output().expect("wait for sandboxed plugin");
+            fs::remove_file(&outside_path).ok();
+
+            assert!(!output.status.success());
+            assert!(!outside_path.exists());
         }
 
         #[gpui::test]

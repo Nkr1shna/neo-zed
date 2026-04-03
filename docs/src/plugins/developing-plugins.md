@@ -7,7 +7,7 @@ description: "Create Zed plugins with out-of-process GPUI panels and title bar w
 
 Zed plugins are directories containing a `plugin.toml` manifest. They can provide dock panels and title bar widgets.
 
-Plugins run out of process, but they are not sandboxed. A plugin has the same user, filesystem, network, and environment access as the Zed process that launches it.
+Plugins run out of process. On macOS, Zed launches them through a host-managed sandbox with plugin-scoped writable paths. Development plugins still receive the writable paths they need for Cargo builds, plugin state, temp files, and localhost callbacks. On other platforms, plugins currently run with the same user, filesystem, network, and environment access as the Zed process that launches them.
 
 ## Plugin Features {#plugin-features}
 
