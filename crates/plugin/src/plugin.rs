@@ -54,6 +54,7 @@ impl PluginStore {
         source_directory: impl AsRef<Path>,
     ) -> Result<InstalledPlugin> {
         let source_directory = source_directory.as_ref();
+        ensure_not_symlink(source_directory)?;
         let manifest = PluginManifest::load(source_directory)?;
         let installed_directory = self.layout.installed_root.join(manifest.id.as_str());
         let staging_directory = unique_temporary_directory(&installed_directory, "installing");
@@ -101,6 +102,7 @@ impl PluginStore {
         source_directory: impl AsRef<Path>,
     ) -> Result<InstalledPlugin> {
         let source_directory = source_directory.as_ref();
+        ensure_not_symlink(source_directory)?;
         let manifest = PluginManifest::load(source_directory)?;
         let registration_path = self.development_registration_path(manifest.id.as_str());
         let installation = PluginInstallation {
@@ -301,12 +303,7 @@ impl PluginManifest {
     }
 
     fn validate(self, plugin_directory: &Path) -> Result<Self> {
-        if self.id.as_str().trim().is_empty() {
-            bail!(
-                "plugin manifest {} must define a non-empty id",
-                plugin_directory.join(PLUGIN_MANIFEST_NAME).display()
-            );
-        }
+        validate_plugin_id(plugin_directory, self.id.as_str())?;
 
         if self.name.trim().is_empty() {
             bail!(
@@ -390,6 +387,8 @@ fn validate_plugin_entrypoint(plugin_directory: &Path, entrypoint: &Path) -> Res
 }
 
 fn validate_executable_entrypoint(plugin_directory: &Path, entrypoint: &Path) -> Result<()> {
+    validate_relative_entrypoint_path(plugin_directory, entrypoint)?;
+
     let entrypoint_path = plugin_directory.join(entrypoint);
     let entrypoint_metadata = fs::metadata(&entrypoint_path).with_context(|| {
         format!(
@@ -403,6 +402,65 @@ fn validate_executable_entrypoint(plugin_directory: &Path, entrypoint: &Path) ->
             "plugin manifest {} entrypoint {} is not a file",
             plugin_directory.join(PLUGIN_MANIFEST_NAME).display(),
             entrypoint_path.display()
+        );
+    }
+
+    let canonical_plugin_directory = fs::canonicalize(plugin_directory).with_context(|| {
+        format!(
+            "failed to resolve plugin directory {}",
+            plugin_directory.display()
+        )
+    })?;
+    let canonical_entrypoint_path = fs::canonicalize(&entrypoint_path).with_context(|| {
+        format!(
+            "plugin manifest {} references entrypoint {} that cannot be resolved",
+            plugin_directory.join(PLUGIN_MANIFEST_NAME).display(),
+            entrypoint_path.display()
+        )
+    })?;
+    if !canonical_entrypoint_path.starts_with(&canonical_plugin_directory) {
+        bail!(
+            "plugin manifest {} entrypoint {} resolves outside plugin directory {}",
+            plugin_directory.join(PLUGIN_MANIFEST_NAME).display(),
+            entrypoint_path.display(),
+            plugin_directory.display()
+        );
+    }
+
+    Ok(())
+}
+
+fn validate_relative_entrypoint_path(plugin_directory: &Path, entrypoint: &Path) -> Result<()> {
+    if entrypoint.components().any(|component| {
+        matches!(
+            component,
+            Component::ParentDir | Component::RootDir | Component::Prefix(_)
+        )
+    }) {
+        bail!(
+            "plugin manifest {} must not contain path traversal in `entrypoint`",
+            plugin_directory.join(PLUGIN_MANIFEST_NAME).display()
+        );
+    }
+
+    Ok(())
+}
+
+fn validate_plugin_id(plugin_directory: &Path, plugin_id: &str) -> Result<()> {
+    if plugin_id.trim().is_empty() {
+        bail!(
+            "plugin manifest {} must define a non-empty id",
+            plugin_directory.join(PLUGIN_MANIFEST_NAME).display()
+        );
+    }
+
+    if !plugin_id
+        .chars()
+        .all(|character| character.is_ascii_alphanumeric() || matches!(character, '-' | '_'))
+    {
+        bail!(
+            "plugin manifest {} must use an id containing only ASCII alphanumeric characters, `-`, or `_`",
+            plugin_directory.join(PLUGIN_MANIFEST_NAME).display()
         );
     }
 
@@ -552,6 +610,18 @@ fn ensure_directory(path: &Path) -> Result<()> {
         .with_context(|| format!("failed to create directory {}", path.display()))
 }
 
+fn ensure_not_symlink(path: &Path) -> Result<()> {
+    if fs::symlink_metadata(path)
+        .with_context(|| format!("failed to inspect path {}", path.display()))?
+        .file_type()
+        .is_symlink()
+    {
+        bail!("plugin source directory {} must not be a symlink", path.display());
+    }
+
+    Ok(())
+}
+
 fn copy_directory(source_directory: &Path, destination_directory: &Path) -> Result<()> {
     ensure_directory(destination_directory)?;
     for directory_entry in fs::read_dir(source_directory)
@@ -560,12 +630,19 @@ fn copy_directory(source_directory: &Path, destination_directory: &Path) -> Resu
         let directory_entry = directory_entry.context("failed to read directory entry")?;
         let source_path = directory_entry.path();
         let destination_path = destination_directory.join(directory_entry.file_name());
-
-        if directory_entry
+        let file_type = directory_entry
             .file_type()
-            .context("failed to inspect directory entry type")?
-            .is_dir()
-        {
+            .context("failed to inspect directory entry type")?;
+
+        if file_type.is_symlink() {
+            bail!(
+                "plugin directory {} contains symlink {}",
+                source_directory.display(),
+                source_path.display()
+            );
+        }
+
+        if file_type.is_dir() {
             copy_directory(&source_path, &destination_path)?;
         } else {
             if let Some(parent_directory) = destination_path.parent() {
