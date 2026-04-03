@@ -7,6 +7,8 @@ description: "Create Zed plugins with out-of-process GPUI panels and title bar w
 
 Zed plugins are directories containing a `plugin.toml` manifest. They can provide dock panels and title bar widgets.
 
+Plugins run out of process, but they are not sandboxed. A plugin has the same user, filesystem, network, and environment access as the Zed process that launches it.
+
 ## Plugin Features {#plugin-features}
 
 Plugins can provide:
