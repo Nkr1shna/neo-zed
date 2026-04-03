@@ -27,9 +27,9 @@ use client::{Client, UserStore, zed_urls};
 use cloud_api_types::Plan;
 
 use gpui::{
-    Action, AnyElement, App, Context, Corner, Element, Entity, Focusable, InteractiveElement,
-    IntoElement, MouseButton, ParentElement, Render, StatefulInteractiveElement, Styled,
-    Subscription, WeakEntity, Window, actions, div,
+    Action, AnyElement, AnyView, App, Context, Corner, Element, Entity, Focusable,
+    InteractiveElement, IntoElement, MouseButton, ParentElement, Render,
+    StatefulInteractiveElement, Styled, Subscription, WeakEntity, Window, actions, div,
 };
 use onboarding_banner::OnboardingBanner;
 use project::{Project, git_store::GitStoreEvent, trusted_worktrees::TrustedWorktrees};
@@ -157,6 +157,8 @@ pub struct TitleBar {
     _subscriptions: Vec<Subscription>,
     banner: Option<Entity<OnboardingBanner>>,
     update_version: Entity<UpdateVersion>,
+    contributed_left_item: Option<AnyView>,
+    contributed_right_item: Option<AnyView>,
     screen_share_popover_handle: PopoverMenuHandle<ContextMenu>,
     _diagnostics_subscription: Option<gpui::Subscription>,
 }
@@ -243,6 +245,17 @@ impl Render for TitleBar {
                 .into_any_element(),
         );
 
+        if let Some(item) = self.contributed_left_item.clone() {
+            children.push(
+                h_flex()
+                    .h_full()
+                    .flex_none()
+                    .items_center()
+                    .child(item)
+                    .into_any_element(),
+            );
+        }
+
         children.push(self.render_collaborator_list(window, cx).into_any_element());
 
         if title_bar_settings.show_onboarding_banner {
@@ -271,6 +284,9 @@ impl Render for TitleBar {
                 .children(self.render_call_controls(window, cx))
                 .children(self.render_connection_status(status, cx))
                 .child(self.update_version.clone())
+                .when_some(self.contributed_right_item.clone(), |this, item| {
+                    this.child(h_flex().h_full().flex_none().items_center().child(item))
+                })
                 .when(
                     user.is_none() && TitleBarSettings::get_global(cx).show_sign_in,
                     |this| this.child(self.render_sign_in_button(cx)),
@@ -407,6 +423,8 @@ impl TitleBar {
             _subscriptions: subscriptions,
             banner: None,
             update_version,
+            contributed_left_item: None,
+            contributed_right_item: None,
             screen_share_popover_handle: PopoverMenuHandle::default(),
             _diagnostics_subscription: None,
         };
@@ -414,6 +432,17 @@ impl TitleBar {
         this.observe_diagnostics(cx);
 
         this
+    }
+
+    pub fn set_contributed_items(
+        &mut self,
+        left_item: Option<AnyView>,
+        right_item: Option<AnyView>,
+        cx: &mut Context<Self>,
+    ) {
+        self.contributed_left_item = left_item;
+        self.contributed_right_item = right_item;
+        cx.notify();
     }
 
     fn worktree_count(&self, cx: &App) -> usize {
@@ -504,6 +533,7 @@ impl TitleBar {
         let options = self.project.read(cx).remote_connection_options(cx)?;
         let host: SharedString = options.display_name().into();
 
+        #[allow(unreachable_patterns)]
         let (nickname, tooltip_title, icon) = match options {
             RemoteConnectionOptions::Ssh(options) => (
                 options.nickname.map(|nick| nick.into()),
@@ -514,8 +544,7 @@ impl TitleBar {
             RemoteConnectionOptions::Docker(_dev_container_connection) => {
                 (None, "Dev Container", IconName::Box)
             }
-            #[cfg(any(test, feature = "test-support"))]
-            RemoteConnectionOptions::Mock(_) => (None, "Mock Remote Project", IconName::Server),
+            _ => (None, "Remote Project", IconName::Server),
         };
 
         let nickname = nickname.unwrap_or_else(|| host.clone());
@@ -1245,6 +1274,7 @@ impl TitleBar {
                         "Extensions",
                         zed_actions::Extensions::default().boxed_clone(),
                     )
+                    .action("Plugins", zed_actions::Plugins::default().boxed_clone())
                     .when(is_signed_in, |this| {
                         this.separator()
                             .action("Sign Out", client::SignOut.boxed_clone())

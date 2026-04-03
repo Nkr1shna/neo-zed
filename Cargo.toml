@@ -86,10 +86,12 @@ members = [
     "crates/google_ai",
     "crates/grammars",
     "crates/gpui",
+    "crates/gpui_api",
     "crates/gpui_linux",
     "crates/gpui_macos",
     "crates/gpui_macros",
     "crates/gpui_platform",
+    "crates/gpui_plugin",
     "crates/gpui_tokio",
     "crates/gpui_util",
     "crates/gpui_web",
@@ -142,6 +144,9 @@ members = [
     "crates/panel",
     "crates/paths",
     "crates/picker",
+    "crates/plugin",
+    "crates/plugin_host",
+    "crates/plugin_protocol",
     "crates/platform_title_bar",
     "crates/prettier",
     "crates/project",
@@ -204,6 +209,7 @@ members = [
     "crates/toolchain_selector",
     "crates/ui",
     "crates/ui_input",
+    "crates/ui_plugin",
     "crates/ui_macros",
     "crates/ui_prompt",
     "crates/util",
@@ -215,6 +221,7 @@ members = [
     "crates/web_search",
     "crates/web_search_providers",
     "crates/which_key",
+    "crates/plugins_ui",
     "crates/workspace",
     "crates/worktree",
     "crates/worktree_benchmarks",
@@ -237,6 +244,12 @@ members = [
     "extensions/html",
     "extensions/proto",
     "extensions/test-extension",
+
+    #
+    # Plugins
+    #
+
+    "plugins/codex-usage-plugin",
 
     #
     # Tooling
@@ -331,10 +344,12 @@ go_to_line = { path = "crates/go_to_line" }
 google_ai = { path = "crates/google_ai" }
 grammars = { path = "crates/grammars" }
 gpui = { path = "crates/gpui", default-features = false }
+gpui_api = { path = "crates/gpui_api" }
 gpui_linux = { path = "crates/gpui_linux", default-features = false }
 gpui_macos = { path = "crates/gpui_macos", default-features = false }
 gpui_macros = { path = "crates/gpui_macros" }
 gpui_platform = { path = "crates/gpui_platform", default-features = false }
+gpui_plugin = { path = "crates/gpui_plugin" }
 gpui_web = { path = "crates/gpui_web" }
 gpui_wgpu = { path = "crates/gpui_wgpu" }
 gpui_windows = { path = "crates/gpui_windows", default-features = false }
@@ -393,6 +408,10 @@ panel = { path = "crates/panel" }
 paths = { path = "crates/paths" }
 perf = { path = "tooling/perf" }
 picker = { path = "crates/picker" }
+plugin = { path = "crates/plugin" }
+plugin_host = { path = "crates/plugin_host" }
+plugin_protocol = { path = "crates/plugin_protocol" }
+plugins_ui = { path = "crates/plugins_ui" }
 prettier = { path = "crates/prettier" }
 settings_profile_selector = { path = "crates/settings_profile_selector" }
 project = { path = "crates/project" }
@@ -451,6 +470,7 @@ title_bar = { path = "crates/title_bar" }
 toolchain_selector = { path = "crates/toolchain_selector" }
 ui = { path = "crates/ui" }
 ui_input = { path = "crates/ui_input" }
+ui_plugin = { path = "crates/ui_plugin" }
 ui_macros = { path = "crates/ui_macros" }
 ui_prompt = { path = "crates/ui_prompt" }
 util = { path = "crates/util" }

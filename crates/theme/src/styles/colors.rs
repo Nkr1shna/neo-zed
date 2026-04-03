@@ -10,8 +10,8 @@ use crate::{
     SystemColors,
 };
 
-#[derive(Refineable, Clone, Debug, PartialEq)]
-#[refineable(Debug, serde::Deserialize)]
+#[derive(Refineable, Clone, Debug, PartialEq, serde::Serialize, serde::Deserialize)]
+#[refineable(Debug, serde::Serialize, serde::Deserialize)]
 pub struct ThemeColors {
     /// Border color. Used for most borders, is usually a high contrast color.
     pub border: Hsla,
