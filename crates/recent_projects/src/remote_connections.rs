@@ -314,14 +314,16 @@ pub async fn open_remote_project(
                     .update(cx, |_, window, cx| {
                         window.prompt(
                             PromptLevel::Critical,
-                            #[allow(unreachable_patterns)]
                             match connection_options {
                                 RemoteConnectionOptions::Ssh(_) => "Failed to connect over SSH",
                                 RemoteConnectionOptions::Wsl(_) => "Failed to connect to WSL",
                                 RemoteConnectionOptions::Docker(_) => {
                                     "Failed to connect to Dev Container"
                                 }
-                                _ => "Failed to connect to remote server",
+                                #[cfg(any(test, feature = "test-support"))]
+                                RemoteConnectionOptions::Mock(_) => {
+                                    "Failed to connect to mock server"
+                                }
                             },
                             Some(&format!("{e:#}")),
                             &["Retry", "Cancel"],
@@ -373,14 +375,16 @@ pub async fn open_remote_project(
                     .update(cx, |_, window, cx| {
                         window.prompt(
                             PromptLevel::Critical,
-                            #[allow(unreachable_patterns)]
                             match connection_options {
                                 RemoteConnectionOptions::Ssh(_) => "Failed to connect over SSH",
                                 RemoteConnectionOptions::Wsl(_) => "Failed to connect to WSL",
                                 RemoteConnectionOptions::Docker(_) => {
                                     "Failed to connect to Dev Container"
                                 }
-                                _ => "Failed to connect to remote server",
+                                #[cfg(any(test, feature = "test-support"))]
+                                RemoteConnectionOptions::Mock(_) => {
+                                    "Failed to connect to mock server"
+                                }
                             },
                             Some(&format!("{e:#}")),
                             &["Retry", "Cancel"],

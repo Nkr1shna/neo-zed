@@ -25,7 +25,7 @@ use zed_actions::Plugins;
 use components::PluginCard;
 
 actions!(
-    plugins_ui,
+    zed,
     [
         /// Installs a plugin from a local directory for development.
         InstallDevPlugin
