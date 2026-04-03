@@ -9,7 +9,7 @@ Plugins add functionality to Zed, including dock panels and title bar widgets.
 
 Open the Plugins page with {#kb zed::Plugins}, or select "Zed > Plugins" from the menu bar.
 
-Plugins run as native processes with the same user, filesystem, network, and environment access as Zed. Only install plugins you trust.
+On macOS, Zed launches plugins inside a host-managed sandbox that limits writable paths while still allowing network access, localhost callbacks, and the plugin runtime itself. On other platforms, plugins currently run with the same user, filesystem, network, and environment access as Zed. Only install plugins you trust.
 
 To install a plugin you are developing locally, click the `Install Dev Plugin` button (or the {#action zed::InstallDevPlugin} action) and select the directory containing your plugin.
 
