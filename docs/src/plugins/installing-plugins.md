@@ -9,7 +9,7 @@ Plugins add functionality to Zed, including dock panels and title bar widgets.
 
 Open the Plugins page with {#kb zed::Plugins}, or select "Zed > Plugins" from the menu bar.
 
-To install a plugin you are developing locally, click the `Install Dev Plugin` button (or the {#action plugins_ui::InstallDevPlugin} action) and select the directory containing your plugin.
+To install a plugin you are developing locally, click the `Install Dev Plugin` button (or the {#action zed::InstallDevPlugin} action) and select the directory containing your plugin.
 
 Use the search field to filter the list, or switch between the `All`, `Installed`, and `Development` filters.
 

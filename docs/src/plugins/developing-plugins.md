@@ -20,7 +20,7 @@ Before starting to develop a plugin for Zed, be sure to install Rust and Cargo.
 
 When developing a plugin, you can use it in Zed without needing to publish it by installing it as a _dev plugin_.
 
-From the Plugins page, click the `Install Dev Plugin` button (or the {#action plugins_ui::InstallDevPlugin} action) and select the directory containing your plugin.
+From the Plugins page, click the `Install Dev Plugin` button (or the {#action zed::InstallDevPlugin} action) and select the directory containing your plugin.
 
 If you need to troubleshoot, check Zed.log ({#action zed::OpenLog}) for additional output. For debug output, close and relaunch Zed from the command line with `zed --foreground`, which shows more verbose INFO-level logs.
 
