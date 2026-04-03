@@ -21,7 +21,9 @@ use fs::{Fs, RealFs};
 use futures::{StreamExt, channel::oneshot, future};
 use git::GitHostingProviderRegistry;
 use git_ui::clone::clone_and_open;
-use gpui::{App, AppContext, Application, AsyncApp, Focusable as _, QuitMode, UpdateGlobal as _};
+use gpui::{
+    App, AppContext, Application, AsyncApp, Focusable as _, QuitMode, UpdateGlobal as _, WeakEntity,
+};
 use gpui_platform;
 
 use gpui_tokio::Tokio;
@@ -35,6 +37,11 @@ use reqwest_client::ReqwestClient;
 use assets::Assets;
 use node_runtime::{NodeBinaryOptions, NodeRuntime};
 use parking_lot::Mutex;
+use plugin::PluginState;
+use plugins_ui::{
+    PluginPanelRecord, PluginRecord, PluginSource, PluginStatus, PluginStoreApi,
+    PluginStoreProvider,
+};
 use project::{project_settings::ProjectSettings, trusted_worktrees};
 use proto;
 use recent_projects::{RemoteSettings, open_remote_project};
@@ -176,6 +183,164 @@ fn fail_to_open_window(e: anyhow::Error, _cx: &mut App) {
     }
 }
 static STARTUP_TIME: OnceLock<Instant> = OnceLock::new();
+
+struct ZedPluginStoreProvider {
+    layout: plugin::PluginStoreLayout,
+}
+
+impl PluginStoreProvider for ZedPluginStoreProvider {
+    fn plugin_store(&self, workspace: &workspace::Workspace, _cx: &App) -> Arc<dyn PluginStoreApi> {
+        Arc::new(ZedPluginStore {
+            layout: self.layout.clone(),
+            workspace: workspace.weak_handle(),
+        })
+    }
+}
+
+struct ZedPluginStore {
+    layout: plugin::PluginStoreLayout,
+    workspace: WeakEntity<workspace::Workspace>,
+}
+
+impl ZedPluginStore {
+    fn store(&self) -> plugin::PluginStore {
+        plugin::PluginStore::new(self.layout.clone())
+    }
+
+    fn schedule_plugin_host_catalog_refresh(&self, cx: &mut App) {
+        cx.defer(|cx| {
+            plugin_host::refresh_catalog(cx);
+        });
+    }
+
+    fn list_installed_plugins(&self) -> Result<Vec<plugin::InstalledPlugin>> {
+        self.store().list()
+    }
+
+    fn map_plugin_source(&self, plugin: &plugin::InstalledPlugin) -> PluginSource {
+        infer_plugin_source(&self.layout, plugin)
+    }
+
+    fn map_plugin_record(&self, plugin: plugin::InstalledPlugin) -> PluginRecord {
+        let source = self.map_plugin_source(&plugin);
+
+        let status = match (plugin.state, plugin.error_message.as_deref()) {
+            (_, Some(message)) => PluginStatus::Failed(message.to_string().into()),
+            (PluginState::Error, None) => PluginStatus::Failed("Plugin error".into()),
+            (PluginState::Installed | PluginState::Development, None) => PluginStatus::Installed,
+        };
+
+        let panels = plugin
+            .manifest
+            .panels
+            .iter()
+            .map(|panel| PluginPanelRecord {
+                id: Arc::from(panel.id.clone()),
+                title: panel.title.clone().into(),
+            })
+            .collect();
+
+        PluginRecord {
+            id: Arc::from(plugin.manifest.id.as_str()),
+            name: plugin.manifest.name.into(),
+            version: plugin.manifest.version.into(),
+            description: plugin.manifest.description.map(Into::into),
+            authors: plugin
+                .manifest
+                .authors
+                .into_iter()
+                .map(Into::into)
+                .collect(),
+            repository_url: plugin.manifest.repository.map(Into::into),
+            homepage_url: plugin.manifest.homepage.map(Into::into),
+            source,
+            status,
+            panels,
+        }
+    }
+}
+
+fn infer_plugin_source(
+    layout: &plugin::PluginStoreLayout,
+    plugin: &plugin::InstalledPlugin,
+) -> PluginSource {
+    match plugin.state {
+        PluginState::Development => PluginSource::Development {
+            path: plugin.installation.root.clone(),
+        },
+        PluginState::Installed => PluginSource::Registry,
+        PluginState::Error => {
+            if plugin.installation.root.starts_with(&layout.installed_root) {
+                PluginSource::Registry
+            } else {
+                PluginSource::Development {
+                    path: plugin.installation.root.clone(),
+                }
+            }
+        }
+    }
+}
+
+impl PluginStoreApi for ZedPluginStore {
+    fn list_plugins(&self) -> Result<Vec<PluginRecord>> {
+        self.list_installed_plugins().map(|plugins| {
+            plugins
+                .into_iter()
+                .map(|plugin| self.map_plugin_record(plugin))
+                .collect()
+        })
+    }
+
+    fn install_plugin(&self, plugin_id: &str, _cx: &mut App) -> Result<()> {
+        anyhow::bail!("registry plugin install is not implemented for `{plugin_id}`")
+    }
+
+    fn remove_plugin(&self, plugin_id: &str, cx: &mut App) -> Result<()> {
+        let mut store = self.store();
+        store.remove(plugin_id)?;
+        self.schedule_plugin_host_catalog_refresh(cx);
+        Ok(())
+    }
+
+    fn install_development_plugin(&self, source_directory: &Path, cx: &mut App) -> Result<()> {
+        let mut store = self.store();
+        store.register_development_plugin(source_directory)?;
+        self.schedule_plugin_host_catalog_refresh(cx);
+        Ok(())
+    }
+
+    fn open_panel(
+        &self,
+        plugin_id: &str,
+        panel_id: &str,
+        window: &mut gpui::Window,
+        cx: &mut App,
+    ) -> Result<()> {
+        let workspace = self
+            .workspace
+            .upgrade()
+            .context("workspace is no longer available")?;
+        workspace.update(cx, |workspace, workspace_cx| {
+            plugin_host::open_panel_in_workspace(
+                plugin_id,
+                panel_id,
+                workspace,
+                window,
+                workspace_cx,
+            )?;
+            Ok::<(), anyhow::Error>(())
+        })?;
+        Ok(())
+    }
+}
+
+fn plugin_store_layout() -> plugin::PluginStoreLayout {
+    let root = paths::plugins_dir();
+    plugin::PluginStoreLayout {
+        installed_root: root.join("installed"),
+        development_root: root.join("development"),
+    }
+}
 
 fn main() {
     STARTUP_TIME.get_or_init(|| Instant::now());
@@ -752,6 +917,13 @@ fn main() {
         settings_ui::init(cx);
         keymap_editor::init(cx);
         extensions_ui::init(cx);
+        plugin_host::init(cx);
+        plugins_ui::init_with_provider(
+            Arc::new(ZedPluginStoreProvider {
+                layout: plugin_store_layout(),
+            }),
+            cx,
+        );
         edit_prediction::init(cx);
         inspector_ui::init(app_state.clone(), cx);
         json_schema_store::init(cx);
@@ -1929,5 +2101,91 @@ fn check_for_conpty_dll() {
         }
     } else {
         log::warn!("Failed to load conpty.dll. Terminal will work with reduced functionality.");
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use plugin::{InstalledPlugin, PluginInstallSource, PluginInstallation, PluginManifest};
+    use std::fs;
+    use std::path::PathBuf;
+    use std::time::{SystemTime, UNIX_EPOCH};
+
+    fn test_layout() -> plugin::PluginStoreLayout {
+        plugin::PluginStoreLayout {
+            installed_root: PathBuf::from("/tmp/plugins/installed"),
+            development_root: PathBuf::from("/tmp/plugins/development"),
+        }
+    }
+
+    fn test_plugin(root: PathBuf, state: PluginState) -> InstalledPlugin {
+        let manifest = test_manifest();
+
+        InstalledPlugin {
+            manifest,
+            state,
+            installation: PluginInstallation {
+                root: root.clone(),
+                source: PluginInstallSource::Directory(root),
+            },
+            error_message: Some("manifest failure".into()),
+        }
+    }
+
+    fn test_manifest() -> PluginManifest {
+        let manifest_root = std::env::temp_dir().join(format!(
+            "neo-zed-plugin-test-{}-{}",
+            std::process::id(),
+            SystemTime::now()
+                .duration_since(UNIX_EPOCH)
+                .unwrap_or_default()
+                .as_nanos()
+        ));
+        fs::create_dir_all(manifest_root.join("bin")).unwrap();
+        fs::write(
+            manifest_root.join("plugin.toml"),
+            r#"
+id = "acme.test-plugin"
+name = "Test Plugin"
+version = "0.1.0"
+schema_version = 1
+entry = "bin/test-plugin"
+"#,
+        )
+        .unwrap();
+        fs::write(manifest_root.join("bin/test-plugin"), "#!/bin/sh\n").unwrap();
+
+        let manifest = PluginManifest::load(&manifest_root).unwrap();
+        fs::remove_dir_all(&manifest_root).unwrap();
+        manifest
+    }
+
+    #[test]
+    fn broken_development_plugin_stays_in_development_source() {
+        let layout = test_layout();
+        let plugin = test_plugin(
+            PathBuf::from("/Users/nest/Developer/neo-zed/plugins/codex-usage-plugin"),
+            PluginState::Error,
+        );
+
+        assert!(matches!(
+            infer_plugin_source(&layout, &plugin),
+            PluginSource::Development { .. }
+        ));
+    }
+
+    #[test]
+    fn broken_installed_plugin_stays_in_registry_source() {
+        let layout = test_layout();
+        let plugin = test_plugin(
+            layout.installed_root.join("codex-usage-plugin"),
+            PluginState::Error,
+        );
+
+        assert!(matches!(
+            infer_plugin_source(&layout, &plugin),
+            PluginSource::Registry
+        ));
     }
 }

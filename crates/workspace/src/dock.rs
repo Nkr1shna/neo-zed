@@ -35,6 +35,9 @@ pub use proto::PanelId;
 pub trait Panel: Focusable + EventEmitter<PanelEvent> + Render + Sized {
     fn persistent_name() -> &'static str;
     fn panel_key() -> &'static str;
+    fn panel_key_for_persistence(&self) -> SharedString {
+        Self::panel_key().into()
+    }
     fn position(&self, window: &Window, cx: &App) -> DockPosition;
     fn position_is_valid(&self, position: DockPosition) -> bool;
     fn set_position(&mut self, position: DockPosition, window: &mut Window, cx: &mut Context<Self>);
@@ -88,7 +91,7 @@ pub trait Panel: Focusable + EventEmitter<PanelEvent> + Render + Sized {
 pub trait PanelHandle: Send + Sync {
     fn panel_id(&self) -> EntityId;
     fn persistent_name(&self) -> &'static str;
-    fn panel_key(&self) -> &'static str;
+    fn panel_key(&self, cx: &App) -> SharedString;
     fn position(&self, window: &Window, cx: &App) -> DockPosition;
     fn position_is_valid(&self, position: DockPosition, cx: &App) -> bool;
     fn set_position(&self, position: DockPosition, window: &mut Window, cx: &mut App);
@@ -141,8 +144,8 @@ where
         T::persistent_name()
     }
 
-    fn panel_key(&self) -> &'static str {
-        T::panel_key()
+    fn panel_key(&self, cx: &App) -> SharedString {
+        self.read(cx).panel_key_for_persistence()
     }
 
     fn position(&self, window: &Window, cx: &App) -> DockPosition {
@@ -337,7 +340,7 @@ fn resize_panel_entry(
     flex: Option<f32>,
     window: &mut Window,
     cx: &mut App,
-) -> (&'static str, PanelSizeState) {
+) -> (SharedString, PanelSizeState) {
     let size = size.map(|size| size.max(RESIZE_HANDLE_SIZE).round());
     let use_flex = entry.panel.has_flexible_size(window, cx) && position.axis() == Axis::Horizontal;
     if use_flex {
@@ -346,7 +349,7 @@ fn resize_panel_entry(
         entry.size_state.size = size;
     }
     entry.panel.size_state_changed(window, cx);
-    (entry.panel.panel_key(), entry.size_state)
+    (entry.panel.panel_key(cx), entry.size_state)
 }
 
 impl Dock {
@@ -454,10 +457,32 @@ impl Dock {
             .position(|entry| entry.panel.to_any().downcast::<T>().is_ok())
     }
 
-    pub fn panel_index_for_persistent_name(&self, ui_name: &str, _cx: &App) -> Option<usize> {
+    pub fn panel_index_for_serialized_key(&self, serialized_key: &str, cx: &App) -> Option<usize> {
+        self.panel_entries.iter().position(|entry| {
+            entry.panel.panel_key(cx).as_ref() == serialized_key
+                || entry.panel.persistent_name() == serialized_key
+        })
+    }
+
+    pub fn panel_for_serialized_key(
+        &self,
+        serialized_key: &str,
+        cx: &App,
+    ) -> Option<Arc<dyn PanelHandle>> {
         self.panel_entries
             .iter()
-            .position(|entry| entry.panel.persistent_name() == ui_name)
+            .find(|entry| {
+                entry.panel.panel_key(cx).as_ref() == serialized_key
+                    || entry.panel.persistent_name() == serialized_key
+            })
+            .map(|entry| entry.panel.clone())
+    }
+
+    pub fn panels(&self) -> Vec<Arc<dyn PanelHandle>> {
+        self.panel_entries
+            .iter()
+            .map(|entry| entry.panel.clone())
+            .collect()
     }
 
     pub fn panel_index_for_proto_id(&self, panel_id: PanelId) -> Option<usize> {
@@ -471,6 +496,12 @@ impl Dock {
             .iter()
             .find(|entry| entry.panel.panel_id() == panel_id)
             .map(|entry| &entry.panel)
+    }
+
+    pub fn panel_index_for_id(&self, panel_id: EntityId) -> Option<usize> {
+        self.panel_entries
+            .iter()
+            .position(|entry| entry.panel.panel_id() == panel_id)
     }
 
     pub fn first_enabled_panel_idx(&mut self, cx: &mut Context<Self>) -> anyhow::Result<usize> {
@@ -680,7 +711,7 @@ impl Dock {
                     panic!(
                         "Panels `{}` and `{}` have the same activation priority. Each panel must have a unique priority so the status bar order is deterministic.",
                         T::panel_key(),
-                        self.panel_entries[ix].panel.panel_key()
+                        self.panel_entries[ix].panel.panel_key(cx)
                     );
                 }
                 ix
@@ -717,7 +748,7 @@ impl Dock {
     pub fn restore_state(&mut self, window: &mut Window, cx: &mut Context<Self>) -> bool {
         if let Some(serialized) = self.serialized_dock.clone() {
             if let Some(active_panel) = serialized.active_panel.filter(|_| serialized.visible)
-                && let Some(idx) = self.panel_index_for_persistent_name(active_panel.as_str(), cx)
+                && let Some(idx) = self.panel_index_for_serialized_key(active_panel.as_str(), cx)
             {
                 self.activate_panel(idx, window, cx);
             }
@@ -903,7 +934,7 @@ impl Dock {
         } else {
             entry.size_state.flex = current_flex;
         }
-        let panel_key = entry.panel.panel_key();
+        let panel_key = entry.panel.panel_key(cx);
         let size_state = entry.size_state;
         let workspace = self.workspace.clone();
         entry
@@ -913,7 +944,7 @@ impl Dock {
         cx.defer(move |cx| {
             if let Some(workspace) = workspace.upgrade() {
                 workspace.update(cx, |workspace, cx| {
-                    workspace.persist_panel_size_state(panel_key, size_state, cx);
+                    workspace.persist_panel_size_state(panel_key.as_ref(), size_state, cx);
                 });
             }
         });
@@ -937,7 +968,7 @@ impl Dock {
             cx.defer(move |cx| {
                 if let Some(workspace) = workspace.upgrade() {
                     workspace.update(cx, |workspace, cx| {
-                        workspace.persist_panel_size_state(panel_key, size_state, cx);
+                        workspace.persist_panel_size_state(panel_key.as_ref(), size_state, cx);
                     });
                 }
             });
@@ -963,7 +994,7 @@ impl Dock {
             if let Some(workspace) = workspace.upgrade() {
                 workspace.update(cx, |workspace, cx| {
                     for (panel_key, size_state) in size_states_to_persist {
-                        workspace.persist_panel_size_state(panel_key, size_state, cx);
+                        workspace.persist_panel_size_state(panel_key.as_ref(), size_state, cx);
                     }
                 });
             }
@@ -1007,7 +1038,7 @@ impl Dock {
 
     pub(crate) fn load_persisted_size_state(
         workspace: &Workspace,
-        panel_key: &'static str,
+        panel_key: &str,
         cx: &App,
     ) -> Option<PanelSizeState> {
         let workspace_id = workspace
@@ -1194,6 +1225,7 @@ impl Render for PanelButtons {
 
                 let focus_handle = dock.focus_handle(cx);
                 let icon_label = entry.panel.icon_label(window, cx);
+                let panel_entity_id = entry.panel.panel_id().as_u64();
 
                 Some(
                     right_click_menu(name)
@@ -1283,21 +1315,27 @@ impl Render for PanelButtons {
                         .trigger(move |is_active, _window, _cx| {
                             // Include active state in element ID to invalidate the cached
                             // tooltip when panel state changes (e.g., via keyboard shortcut)
-                            let button = IconButton::new((name, is_active_button as u64), icon)
-                                .icon_size(IconSize::Small)
-                                .toggle_state(is_active_button)
-                                .on_click({
-                                    let action = action.boxed_clone();
-                                    move |_, window, cx| {
-                                        window.focus(&focus_handle, cx);
-                                        window.dispatch_action(action.boxed_clone(), cx)
-                                    }
+                            let button = IconButton::new(
+                                (
+                                    gpui::ElementId::from((name, panel_entity_id)),
+                                    format!("{is_active_button}"),
+                                ),
+                                icon,
+                            )
+                            .icon_size(IconSize::Small)
+                            .toggle_state(is_active_button)
+                            .on_click({
+                                let action = action.boxed_clone();
+                                move |_, window, cx| {
+                                    window.focus(&focus_handle, cx);
+                                    window.dispatch_action(action.boxed_clone(), cx)
+                                }
+                            })
+                            .when(!is_active, |this| {
+                                this.tooltip(move |_window, cx| {
+                                    Tooltip::for_action(tooltip.clone(), &*action, cx)
                                 })
-                                .when(!is_active, |this| {
-                                    this.tooltip(move |_window, cx| {
-                                        Tooltip::for_action(tooltip.clone(), &*action, cx)
-                                    })
-                                });
+                            });
 
                             div().relative().child(button).when_some(
                                 icon_label
@@ -1356,6 +1394,7 @@ pub mod test {
         pub default_size: Pixels,
         pub flexible: bool,
         pub activation_priority: u32,
+        pub persistence_key: Option<SharedString>,
     }
     actions!(test_only, [ToggleTestPanel]);
 
@@ -1371,6 +1410,7 @@ pub mod test {
                 default_size: px(300.),
                 flexible: false,
                 activation_priority,
+                persistence_key: None,
             }
         }
 
@@ -1383,6 +1423,11 @@ pub mod test {
                 flexible: true,
                 ..Self::new(position, activation_priority, cx)
             }
+        }
+
+        pub fn with_persistence_key(mut self, persistence_key: impl Into<SharedString>) -> Self {
+            self.persistence_key = Some(persistence_key.into());
+            self
         }
     }
 
@@ -1399,6 +1444,12 @@ pub mod test {
 
         fn panel_key() -> &'static str {
             "TestPanel"
+        }
+
+        fn panel_key_for_persistence(&self) -> SharedString {
+            self.persistence_key
+                .clone()
+                .unwrap_or_else(|| Self::panel_key().into())
         }
 
         fn position(&self, _window: &Window, _: &App) -> super::DockPosition {

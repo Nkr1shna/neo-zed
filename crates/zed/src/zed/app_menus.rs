@@ -91,6 +91,7 @@ pub fn app_menus(cx: &mut App) -> Vec<Menu> {
                 MenuItem::os_submenu("Services", gpui::SystemMenuType::Services),
                 MenuItem::separator(),
                 MenuItem::action("Extensions", zed_actions::Extensions::default()),
+                MenuItem::action("Plugins", zed_actions::Plugins::default()),
                 #[cfg(not(target_os = "windows"))]
                 MenuItem::action("Install CLI", install_cli::InstallCliBinary),
                 MenuItem::separator(),

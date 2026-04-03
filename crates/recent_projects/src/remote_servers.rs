@@ -402,6 +402,7 @@ impl ProjectPicker {
             picker
         });
 
+        #[allow(unreachable_patterns)]
         let data = match &connection {
             RemoteConnectionOptions::Ssh(connection) => ProjectPickerData::Ssh {
                 connection_string: connection.connection_string().into(),
@@ -415,9 +416,8 @@ impl ProjectPicker {
                 connection_string: "".into(),
                 nickname: None,
             },
-            #[cfg(any(test, feature = "test-support"))]
-            RemoteConnectionOptions::Mock(options) => ProjectPickerData::Ssh {
-                connection_string: format!("mock-{}", options.id).into(),
+            _ => ProjectPickerData::Ssh {
+                connection_string: connection.display_name().into(),
                 nickname: None,
             },
         };

@@ -165,6 +165,12 @@
 - [Agent Server Extensions](./extensions/agent-servers.md)
 - [MCP Server Extensions](./extensions/mcp-extensions.md)
 
+# Plugins
+
+- [Overview](./plugins.md)
+- [Installing Plugins](./plugins/installing-plugins.md)
+- [Developing Plugins](./plugins/developing-plugins.md)
+
 # Coming From…
 
 - [VS Code](./migrate/vs-code.md)

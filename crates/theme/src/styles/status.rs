@@ -5,8 +5,8 @@ use refineable::Refineable;
 
 use crate::{blue, grass, neutral, red, yellow};
 
-#[derive(Refineable, Clone, Debug, PartialEq)]
-#[refineable(Debug, serde::Deserialize)]
+#[derive(Refineable, Clone, Debug, PartialEq, serde::Serialize, serde::Deserialize)]
+#[refineable(Debug, serde::Serialize, serde::Deserialize)]
 pub struct StatusColors {
     /// Indicates some kind of conflict, like a file changed on disk while it was open, or
     /// merge conflicts in a Git repository.

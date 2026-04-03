@@ -1509,6 +1509,7 @@ impl WorkspaceDb {
         let mut container_id = None;
         let mut use_podman = None;
         let mut remote_env = None;
+        #[allow(unreachable_patterns)]
         match options {
             RemoteConnectionOptions::Ssh(options) => {
                 kind = RemoteConnectionKind::Ssh;
@@ -1529,11 +1530,10 @@ impl WorkspaceDb {
                 user = Some(options.remote_user);
                 remote_env = serde_json::to_string(&options.remote_env).ok();
             }
-            #[cfg(any(test, feature = "test-support"))]
-            RemoteConnectionOptions::Mock(options) => {
+            other_options => {
                 kind = RemoteConnectionKind::Ssh;
-                host = Some(format!("mock-{}", options.id));
-                user = Some(format!("mock-user-{}", options.id));
+                host = Some(other_options.display_name());
+                user = None;
             }
         }
         Self::get_or_create_remote_connection_query(

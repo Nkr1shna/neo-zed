@@ -102,6 +102,16 @@ pub struct Extensions {
     pub id: Option<String>,
 }
 
+/// Opens the plugin management interface.
+#[derive(PartialEq, Clone, Default, Debug, Deserialize, JsonSchema, Action)]
+#[action(namespace = zed)]
+#[serde(deny_unknown_fields)]
+pub struct Plugins {
+    /// Focuses just the plugin with the specified ID.
+    #[serde(default)]
+    pub id: Option<String>,
+}
+
 /// Opens the ACP registry.
 #[derive(PartialEq, Clone, Default, Debug, Deserialize, JsonSchema, Action)]
 #[action(namespace = zed)]
