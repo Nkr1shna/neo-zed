@@ -3540,6 +3540,33 @@ mod host {
     }
 
     #[cfg(target_os = "macos")]
+    fn plugin_sandbox_process_exec_rule(launch_spec: &PluginLaunchSpec) -> String {
+        if launch_spec.cargo_target_dir.is_some() {
+            return String::from("(allow process-exec*)\n");
+        }
+
+        let mut allowed_paths = BTreeSet::from([
+            PathBuf::from("/bin/sh"),
+            PathBuf::from("/bin/bash"),
+            PathBuf::from("/bin/zsh"),
+            PathBuf::from("/usr/bin/env"),
+            PathBuf::from("/usr/bin/open"),
+        ]);
+
+        allowed_paths.insert(PathBuf::from(&launch_spec.program));
+
+        let mut rule = String::from("(allow process-exec\n");
+        for path in allowed_paths {
+            rule.push_str(&format!(
+                "       (literal {})\n",
+                sbpl_quote(path.as_os_str().to_string_lossy().as_ref())
+            ));
+        }
+        rule.push_str(")\n");
+        rule
+    }
+
+    #[cfg(target_os = "macos")]
     fn plugin_sandbox_profile(plugin: &InstalledPlugin, launch_spec: &PluginLaunchSpec) -> String {
         let mut profile = String::from(
             r#"(version 1)
@@ -3573,7 +3600,6 @@ mod host {
         profile.push_str(
             r#"(allow network*)
 (allow process-fork)
-(allow process-exec*)
 (allow lsopen)
 (allow mach-lookup
        (global-name "com.apple.SecurityServer")
@@ -3585,6 +3611,7 @@ mod host {
        (global-name "com.apple.system.opendirectoryd.api"))
 "#,
         );
+        profile.push_str(&plugin_sandbox_process_exec_rule(launch_spec));
         profile
     }
 
@@ -4240,6 +4267,8 @@ entry = "fake-plugin"
             );
             assert_eq!(args[0], "-p");
             assert!(args[1].contains("(allow file-write*"));
+            assert!(!args[1].contains("(allow process-exec*)"));
+            assert!(args[1].contains("/usr/bin/open"));
             assert!(args[1].contains(plugin_root.to_string_lossy().as_ref()));
             assert_eq!(args[2], plugin_root.join("fake-plugin").to_string_lossy());
         }
