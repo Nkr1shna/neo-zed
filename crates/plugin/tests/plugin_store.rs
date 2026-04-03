@@ -7,12 +7,12 @@ use tempfile::TempDir;
 
 #[test]
 fn discovers_plugin_manifest_from_local_directory() {
-    let fixture = PluginFixture::new("acme.test-panel");
+    let fixture = PluginFixture::new("acme-test-panel");
     fixture.write_plugin("source-plugin", "0.1.0");
 
     let manifest = PluginManifest::load(fixture.plugin_dir("source-plugin")).unwrap();
 
-    assert_eq!(manifest.id.as_str(), "acme.test-panel");
+    assert_eq!(manifest.id.as_str(), "acme-test-panel");
     assert_eq!(manifest.name, "Test Panel");
     assert_eq!(manifest.version, "0.1.0");
     assert_eq!(manifest.authors, vec!["Neo Zed"]);
@@ -22,7 +22,7 @@ fn discovers_plugin_manifest_from_local_directory() {
     );
     assert_eq!(
         manifest.homepage.as_deref(),
-        Some("https://example.com/plugins/acme.test-panel")
+        Some("https://example.com/plugins/acme-test-panel")
     );
     assert_eq!(manifest.entrypoint, PathBuf::from("bin/test-panel"));
     assert_eq!(manifest.titlebar_widgets.len(), 1);
@@ -32,7 +32,7 @@ fn discovers_plugin_manifest_from_local_directory() {
 
 #[test]
 fn install_and_remove_update_bookkeeping() {
-    let fixture = PluginFixture::new("acme.test-panel");
+    let fixture = PluginFixture::new("acme-test-panel");
     fixture.write_plugin("source-plugin", "0.1.0");
     let mut store = fixture.store();
 
@@ -47,20 +47,20 @@ fn install_and_remove_update_bookkeeping() {
     );
     assert!(
         fixture
-            .installed_plugin_dir("acme.test-panel")
+            .installed_plugin_dir("acme-test-panel")
             .join("plugin.toml")
             .exists()
     );
 
-    let removed = store.remove("acme.test-panel").unwrap();
+    let removed = store.remove("acme-test-panel").unwrap();
 
     assert!(removed);
-    assert!(!fixture.installed_plugin_dir("acme.test-panel").exists());
+    assert!(!fixture.installed_plugin_dir("acme-test-panel").exists());
 }
 
 #[test]
 fn enumerates_installed_and_dev_plugins_with_expected_states() {
-    let fixture = PluginFixture::new("acme.test-panel");
+    let fixture = PluginFixture::new("acme-test-panel");
     fixture.write_plugin("installed-source", "0.1.0");
     fixture.write_plugin("dev-source", "0.2.0-dev");
 
@@ -84,7 +84,7 @@ fn enumerates_installed_and_dev_plugins_with_expected_states() {
 
 #[test]
 fn reinstalling_plugin_updates_status_and_replaces_existing_copy() {
-    let fixture = PluginFixture::new("acme.test-panel");
+    let fixture = PluginFixture::new("acme-test-panel");
     fixture.write_plugin("source-plugin", "0.1.0");
 
     let mut store = fixture.store();
@@ -107,7 +107,7 @@ fn reinstalling_plugin_updates_status_and_replaces_existing_copy() {
 
 #[test]
 fn manifest_rejects_unsupported_schema_version() {
-    let fixture = PluginFixture::new("acme.test-panel");
+    let fixture = PluginFixture::new("acme-test-panel");
     fixture.write_plugin_manifest("source-plugin", "0.1.0", Some(2), Some("bin/test-panel"));
     fixture.write_entrypoint("source-plugin");
 
@@ -122,7 +122,7 @@ fn manifest_rejects_unsupported_schema_version() {
 
 #[test]
 fn install_requires_manifest_entrypoint_to_exist() {
-    let fixture = PluginFixture::new("acme.test-panel");
+    let fixture = PluginFixture::new("acme-test-panel");
     fixture.write_plugin_manifest("source-plugin", "0.1.0", Some(1), Some("bin/test-panel"));
     let mut store = fixture.store();
 
@@ -134,8 +134,99 @@ fn install_requires_manifest_entrypoint_to_exist() {
 }
 
 #[test]
+fn manifest_rejects_invalid_plugin_ids() {
+    for invalid_plugin_id in ["../escape", "foo/bar", "foo.bar"] {
+        let fixture = PluginFixture::new(invalid_plugin_id);
+        fixture.write_plugin("source-plugin", "0.1.0");
+
+        let error = PluginManifest::load(fixture.plugin_dir("source-plugin")).unwrap_err();
+
+        assert!(
+            error
+                .to_string()
+                .contains("must use an id containing only ASCII alphanumeric characters")
+        );
+    }
+}
+
+#[test]
+fn install_rejects_entrypoint_path_traversal() {
+    let fixture = PluginFixture::new("acme-test-panel");
+    fixture.write_plugin_manifest("source-plugin", "0.1.0", Some(1), Some("../escape.sh"));
+    fs::write(fixture.root.path().join("escape.sh"), "#!/bin/sh\n").unwrap();
+
+    let mut store = fixture.store();
+    let error = store
+        .install_from_directory(fixture.plugin_dir("source-plugin"))
+        .unwrap_err();
+
+    assert!(error.to_string().contains("must not contain path traversal"));
+}
+
+#[cfg(unix)]
+#[test]
+fn install_rejects_entrypoint_symlink_escape() {
+    use std::os::unix::fs::symlink;
+
+    let fixture = PluginFixture::new("acme-test-panel");
+    fixture.write_plugin_manifest("source-plugin", "0.1.0", Some(1), Some("bin/test-panel"));
+    fs::create_dir_all(fixture.plugin_dir("source-plugin").join("bin")).unwrap();
+    fs::write(fixture.root.path().join("escape.sh"), "#!/bin/sh\n").unwrap();
+    symlink(
+        "../../escape.sh",
+        fixture.plugin_dir("source-plugin").join("bin/test-panel"),
+    )
+    .unwrap();
+
+    let mut store = fixture.store();
+    let error = store
+        .install_from_directory(fixture.plugin_dir("source-plugin"))
+        .unwrap_err();
+
+    assert!(error.to_string().contains("resolves outside plugin directory"));
+}
+
+#[cfg(unix)]
+#[test]
+fn install_rejects_symlinked_source_directory() {
+    use std::os::unix::fs::symlink;
+
+    let fixture = PluginFixture::new("acme-test-panel");
+    fixture.write_plugin("source-plugin", "0.1.0");
+    let symlinked_source = fixture.root.path().join("symlinked-source");
+    symlink(fixture.plugin_dir("source-plugin"), &symlinked_source).unwrap();
+
+    let mut store = fixture.store();
+    let error = store.install_from_directory(&symlinked_source).unwrap_err();
+
+    assert!(error.to_string().contains("must not be a symlink"));
+}
+
+#[cfg(unix)]
+#[test]
+fn install_rejects_symlink_inside_plugin_directory() {
+    use std::os::unix::fs::symlink;
+
+    let fixture = PluginFixture::new("acme-test-panel");
+    fixture.write_plugin("source-plugin", "0.1.0");
+    fs::write(fixture.root.path().join("escape.sh"), "#!/bin/sh\n").unwrap();
+    symlink(
+        "../../escape.sh",
+        fixture.plugin_dir("source-plugin").join("bin/escape"),
+    )
+    .unwrap();
+
+    let mut store = fixture.store();
+    let error = store
+        .install_from_directory(fixture.plugin_dir("source-plugin"))
+        .unwrap_err();
+
+    assert!(error.to_string().contains("contains symlink"));
+}
+
+#[test]
 fn cargo_plugin_manifest_accepts_declared_bin_target() {
-    let fixture = PluginFixture::new("acme.test-panel");
+    let fixture = PluginFixture::new("acme-test-panel");
     fixture.write_cargo_plugin("source-plugin", "0.1.0", "test-panel-plugin");
 
     let manifest = PluginManifest::load(fixture.plugin_dir("source-plugin")).unwrap();
@@ -145,7 +236,7 @@ fn cargo_plugin_manifest_accepts_declared_bin_target() {
 
 #[test]
 fn cargo_plugin_manifest_requires_declared_bin_target() {
-    let fixture = PluginFixture::new("acme.test-panel");
+    let fixture = PluginFixture::new("acme-test-panel");
     fixture.write_cargo_plugin_manifest("source-plugin", "0.1.0", "missing-bin");
 
     let error = PluginManifest::load(fixture.plugin_dir("source-plugin")).unwrap_err();
@@ -159,7 +250,7 @@ fn cargo_plugin_manifest_requires_declared_bin_target() {
 
 #[test]
 fn list_surfaces_installed_manifest_errors_without_failing() {
-    let fixture = PluginFixture::new("acme.test-panel");
+    let fixture = PluginFixture::new("acme-test-panel");
     fixture.write_plugin("healthy-plugin", "0.1.0");
 
     let mut store = fixture.store();
@@ -188,7 +279,7 @@ fn list_surfaces_installed_manifest_errors_without_failing() {
 
 #[test]
 fn list_surfaces_development_registration_errors_without_failing() {
-    let fixture = PluginFixture::new("acme.test-panel");
+    let fixture = PluginFixture::new("acme-test-panel");
     fixture.write_plugin("healthy-plugin", "0.1.0");
 
     let mut store = fixture.store();
@@ -224,7 +315,7 @@ fn list_surfaces_development_registration_errors_without_failing() {
 fn failed_reinstall_keeps_existing_installed_copy() {
     use std::os::unix::fs::PermissionsExt;
 
-    let fixture = PluginFixture::new("acme.test-panel");
+    let fixture = PluginFixture::new("acme-test-panel");
     fixture.write_plugin("installed-plugin", "0.1.0");
     fixture.write_plugin("replacement-plugin", "0.2.0");
     fixture.write_unreadable_asset("replacement-plugin");
@@ -245,7 +336,7 @@ fn failed_reinstall_keeps_existing_installed_copy() {
     let error = store
         .install_from_directory(fixture.plugin_dir("replacement-plugin"))
         .unwrap_err();
-    let manifest = PluginManifest::load(fixture.installed_plugin_dir("acme.test-panel")).unwrap();
+    let manifest = PluginManifest::load(fixture.installed_plugin_dir("acme-test-panel")).unwrap();
 
     assert!(error.to_string().contains("failed to copy plugin file"));
     assert_eq!(manifest.version, "0.1.0");
