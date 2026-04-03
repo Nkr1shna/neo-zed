@@ -280,6 +280,14 @@ pub fn extensions_dir() -> &'static PathBuf {
     EXTENSIONS_DIR.get_or_init(|| data_dir().join("extensions"))
 }
 
+/// Returns the path to the plugins directory.
+///
+/// This is where installed plugins are stored.
+pub fn plugins_dir() -> &'static PathBuf {
+    static PLUGINS_DIR: OnceLock<PathBuf> = OnceLock::new();
+    PLUGINS_DIR.get_or_init(|| data_dir().join("plugins"))
+}
+
 /// Returns the path to the extensions directory.
 ///
 /// This is where installed extensions are stored on a remote.

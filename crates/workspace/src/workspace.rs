@@ -2092,7 +2092,7 @@ impl Workspace {
         let left_visible = left_dock.is_open();
         let left_active_panel = left_dock
             .active_panel()
-            .map(|panel| panel.persistent_name().to_string());
+            .map(|panel| panel.panel_key(cx).to_string());
         // `zoomed_position` is kept in sync with individual panel zoom state
         // by the dock code in `Dock::new` and `Dock::add_panel`.
         let left_dock_zoom = self.zoomed_position == Some(DockPosition::Left);
@@ -2101,14 +2101,14 @@ impl Workspace {
         let right_visible = right_dock.is_open();
         let right_active_panel = right_dock
             .active_panel()
-            .map(|panel| panel.persistent_name().to_string());
+            .map(|panel| panel.panel_key(cx).to_string());
         let right_dock_zoom = self.zoomed_position == Some(DockPosition::Right);
 
         let bottom_dock = self.bottom_dock.read(cx);
         let bottom_visible = bottom_dock.is_open();
         let bottom_active_panel = bottom_dock
             .active_panel()
-            .map(|panel| panel.persistent_name().to_string());
+            .map(|panel| panel.panel_key(cx).to_string());
         let bottom_dock_zoom = self.zoomed_position == Some(DockPosition::Bottom);
 
         DockStructure {
@@ -2182,7 +2182,7 @@ impl Workspace {
 
     pub fn persisted_panel_size_state(
         &self,
-        panel_key: &'static str,
+        panel_key: &str,
         cx: &App,
     ) -> Option<dock::PanelSizeState> {
         dock::Dock::load_persisted_size_state(self, panel_key, cx)
@@ -2373,18 +2373,19 @@ impl Workspace {
         let dock_position = panel.position(window, cx);
         let dock = self.dock_at_position(dock_position);
         let any_panel = panel.to_any();
-        let persisted_size_state =
-            self.persisted_panel_size_state(T::panel_key(), cx)
-                .or_else(|| {
-                    load_legacy_panel_size(T::panel_key(), dock_position, self, cx).map(|size| {
-                        let state = dock::PanelSizeState {
-                            size: Some(size),
-                            flex: None,
-                        };
-                        self.persist_panel_size_state(T::panel_key(), state, cx);
-                        state
-                    })
-                });
+        let persisted_panel_key = panel.read(cx).panel_key_for_persistence();
+        let persisted_size_state = self
+            .persisted_panel_size_state(persisted_panel_key.as_ref(), cx)
+            .or_else(|| {
+                load_legacy_panel_size(T::panel_key(), dock_position, self, cx).map(|size| {
+                    let state = dock::PanelSizeState {
+                        size: Some(size),
+                        flex: None,
+                    };
+                    self.persist_panel_size_state(T::panel_key(), state, cx);
+                    state
+                })
+            });
 
         dock.update(cx, |dock, cx| {
             let index = dock.add_panel(panel.clone(), self.weak_self.clone(), window, cx);
@@ -4131,6 +4132,89 @@ impl Workspace {
         panel
     }
 
+    pub fn reveal_panel_by_id(
+        &mut self,
+        panel_id: EntityId,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> Option<Arc<dyn PanelHandle>> {
+        let mut panel = None;
+        for dock in self.all_docks() {
+            if let Some(panel_index) = dock.read(cx).panel_index_for_id(panel_id) {
+                panel = dock.update(cx, |dock, cx| {
+                    dock.activate_panel(panel_index, window, cx);
+                    dock.set_open(true, window, cx);
+                    dock.active_panel().cloned()
+                });
+                break;
+            }
+        }
+
+        if panel.is_some() {
+            cx.notify();
+            self.serialize_workspace(window, cx);
+        }
+
+        panel
+    }
+
+    pub fn toggle_panel_by_id(
+        &mut self,
+        panel_id: EntityId,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> bool {
+        let mut did_focus_panel = false;
+        let mut found_panel = false;
+        let docks = [
+            self.left_dock.clone(),
+            self.bottom_dock.clone(),
+            self.right_dock.clone(),
+        ];
+
+        for dock in docks {
+            let Some(panel_index) = dock.read(cx).panel_index_for_id(panel_id) else {
+                continue;
+            };
+
+            let mut focus_center = false;
+            let panel = dock.update(cx, |dock, cx| {
+                dock.activate_panel(panel_index, window, cx);
+
+                let panel = dock.active_panel().cloned();
+                if let Some(panel) = panel.as_ref() {
+                    found_panel = true;
+                    did_focus_panel = !panel.panel_focus_handle(cx).contains_focused(window, cx);
+                    if did_focus_panel {
+                        dock.set_open(true, window, cx);
+                        panel.panel_focus_handle(cx).focus(window, cx);
+                    } else {
+                        focus_center = true;
+                    }
+                }
+                panel
+            });
+
+            if focus_center {
+                self.active_pane
+                    .update(cx, |pane, cx| window.focus(&pane.focus_handle(cx), cx));
+            }
+
+            if !did_focus_panel
+                && panel.is_some()
+                && WorkspaceSettings::get_global(cx).close_panel_on_toggle
+            {
+                dock.update(cx, |dock, cx| dock.set_open(false, window, cx));
+            }
+
+            self.serialize_workspace(window, cx);
+            cx.notify();
+            break;
+        }
+
+        found_panel && did_focus_panel
+    }
+
     /// Focus or unfocus the given panel type, depending on the given callback.
     fn focus_or_unfocus_panel<T: Panel>(
         &mut self,
@@ -4214,6 +4298,16 @@ impl Workspace {
         self.all_docks()
             .iter()
             .find_map(|dock| dock.read(cx).panel::<T>())
+    }
+
+    pub fn panel_for_serialized_key(
+        &self,
+        serialized_key: &str,
+        cx: &App,
+    ) -> Option<Arc<dyn dock::PanelHandle>> {
+        self.all_docks()
+            .iter()
+            .find_map(|dock| dock.read(cx).panel_for_serialized_key(serialized_key, cx))
     }
 
     fn dismiss_zoomed_items_to_reveal(
@@ -6804,19 +6898,19 @@ impl Workspace {
 
         if self.left_dock.read(cx).is_open() {
             if let Some(active_panel) = self.left_dock.read(cx).active_panel() {
-                context.set("left_dock", active_panel.panel_key());
+                context.set("left_dock", active_panel.panel_key(cx).to_string());
             }
         }
 
         if self.right_dock.read(cx).is_open() {
             if let Some(active_panel) = self.right_dock.read(cx).active_panel() {
-                context.set("right_dock", active_panel.panel_key());
+                context.set("right_dock", active_panel.panel_key(cx).to_string());
             }
         }
 
         if self.bottom_dock.read(cx).is_open() {
             if let Some(active_panel) = self.bottom_dock.read(cx).active_panel() {
-                context.set("bottom_dock", active_panel.panel_key());
+                context.set("bottom_dock", active_panel.panel_key(cx).to_string());
             }
         }
 
@@ -14799,6 +14893,53 @@ mod tests {
                 workspace.right_dock().read(cx).panels_len(),
                 2,
                 "Both panels should still be in the right dock"
+            );
+        });
+    }
+
+    #[gpui::test]
+    async fn test_dock_restore_uses_panel_persistence_keys(cx: &mut gpui::TestAppContext) {
+        init_test(cx);
+        let fs = FakeFs::new(cx.executor());
+        let project = Project::test(fs, [], cx).await;
+        let (workspace, cx) =
+            cx.add_window_view(|window, cx| Workspace::test_new(project, window, cx));
+
+        let panel_b_id = workspace.update_in(cx, |workspace, window, cx| {
+            let panel_a = cx.new(|cx| {
+                TestPanel::new(DockPosition::Left, 100, cx)
+                    .with_persistence_key("plugin_panel::acme::panel_a")
+            });
+            let panel_b = cx.new(|cx| {
+                TestPanel::new(DockPosition::Left, 101, cx)
+                    .with_persistence_key("plugin_panel::acme::panel_b")
+            });
+            let panel_b_id = panel_b.entity_id();
+
+            workspace.add_panel(panel_a, window, cx);
+            workspace.add_panel(panel_b.clone(), window, cx);
+            workspace.left_dock().update(cx, |dock, cx| {
+                dock.serialized_dock = Some(DockData {
+                    visible: true,
+                    active_panel: Some("plugin_panel::acme::panel_b".to_string()),
+                    zoom: false,
+                });
+                assert!(dock.restore_state(window, cx));
+            });
+
+            panel_b_id
+        });
+
+        workspace.update_in(cx, |workspace, _window, cx| {
+            let active_panel = workspace
+                .left_dock()
+                .read(cx)
+                .active_panel()
+                .expect("left dock should restore an active panel");
+            assert_eq!(
+                active_panel.panel_id(),
+                panel_b_id,
+                "dock restore should activate the panel matching the serialized persistence key"
             );
         });
     }

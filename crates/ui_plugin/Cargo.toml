@@ -1,0 +1,20 @@
+[package]
+name = "ui_plugin"
+version = "0.1.0"
+edition.workspace = true
+publish.workspace = true
+
+[lib]
+path = "src/ui_plugin.rs"
+
+[lints]
+workspace = true
+
+[dependencies]
+anyhow.workspace = true
+strum.workspace = true
+gpui_api.workspace = true
+gpui_plugin.workspace = true
+serde = { workspace = true, features = ["derive"] }
+ui.workspace = true
+ui_macros.workspace = true
