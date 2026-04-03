@@ -46,6 +46,7 @@ const CHATGPT_URL: &str = "https://chatgpt.com";
 const CLIENT_ID: &str = "app_EMoamEEZ73f0CkXaXp7hrann";
 const OAUTH_SCOPE: &str = "openid profile email offline_access";
 const ACCOUNT_ID_CLAIM: &str = "https://api.openai.com/auth";
+#[cfg(test)]
 const REDIRECT_PORT: u16 = 1455;
 const REDIRECT_PATH: &str = "/auth/callback";
 const DEFAULT_TOKEN_EXPIRY_SECONDS: u64 = 3_600;
@@ -660,10 +661,9 @@ fn run_login_flow(mut state: PersistedAuthState) -> Result<PersistedAuthState> {
     let challenge = base64_url_encode(&challenge_digest);
     let state_bytes: [u8; 16] = rand::random();
     let oauth_state = base64_url_encode(&state_bytes);
-    let redirect_uri = redirect_uri();
-
-    let authorize_url = build_authorize_url(&redirect_uri, &challenge, &oauth_state)?;
     let listener = bind_oauth_listener()?;
+    let redirect_uri = oauth_redirect_uri(listener.local_addr()?.port());
+    let authorize_url = build_authorize_url(&redirect_uri, &challenge, &oauth_state)?;
     open::that_detached(authorize_url.as_str())
         .with_context(|| "failed to open the ChatGPT sign-in flow")?;
 
@@ -736,8 +736,7 @@ fn refresh_access_token(state: &mut PersistedAuthState) -> Result<()> {
         .refresh_token
         .clone()
         .ok_or_else(|| anyhow::anyhow!("no refresh token is available"))?;
-    let redirect_uri = redirect_uri();
-    let response = exchange_refresh_token(&refresh_token, &redirect_uri)?;
+    let response = exchange_refresh_token(&refresh_token)?;
     apply_tokens(state, response);
     Ok(())
 }
@@ -773,7 +772,7 @@ fn exchange_authorization_code(
     parse_token_response(response, fallback_refresh_token)
 }
 
-fn exchange_refresh_token(refresh_token: &str, redirect_uri: &str) -> Result<TokenResponse> {
+fn exchange_refresh_token(refresh_token: &str) -> Result<TokenResponse> {
     let client = reqwest::blocking::Client::new();
     let response = client
         .post(TOKEN_URL)
@@ -781,7 +780,6 @@ fn exchange_refresh_token(refresh_token: &str, redirect_uri: &str) -> Result<Tok
             ("grant_type", "refresh_token"),
             ("client_id", CLIENT_ID),
             ("refresh_token", refresh_token),
-            ("redirect_uri", redirect_uri),
         ])
         .send()
         .with_context(|| "refresh token request failed")?;
@@ -1408,8 +1406,8 @@ fn capitalize_plan_word(word: &str) -> String {
         .collect()
 }
 
-fn redirect_uri() -> String {
-    format!("http://localhost:{REDIRECT_PORT}{REDIRECT_PATH}")
+fn oauth_redirect_uri(port: u16) -> String {
+    format!("http://localhost:{port}{REDIRECT_PATH}")
 }
 
 fn build_authorize_url(redirect_uri: &str, challenge: &str, oauth_state: &str) -> Result<Url> {
@@ -1431,9 +1429,8 @@ fn build_authorize_url(redirect_uri: &str, challenge: &str, oauth_state: &str) -
 }
 
 fn bind_oauth_listener() -> Result<TcpListener> {
-    let listener = TcpListener::bind(("127.0.0.1", REDIRECT_PORT)).with_context(|| {
-        format!("failed to bind the OAuth callback server on port {REDIRECT_PORT}")
-    })?;
+    let listener = TcpListener::bind(("127.0.0.1", 0))
+        .with_context(|| "failed to bind the OAuth callback server on an ephemeral port")?;
     listener
         .set_nonblocking(true)
         .with_context(|| "failed to configure the OAuth callback server")?;
@@ -1850,4 +1847,98 @@ struct TokenResponse {
     account_id: Option<String>,
     expires_at: u64,
     last_refresh_at: u64,
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::net::Shutdown;
+    use std::net::TcpStream;
+    use std::thread;
+
+    #[test]
+    fn oauth_listener_uses_ephemeral_port() {
+        let listener = bind_oauth_listener().expect("listener should bind");
+        let port = listener
+            .local_addr()
+            .expect("listener should have an address")
+            .port();
+
+        assert_ne!(port, 0);
+        assert_ne!(port, REDIRECT_PORT);
+        assert_eq!(
+            oauth_redirect_uri(port),
+            format!("http://localhost:{port}{REDIRECT_PATH}")
+        );
+    }
+
+    #[test]
+    fn oauth_callback_returns_authorization_code_for_bound_port() {
+        let listener = bind_oauth_listener().expect("listener should bind");
+        let expected_state = "expected-state";
+        let authorization_code = "auth-code-123";
+        let callback_address = listener
+            .local_addr()
+            .expect("listener should have an address");
+
+        let sender = thread::spawn(move || -> Result<()> {
+            let mut stream = TcpStream::connect(callback_address)
+                .with_context(|| "failed to connect to the OAuth listener")?;
+            std::io::Write::write_all(
+                &mut stream,
+                format!(
+                    "GET /auth/callback?state={expected_state}&code={authorization_code} HTTP/1.1\r\nHost: localhost\r\nConnection: close\r\n\r\n"
+                )
+                .as_bytes(),
+            )
+                .with_context(|| "failed to write the OAuth callback request")?;
+            stream
+                .shutdown(Shutdown::Write)
+                .with_context(|| "failed to close the OAuth callback write half")?;
+            Ok(())
+        });
+
+        let received_code =
+            wait_for_authorization_code(listener, expected_state, Duration::from_secs(5))
+                .expect("callback should complete successfully");
+
+        sender
+            .join()
+            .expect("callback sender should not panic")
+            .expect("callback sender should succeed");
+
+        assert_eq!(received_code, authorization_code);
+    }
+
+    #[test]
+    fn oauth_callback_rejects_state_mismatch() {
+        let listener = bind_oauth_listener().expect("listener should bind");
+        let callback_address = listener
+            .local_addr()
+            .expect("listener should have an address");
+
+        let sender = thread::spawn(move || -> Result<()> {
+            let mut stream = TcpStream::connect(callback_address)
+                .with_context(|| "failed to connect to the OAuth listener")?;
+            std::io::Write::write_all(
+                &mut stream,
+                b"GET /auth/callback?state=wrong-state&code=auth-code-123 HTTP/1.1\r\nHost: localhost\r\nConnection: close\r\n\r\n",
+            )
+                .with_context(|| "failed to write the OAuth callback request")?;
+            stream
+                .shutdown(Shutdown::Write)
+                .with_context(|| "failed to close the OAuth callback write half")?;
+            Ok(())
+        });
+
+        let error = wait_for_authorization_code(listener, "expected-state", Duration::from_secs(5))
+            .expect_err("callback should fail");
+
+        sender
+            .join()
+            .expect("callback sender should not panic")
+            .expect("callback sender should succeed");
+
+        assert!(error.to_string().contains("state mismatch"));
+    }
 }

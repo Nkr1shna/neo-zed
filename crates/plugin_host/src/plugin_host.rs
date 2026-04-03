@@ -1398,10 +1398,13 @@ mod host {
         terminate_sender: channel::Sender<ProcessTermination>,
     }
 
-    #[derive(Clone, Copy)]
+    const MAX_PLUGIN_STDIO_LINE_BYTES: usize = 1_048_576;
+
+    #[derive(Clone, Debug)]
     enum ProcessTermination {
         Idle,
         RegistrationTimedOut,
+        ProtocolViolation { message: String },
     }
 
     impl ProcessTermination {
@@ -1411,8 +1414,163 @@ mod host {
                 Self::RegistrationTimedOut => Some(format!(
                     "plugin `{plugin_id}` did not register with the host before the startup timeout"
                 )),
+                Self::ProtocolViolation { message } => Some(message),
             }
         }
+    }
+
+    async fn read_bounded_line<R>(reader: &mut R, max_bytes: usize) -> Result<Option<String>>
+    where
+        R: futures::io::AsyncBufRead + Unpin,
+    {
+        let mut line = Vec::new();
+
+        loop {
+            let available = reader.fill_buf().await?;
+            if available.is_empty() {
+                if line.is_empty() {
+                    return Ok(None);
+                }
+                break;
+            }
+
+            let newline_found = available.iter().position(|byte| *byte == b'\n');
+            let bytes_to_take = newline_found
+                .map(|newline_index| newline_index + 1)
+                .unwrap_or(available.len());
+
+            if line.len().saturating_add(bytes_to_take) > max_bytes {
+                anyhow::bail!("protocol line exceeded {max_bytes} bytes");
+            }
+
+            line.extend_from_slice(&available[..bytes_to_take]);
+            reader.consume_unpin(bytes_to_take);
+
+            if newline_found.is_some() {
+                break;
+            }
+        }
+
+        if line.ends_with(b"\n") {
+            line.pop();
+        }
+        if line.ends_with(b"\r") {
+            line.pop();
+        }
+
+        Ok(Some(
+            String::from_utf8(line).context("protocol line was not valid UTF-8")?,
+        ))
+    }
+
+    fn request_process_termination(
+        terminate_sender: &channel::Sender<ProcessTermination>,
+        reason: ProcessTermination,
+        context: &str,
+    ) {
+        if let Err(error) = terminate_sender.try_send(reason) {
+            eprintln!("failed to request plugin termination after {context}: {error}");
+        }
+    }
+
+    async fn forward_plugin_stdout<R>(
+        mut reader: R,
+        event_sender: channel::Sender<PluginHostEvent>,
+        terminate_sender: channel::Sender<ProcessTermination>,
+        plugin_id: PluginId,
+        process_instance_id: u64,
+    ) -> Result<()>
+    where
+        R: futures::io::AsyncBufRead + Unpin,
+    {
+        loop {
+            let line = match read_bounded_line(&mut reader, MAX_PLUGIN_STDIO_LINE_BYTES).await {
+                Ok(line) => line,
+                Err(error) => {
+                    request_process_termination(
+                        &terminate_sender,
+                        ProcessTermination::ProtocolViolation {
+                            message: format!(
+                                "plugin `{}` sent an invalid stdout protocol message: {error:#}",
+                                plugin_id
+                            ),
+                        },
+                        "invalid stdout protocol message",
+                    );
+                    return Ok(());
+                }
+            };
+            let Some(line) = line else {
+                break;
+            };
+
+            let message: PluginToHost = match serde_json::from_str(line.trim())
+                .context("failed to decode plugin stdout message")
+            {
+                Ok(message) => message,
+                Err(error) => {
+                    request_process_termination(
+                        &terminate_sender,
+                        ProcessTermination::ProtocolViolation {
+                            message: format!(
+                                "plugin `{}` sent an invalid stdout protocol message: {error:#}",
+                                plugin_id
+                            ),
+                        },
+                        "invalid stdout protocol message",
+                    );
+                    return Ok(());
+                }
+            };
+
+            if let Err(error) = event_sender
+                .send(PluginHostEvent::Message {
+                    plugin_id: plugin_id.clone(),
+                    process_instance_id,
+                    message,
+                })
+                .await
+            {
+                eprintln!("failed to forward plugin stdout message: {error}");
+                return Ok(());
+            }
+        }
+
+        Ok(())
+    }
+
+    async fn log_plugin_stderr<R>(
+        mut reader: R,
+        terminate_sender: channel::Sender<ProcessTermination>,
+        plugin_id: PluginId,
+    ) -> Result<()>
+    where
+        R: futures::io::AsyncBufRead + Unpin,
+    {
+        loop {
+            let line = match read_bounded_line(&mut reader, MAX_PLUGIN_STDIO_LINE_BYTES).await {
+                Ok(line) => line,
+                Err(error) => {
+                    request_process_termination(
+                        &terminate_sender,
+                        ProcessTermination::ProtocolViolation {
+                            message: format!(
+                                "plugin `{}` wrote an invalid stderr line: {error:#}",
+                                plugin_id
+                            ),
+                        },
+                        "invalid stderr output",
+                    );
+                    return Ok(());
+                }
+            };
+            let Some(line) = line else {
+                break;
+            };
+            eprintln!("plugin stderr: {}", line.trim());
+        }
+
+        Ok(())
     }
 
     enum PluginHostEvent {
@@ -2982,15 +3140,9 @@ mod host {
                 restored_panels_to_attach.push(panel_key);
             }
 
-            panels_to_remove.extend(
-                panels
-                    .into_iter()
-                    .enumerate()
-                    .filter_map(|(index, panel)| {
-                        (index != panel_to_keep_index)
-                            .then_some((panel.panel, panel.panel_instance_id))
-                    }),
-            );
+            panels_to_remove.extend(panels.into_iter().enumerate().filter_map(|(index, panel)| {
+                (index != panel_to_keep_index).then_some((panel.panel, panel.panel_instance_id))
+            }));
         }
 
         for (panel, panel_instance_id) in panels_to_remove {
@@ -3050,10 +3202,7 @@ mod host {
         entity_id: gpui::EntityId,
     }
 
-    fn workspace_remote_panels(
-        workspace: &Workspace,
-        cx: &App,
-    ) -> Vec<WorkspaceRemotePanel> {
+    fn workspace_remote_panels(workspace: &Workspace, cx: &App) -> Vec<WorkspaceRemotePanel> {
         let mut panels = Vec::new();
         let mut seen_entity_ids = BTreeSet::new();
 
@@ -3116,7 +3265,7 @@ mod host {
             .stdout
             .take()
             .context("plugin process did not expose stdout")?;
-        let mut stderr = child
+        let stderr = child
             .stderr
             .take()
             .context("plugin process did not expose stderr")?;
@@ -3138,41 +3287,30 @@ mod host {
 
         let stdout_sender = event_sender.clone();
         let stdout_plugin_id = plugin_id.clone();
+        let stdout_terminate_sender = terminate_sender.clone();
         async_cx
             .background_spawn(async move {
-                let mut reader = BufReader::new(stdout);
-                let mut line = String::new();
-                loop {
-                    line.clear();
-                    if reader.read_line(&mut line).await? == 0 {
-                        break;
-                    }
-                    let message: PluginToHost = serde_json::from_str(line.trim_end())
-                        .context("failed to decode plugin stdout message")?;
-                    stdout_sender
-                        .send(PluginHostEvent::Message {
-                            plugin_id: stdout_plugin_id.clone(),
-                            process_instance_id,
-                            message,
-                        })
-                        .await?;
-                }
-                anyhow::Ok(())
+                forward_plugin_stdout(
+                    BufReader::new(stdout),
+                    stdout_sender,
+                    stdout_terminate_sender,
+                    stdout_plugin_id,
+                    process_instance_id,
+                )
+                .await
             })
             .detach();
 
+        let stderr_terminate_sender = terminate_sender.clone();
+        let stderr_plugin_id = plugin_id.clone();
         async_cx
             .background_spawn(async move {
-                let mut reader = BufReader::new(&mut stderr);
-                let mut line = String::new();
-                loop {
-                    line.clear();
-                    if reader.read_line(&mut line).await? == 0 {
-                        break;
-                    }
-                    eprintln!("plugin stderr: {}", line.trim_end());
-                }
-                anyhow::Ok(())
+                log_plugin_stderr(
+                    BufReader::new(stderr),
+                    stderr_terminate_sender,
+                    stderr_plugin_id,
+                )
+                .await
             })
             .detach();
 
@@ -3462,6 +3600,26 @@ mod host {
         }
 
         #[gpui::test]
+        async fn read_bounded_line_rejects_oversized_lines(_cx: &mut TestAppContext) {
+            let mut reader =
+                futures::io::BufReader::new(futures::io::Cursor::new(b"abcdef\n".to_vec()));
+
+            let line = read_bounded_line(&mut reader, 16)
+                .await
+                .expect("bounded line should read successfully")
+                .expect("line should be present");
+            assert_eq!(line, "abcdef");
+
+            let mut oversized_reader =
+                futures::io::BufReader::new(futures::io::Cursor::new(b"abcdef\n".to_vec()));
+
+            let error = read_bounded_line(&mut oversized_reader, 4)
+                .await
+                .expect_err("line should exceed the limit");
+            assert!(error.to_string().contains("protocol line exceeded 4 bytes"));
+        }
+
+        #[gpui::test]
         async fn sync_active_theme_broadcasts_theme_changed_to_running_processes(
             cx: &mut TestAppContext,
         ) {
@@ -3612,47 +3770,48 @@ activation = "on_startup"
             let (workspace, cx) =
                 cx.add_window_view(|window, cx| new_test_workspace(project, window, cx));
 
-            workspace.update_in(cx, |workspace, window, workspace_cx| {
-                let (descriptor, event_sender) = registry.update(workspace_cx, |registry, _| {
+            workspace
+                .update_in(cx, |workspace, window, workspace_cx| {
+                    let (descriptor, event_sender) = registry.update(workspace_cx, |registry, _| {
                     Ok::<(PanelDescriptor, channel::Sender<PluginHostEvent>), anyhow::Error>((
                         registry.panel_descriptor("test-plugin", "startup-a")?,
                         registry.event_sender.clone(),
                     ))
                 })?;
-                let restored_panel = workspace_cx.new(|panel_cx| {
-                    RemotePluginPanel::new(
-                        "test-plugin",
-                        descriptor,
-                        PanelInstanceId::new("restored-panel".to_string()),
-                        10_000,
-                        registry.downgrade(),
-                        event_sender,
-                        panel_cx,
-                    )
-                });
+                    let restored_panel = workspace_cx.new(|panel_cx| {
+                        RemotePluginPanel::new(
+                            "test-plugin",
+                            descriptor,
+                            PanelInstanceId::new("restored-panel".to_string()),
+                            10_000,
+                            registry.downgrade(),
+                            event_sender,
+                            panel_cx,
+                        )
+                    });
 
-                workspace.add_panel(restored_panel.clone(), window, workspace_cx);
-                assert_eq!(workspace.right_dock().read(workspace_cx).panels_len(), 1);
+                    workspace.add_panel(restored_panel.clone(), window, workspace_cx);
+                    assert_eq!(workspace.right_dock().read(workspace_cx).panels_len(), 1);
 
-                sync_workspace_panels_for_workspace(&registry, workspace, window, workspace_cx)
-                    .expect("sync plugin panels");
+                    sync_workspace_panels_for_workspace(&registry, workspace, window, workspace_cx)
+                        .expect("sync plugin panels");
 
-                let right_dock = workspace.right_dock().read(workspace_cx);
-                assert_eq!(right_dock.panels_len(), 1);
+                    let right_dock = workspace.right_dock().read(workspace_cx);
+                    assert_eq!(right_dock.panels_len(), 1);
 
-                let bindings = registry
-                    .read(workspace_cx)
-                    .panels
-                    .values()
-                    .filter(|binding| binding.workspace == workspace.weak_handle())
-                    .cloned()
-                    .collect::<Vec<_>>();
-                assert_eq!(bindings.len(), 1);
-                assert_eq!(bindings[0].panel_entity_id, restored_panel.entity_id());
+                    let bindings = registry
+                        .read(workspace_cx)
+                        .panels
+                        .values()
+                        .filter(|binding| binding.workspace == workspace.weak_handle())
+                        .cloned()
+                        .collect::<Vec<_>>();
+                    assert_eq!(bindings.len(), 1);
+                    assert_eq!(bindings[0].panel_entity_id, restored_panel.entity_id());
 
-                Ok::<(), anyhow::Error>(())
-            })
-            .expect("rebind restored panel");
+                    Ok::<(), anyhow::Error>(())
+                })
+                .expect("rebind restored panel");
         }
 
         #[gpui::test]
@@ -4150,6 +4309,39 @@ activation = "on_demand"
                 });
                 assert!(!registry.read(cx).processes.contains_key(&plugin_id));
             });
+        }
+
+        #[gpui::test]
+        async fn oversized_stdout_line_requests_protocol_termination(_cx: &mut TestAppContext) {
+            let reader = futures::io::BufReader::new(futures::io::Cursor::new(vec![
+                b'a';
+                MAX_PLUGIN_STDIO_LINE_BYTES
+                    + 1
+            ]));
+            let (event_sender, event_receiver) = channel::unbounded::<PluginHostEvent>();
+            let (terminate_sender, terminate_receiver) = channel::unbounded::<ProcessTermination>();
+
+            forward_plugin_stdout(
+                reader,
+                event_sender,
+                terminate_sender,
+                PluginId::new("oversized-stdout-plugin"),
+                1,
+            )
+            .await
+            .expect("stdout forwarding should complete");
+
+            match terminate_receiver.try_recv() {
+                Ok(ProcessTermination::ProtocolViolation { message }) => {
+                    assert!(message.contains("oversized-stdout-plugin"));
+                    assert!(message.contains("stdout"));
+                    assert!(message.contains("bytes"));
+                }
+                Ok(other) => panic!("unexpected termination reason: {other:?}"),
+                Err(error) => panic!("expected protocol violation termination, got {error}"),
+            }
+
+            assert!(event_receiver.try_recv().is_err());
         }
     }
 }
