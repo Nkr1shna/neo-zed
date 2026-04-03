@@ -402,24 +402,26 @@ impl ProjectPicker {
             picker
         });
 
-        let data = match &connection {
-            RemoteConnectionOptions::Ssh(connection) => ProjectPickerData::Ssh {
+        let data = if let RemoteConnectionOptions::Ssh(connection) = &connection {
+            ProjectPickerData::Ssh {
                 connection_string: connection.connection_string().into(),
                 nickname: connection.nickname.clone().map(|nick| nick.into()),
-            },
-            RemoteConnectionOptions::Wsl(connection) => ProjectPickerData::Wsl {
+            }
+        } else if let RemoteConnectionOptions::Wsl(connection) = &connection {
+            ProjectPickerData::Wsl {
                 distro_name: connection.distro_name.clone().into(),
-            },
-            RemoteConnectionOptions::Docker(_) => ProjectPickerData::Ssh {
+            }
+        } else if let RemoteConnectionOptions::Docker(_) = &connection {
+            ProjectPickerData::Ssh {
                 // Not implemented as a project picker at this time
                 connection_string: "".into(),
                 nickname: None,
-            },
-            #[cfg(any(test, feature = "test-support"))]
-            RemoteConnectionOptions::Mock(options) => ProjectPickerData::Ssh {
-                connection_string: format!("mock-{}", options.id).into(),
+            }
+        } else {
+            ProjectPickerData::Ssh {
+                connection_string: connection.display_name().into(),
                 nickname: None,
-            },
+            }
         };
         let _path_task = cx
             .spawn_in(window, {

@@ -312,19 +312,18 @@ pub async fn open_remote_project(
                 log::error!("Failed to open project: {e:#}");
                 let response = window
                     .update(cx, |_, window, cx| {
+                        let prompt = if let RemoteConnectionOptions::Ssh(_) = &connection_options {
+                            "Failed to connect over SSH"
+                        } else if let RemoteConnectionOptions::Wsl(_) = &connection_options {
+                            "Failed to connect to WSL"
+                        } else if let RemoteConnectionOptions::Docker(_) = &connection_options {
+                            "Failed to connect to Dev Container"
+                        } else {
+                            "Failed to connect to remote server"
+                        };
                         window.prompt(
                             PromptLevel::Critical,
-                            match connection_options {
-                                RemoteConnectionOptions::Ssh(_) => "Failed to connect over SSH",
-                                RemoteConnectionOptions::Wsl(_) => "Failed to connect to WSL",
-                                RemoteConnectionOptions::Docker(_) => {
-                                    "Failed to connect to Dev Container"
-                                }
-                                #[cfg(any(test, feature = "test-support"))]
-                                RemoteConnectionOptions::Mock(_) => {
-                                    "Failed to connect to mock server"
-                                }
-                            },
+                            prompt,
                             Some(&format!("{e:#}")),
                             &["Retry", "Cancel"],
                             cx,
@@ -373,19 +372,18 @@ pub async fn open_remote_project(
                 log::error!("Failed to open project: {e:#}");
                 let response = window
                     .update(cx, |_, window, cx| {
+                        let prompt = if let RemoteConnectionOptions::Ssh(_) = &connection_options {
+                            "Failed to connect over SSH"
+                        } else if let RemoteConnectionOptions::Wsl(_) = &connection_options {
+                            "Failed to connect to WSL"
+                        } else if let RemoteConnectionOptions::Docker(_) = &connection_options {
+                            "Failed to connect to Dev Container"
+                        } else {
+                            "Failed to connect to remote server"
+                        };
                         window.prompt(
                             PromptLevel::Critical,
-                            match connection_options {
-                                RemoteConnectionOptions::Ssh(_) => "Failed to connect over SSH",
-                                RemoteConnectionOptions::Wsl(_) => "Failed to connect to WSL",
-                                RemoteConnectionOptions::Docker(_) => {
-                                    "Failed to connect to Dev Container"
-                                }
-                                #[cfg(any(test, feature = "test-support"))]
-                                RemoteConnectionOptions::Mock(_) => {
-                                    "Failed to connect to mock server"
-                                }
-                            },
+                            prompt,
                             Some(&format!("{e:#}")),
                             &["Retry", "Cancel"],
                             cx,
