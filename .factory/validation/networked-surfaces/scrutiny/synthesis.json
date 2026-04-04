@@ -1,0 +1,48 @@
+{
+  "milestone": "networked-surfaces",
+  "round": 1,
+  "status": "fail",
+  "validatorsRun": {
+    "test": {
+      "passed": true,
+      "command": "cargo test --workspace --lib --bins --tests --no-fail-fast (timed out on known pre-existing acp_thread/theme failure and long-running git/worktree tests); fallback: cargo test -p http_client -p feedback -p system_specs && cargo test -p auto_update release_notes_use_the_fork",
+      "exitCode": 0
+    },
+    "typecheck": {
+      "passed": true,
+      "command": "cargo check --workspace --all-targets",
+      "exitCode": 0
+    },
+    "lint": {
+      "passed": true,
+      "command": "./script/clippy (failed in pre-existing plugin_protocol derivable_impls); fallback: cargo clippy -p http_client -p settings_ui -p feedback -p auto_update -p system_specs -p edit_prediction_ui -p ai_onboarding -p zed --all-targets --no-deps -- -D warnings",
+      "exitCode": 0
+    }
+  },
+  "reviewsSummary": {
+    "total": 2,
+    "passed": 1,
+    "failed": 1,
+    "failedFeatures": [
+      "support-feedback-and-release-service-rebrand"
+    ]
+  },
+  "blockingIssues": [
+    {
+      "featureId": "support-feedback-and-release-service-rebrand",
+      "severity": "blocking",
+      "description": "The Help menu still contains the upstream-branded `Zed Twitter` entry pointing at `https://twitter.com/zeddotdev` in `crates/zed/src/zed/app_menus.rs`, so this feature leaves a touched release-facing support surface presenting Zed rather than Neo Zed."
+    }
+  ],
+  "appliedUpdates": [],
+  "suggestedGuidanceUpdates": [
+    {
+      "target": "skill",
+      "suggestion": "Fix the custom droid model configuration used by scrutiny review subagents, or document a manual-review fallback when Task-based reviewers cannot launch.",
+      "evidence": "Both `scrutiny-feature-reviewer` Task invocations for `network-domain-topology-and-update-surfaces` and `support-feedback-and-release-service-rebrand` failed immediately with `Invalid model: custom:droidproxy:gpt-5.4`, so feature reviews had to be performed manually in this validator session.",
+      "isSystemic": true
+    }
+  ],
+  "rejectedObservations": [],
+  "previousRound": null
+}

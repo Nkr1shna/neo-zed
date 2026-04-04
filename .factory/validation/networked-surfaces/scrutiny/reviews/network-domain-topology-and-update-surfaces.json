@@ -1,0 +1,7 @@
+{
+  "featureId": "network-domain-topology-and-update-surfaces",
+  "status": "pass",
+  "summary": "The feature correctly repoints the default base URL and shared HTTP helpers to `neozed.dev`, `api.neozed.dev`, and `cloud.neozed.dev` while preserving the explicit staging and localhost routes that other workflows still depend on. I did not find any high-confidence correctness regressions in the touched settings or URL-builder code.",
+  "issues": [],
+  "sharedStateObservations": []
+}

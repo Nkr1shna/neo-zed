@@ -1,0 +1,13 @@
+{
+  "featureId": "support-feedback-and-release-service-rebrand",
+  "status": "fail",
+  "summary": "Most touched support and release surfaces now point at Neo Zed, but the Help menu still exposes an upstream-branded social entry. Because `crates/zed/src/zed/app_menus.rs` was updated in this feature yet still shows `Zed Twitter` and links to `https://twitter.com/zeddotdev`, the app continues to present an upstream public support surface from a Neo Zed build.",
+  "issues": [
+    {
+      "severity": "blocking",
+      "description": "The Help menu still contains the upstream-branded `Zed Twitter` entry pointing at `https://twitter.com/zeddotdev` in `crates/zed/src/zed/app_menus.rs`, so this feature leaves a touched release-facing support surface presenting Zed rather than Neo Zed.",
+      "suggestedFix": "Replace that menu item with an approved Neo Zed social/community destination, or remove the entry until a fork-owned replacement exists, then rerun networked-surfaces scrutiny."
+    }
+  ],
+  "sharedStateObservations": []
+}
