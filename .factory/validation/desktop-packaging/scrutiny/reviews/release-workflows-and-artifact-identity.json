@@ -1,0 +1,7 @@
+{
+  "featureId": "release-workflows-and-artifact-identity",
+  "status": "pass",
+  "summary": "The workflow-generation changes and regenerated workflow YAML consistently use Neo Zed artifact names, fork release URLs, and `dev.neozed` package identifiers across the reviewed release automation, and I did not find any high-confidence correctness or regression issue in the touched files.",
+  "issues": [],
+  "sharedStateObservations": []
+}

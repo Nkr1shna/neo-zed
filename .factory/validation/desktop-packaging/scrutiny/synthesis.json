@@ -1,0 +1,48 @@
+{
+  "milestone": "desktop-packaging",
+  "round": 1,
+  "status": "fail",
+  "validatorsRun": {
+    "test": {
+      "passed": true,
+      "command": "cargo test --workspace --lib --bins --tests --no-fail-fast (timed out on known pre-existing acp_thread/theme noise); fallback: cargo test -p explorer_command_injector --all-features && cargo test -p cli && plutil -lint crates/zed/resources/info/DocumentTypes.plist && plutil -lint crates/zed/resources/info/Permissions.plist && shell syntax checks for script/bundle-mac script/bundle-linux script/install-linux && python3 metadata assertions for macOS/Windows/Linux/workflow packaging identity",
+      "exitCode": 0
+    },
+    "typecheck": {
+      "passed": true,
+      "command": "cargo check --workspace --all-targets",
+      "exitCode": 0
+    },
+    "lint": {
+      "passed": true,
+      "command": "./script/clippy (failed in pre-existing plugin_protocol derivable_impls); fallback: cargo clippy -p explorer_command_injector -p cli -p xtask -p zed --all-targets --all-features --no-deps -- -D warnings",
+      "exitCode": 0
+    }
+  },
+  "reviewsSummary": {
+    "total": 4,
+    "passed": 3,
+    "failed": 1,
+    "failedFeatures": [
+      "packaging-windows-identity"
+    ]
+  },
+  "blockingIssues": [
+    {
+      "featureId": "packaging-windows-identity",
+      "severity": "blocking",
+      "description": "Windows installers still package the CLI as `zed` instead of `neozed`, so users who add the installed `bin` directory to PATH do not get the public Neo Zed command name required by the rebrand."
+    }
+  ],
+  "appliedUpdates": [],
+  "suggestedGuidanceUpdates": [
+    {
+      "target": "skill",
+      "suggestion": "Fix the custom droid model configuration used by scrutiny review subagents, or document a manual-review fallback when Task-based reviewers cannot launch.",
+      "evidence": "All four `scrutiny-feature-reviewer` Task invocations for this milestone failed immediately with `Invalid model: custom:droidproxy:gpt-5.4`, so feature reviews had to be performed manually in this validator session.",
+      "isSystemic": true
+    }
+  ],
+  "rejectedObservations": [],
+  "previousRound": null
+}
