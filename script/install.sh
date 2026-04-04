@@ -1,9 +1,9 @@
 #!/usr/bin/env sh
 set -eu
 
-# Downloads a tarball from https://zed.dev/releases and unpacks it
+# Downloads a tarball from https://neozed.dev/releases and unpacks it
 # into ~/.local/. If you'd prefer to do this manually, instructions are at
-# https://zed.dev/docs/linux.
+# https://neozed.dev/docs/linux.
 
 main() {
     platform="$(uname -s)"
@@ -84,7 +84,7 @@ linux() {
         cp "$ZED_BUNDLE_PATH" "$archive_path"
     else
         echo "Downloading Neo Zed version: $ZED_VERSION"
-        curl "https://cloud.zed.dev/releases/$channel/$ZED_VERSION/download?asset=zed&arch=$arch&os=linux&source=install.sh" > "$archive_path"
+        curl "https://cloud.neozed.dev/releases/$channel/$ZED_VERSION/download?asset=neozed&arch=$arch&os=linux&source=install.sh" > "$archive_path"
     fi
 
     suffix=""
@@ -189,7 +189,7 @@ linux() {
 macos() {
     dmg_path="$temp/Neo-Zed-$arch.dmg"
     echo "Downloading Neo Zed version: $ZED_VERSION"
-    curl "https://cloud.zed.dev/releases/$channel/$ZED_VERSION/download?asset=zed&os=macos&arch=$arch&source=install.sh" > "$dmg_path"
+    curl "https://cloud.neozed.dev/releases/$channel/$ZED_VERSION/download?asset=neozed&os=macos&arch=$arch&source=install.sh" > "$dmg_path"
     hdiutil attach -quiet "$dmg_path" -mountpoint "$temp/mount"
     app="$(cd "$temp/mount/"; echo *.app)"
     echo "Installing Neo Zed"

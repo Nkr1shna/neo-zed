@@ -1,67 +1,67 @@
 ---
-title: Zed on macOS
-description: "Zed is developed primarily on macOS, making it a first-class platform with full feature support."
+title: Neo Zed on macOS
+description: "Neo Zed is developed primarily on macOS, making it a first-class platform with full feature support."
 ---
 
-# Zed on macOS
+# Neo Zed on macOS
 
-Zed is developed primarily on macOS, making it a first-class platform with full feature support.
+Neo Zed is developed primarily on macOS, making it a first-class platform with full feature support.
 
-## Installing Zed
+## Installing Neo Zed
 
-Download Zed from the [download page](https://zed.dev/download). The download is a `.dmg` file—open it and drag Zed to your Applications folder.
+Download Neo Zed from the [download page](https://neozed.dev/download). The download is a `.dmg` file—open it and drag Neo Zed to your Applications folder.
 
-For the preview build, which receives updates about a week ahead of stable, visit the [preview releases page](https://zed.dev/releases/preview).
+For the preview build, which receives updates about a week ahead of stable, visit the [preview releases page](https://neozed.dev/releases/preview).
 
-After installation, Zed checks for updates automatically and prompts you when a new version is available.
+After installation, Neo Zed checks for updates automatically and prompts you when a new version is available.
 
 ### Homebrew
 
-You can also install Zed using Homebrew:
+You can also install Neo Zed using Homebrew:
 
 ```sh
-brew install --cask zed
+brew install --cask neozed
 ```
 
 For the preview version:
 
 ```sh
-brew install --cask zed@preview
+brew install --cask neozed@preview
 ```
 
 ### Building from Source
 
-To build Zed from source, see the [macOS development documentation](./development/macos.md).
+To build Neo Zed from source, see the [macOS development documentation](./development/macos.md).
 
 ## System Requirements
 
 - macOS 10.15.7 (Catalina) or later
 - Apple Silicon (M1/M2/M3/M4) or Intel processor
 
-Zed uses Metal for GPU-accelerated rendering, which is available on all supported macOS versions.
+Neo Zed uses Metal for GPU-accelerated rendering, which is available on all supported macOS versions.
 
 ## Installing the CLI
 
-Zed includes a command-line tool for opening files and projects from Terminal. To install it:
+Neo Zed includes a command-line tool for opening files and projects from Terminal. To install it:
 
-1. Open Zed
+1. Open Neo Zed
 2. Open the command palette with `Cmd+Shift+P`
 3. Run `cli: install`
 
-This creates a `zed` command in `/usr/local/bin`. You can then open files and folders:
+This creates a `neozed` command in `/usr/local/bin`. You can then open files and folders:
 
 ```sh
-zed .                    # Open current folder
-zed file.txt             # Open a file
-zed project/ file.txt    # Open a folder and a file
+neozed .                    # Open current folder
+neozed file.txt             # Open a file
+neozed project/ file.txt    # Open a folder and a file
 ```
 
 See the [CLI Reference](./reference/cli.md) for all available options.
 
 ## Uninstall
 
-1. Quit Zed if it's running
-2. Drag Zed from Applications to the Trash
+1. Quit Neo Zed if it's running
+2. Drag Neo Zed from Applications to the Trash
 3. Optionally, remove your settings and extensions:
 
 ```sh
@@ -82,11 +82,11 @@ rm /usr/local/bin/neozed
 
 ## Troubleshooting
 
-### Zed won't open or shows "damaged" warning
+### Neo Zed won't open or shows "damaged" warning
 
-If macOS reports that Zed is damaged or can't be opened, it's likely a Gatekeeper issue. Try:
+If macOS reports that Neo Zed is damaged or can't be opened, it's likely a Gatekeeper issue. Try:
 
-1. Right-click (or Control-click) on Zed in Applications
+1. Right-click (or Control-click) on Neo Zed in Applications
 2. Select "Open" from the context menu
 3. Click "Open" in the dialog that appears
 
@@ -95,12 +95,12 @@ This tells macOS to trust the application.
 If that doesn't work, remove the quarantine attribute:
 
 ```sh
-xattr -cr /Applications/Zed.app
+xattr -cr "/Applications/Neo Zed.app"
 ```
 
 ### CLI command not found
 
-If the `zed` command isn't available after installation:
+If the `neozed` command isn't available after installation:
 
 1. Check that `/usr/local/bin` is in your PATH
 2. Try reinstalling the CLI via `cli: install` in the command palette
@@ -108,7 +108,7 @@ If the `zed` command isn't available after installation:
 
 ### GPU or rendering issues
 
-Zed uses Metal for rendering. If you experience graphical glitches:
+Neo Zed uses Metal for rendering. If you experience graphical glitches:
 
 1. Ensure macOS is up to date
 2. Restart your Mac to reset the GPU state
@@ -116,10 +116,10 @@ Zed uses Metal for rendering. If you experience graphical glitches:
 
 ### High memory or CPU usage
 
-If Zed uses more resources than expected:
+If Neo Zed uses more resources than expected:
 
 1. Check for runaway language servers in the terminal output (`zed: open log`)
 2. Try disabling extensions one by one to identify conflicts
 3. For large projects, consider using [project settings](./reference/all-settings.md#file-scan-exclusions) to exclude unnecessary folders from indexing
 
-For additional help, see the [Troubleshooting guide](./troubleshooting.md) or visit the [Zed Discord](https://discord.gg/zed-community).
+For additional help, see the [Troubleshooting guide](./troubleshooting.md) or visit the [Neo Zed community](https://neozed.dev/community-links).
