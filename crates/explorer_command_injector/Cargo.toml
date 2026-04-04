@@ -18,6 +18,7 @@ default = ["nightly"]
 stable = []
 preview = []
 nightly = []
+dev = []
 
 [target.'cfg(target_os = "windows")'.dependencies]
 windows.workspace = true

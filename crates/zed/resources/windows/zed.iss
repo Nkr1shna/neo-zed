@@ -2,10 +2,10 @@
 AppId={#AppId}
 AppName={#AppName}
 AppVerName={#AppDisplayName}
-AppPublisher=Zed Industries
-AppPublisherURL=https://www.zed.dev/
-AppSupportURL=https://www.zed.dev/
-AppUpdatesURL=https://www.zed.dev/
+AppPublisher=Neo Zed
+AppPublisherURL=https://neozed.dev/
+AppSupportURL=https://neozed.dev/
+AppUpdatesURL=https://neozed.dev/
 DefaultGroupName={#AppName}
 DisableProgramGroupPage=yes
 DisableReadyPage=yes
@@ -88,7 +88,7 @@ Name: "{autodesktop}\{#AppName}"; Filename: "{app}\{#AppExeName}.exe"; Tasks: de
 Filename: "{app}\{#AppExeName}.exe"; Description: "{cm:LaunchProgram,{#AppName}}"; Flags: nowait postinstall; Check: WizardNotSilent
 
 [UninstallRun]
-Filename: "powershell.exe"; Parameters: "Invoke-Command -ScriptBlock {{Remove-AppxPackage -Package ""{#AppxFullName}""}"; Check: IsWindows11OrLater; Flags: shellexec waituntilterminated runhidden
+Filename: "powershell.exe"; Parameters: "Invoke-Command -ScriptBlock {{Get-AppxPackage -Name ""{#AppxPackageName}"",""{#LegacyAppxPackageName}"" | Remove-AppxPackage}}"; Check: IsWindows11OrLater; Flags: shellexec waituntilterminated runhidden
 
 [Registry]
 Root: HKCU; Subkey: "Software\Classes\.ascx\OpenWithProgids"; ValueType: none; ValueName: "{#RegValueName}"; Flags: deletevalue uninsdeletevalue; Tasks: associatewithfiles
@@ -1256,10 +1256,10 @@ Root: HKCU; Subkey: "Software\Classes\Drive\shell\{#RegValueName}\command"; Valu
 Root: HKCU; Subkey: "Environment"; ValueType: expandsz; ValueName: "Path"; ValueData: "{code:AddToPath|{app}\bin}"; Tasks: addtopath; Check: NeedsAddToPath(ExpandConstant('{app}\bin'))
 
 ; URI Scheme
-Root: HKCU; Subkey: "Software\Classes\zed"; ValueType: "string"; ValueData: "URL:zed Protocol"; Flags: uninsdeletekey
-Root: HKCU; Subkey: "Software\Classes\zed"; ValueType: "string"; ValueName: "URL Protocol"; ValueData: ""
-Root: HKCU; Subkey: "Software\Classes\zed\DefaultIcon"; ValueType: "string"; ValueData: "{app}\Zed.exe,1"
-Root: HKCU; Subkey: "Software\Classes\zed\shell\open\command"; ValueType: "string"; ValueData: """{app}\Zed.exe"" ""%1"""
+Root: HKCU; Subkey: "Software\Classes\neozed"; ValueType: "string"; ValueData: "URL:Neo Zed Protocol"; Flags: uninsdeletekey
+Root: HKCU; Subkey: "Software\Classes\neozed"; ValueType: "string"; ValueName: "URL Protocol"; ValueData: ""
+Root: HKCU; Subkey: "Software\Classes\neozed\DefaultIcon"; ValueType: "string"; ValueData: "{app}\{#AppExeName}.exe,1"
+Root: HKCU; Subkey: "Software\Classes\neozed\shell\open\command"; ValueType: "string"; ValueData: """{app}\{#AppExeName}.exe"" ""%1"""
 
 [Code]
 function WizardNotSilent(): Boolean;
@@ -1377,7 +1377,7 @@ procedure RemoveAppxPackage();
 var
   RemoveAppxPackageResultCode: Integer;
 begin
-  ShellExec('', 'powershell.exe', '-Command ' + AddQuotes('Remove-AppxPackage -Package ''{#AppxFullName}'''), '', SW_HIDE, ewWaitUntilTerminated, RemoveAppxPackageResultCode);
+  ShellExec('', 'powershell.exe', '-Command ' + AddQuotes('Get-AppxPackage -Name ''{#AppxPackageName}'',''{#LegacyAppxPackageName}'' | Remove-AppxPackage'), '', SW_HIDE, ewWaitUntilTerminated, RemoveAppxPackageResultCode);
   if not WizardIsTaskSelected('addcontextmenufiles') then begin
     RegDeleteKeyIncludingSubkeys(HKCU, 'Software\Classes\{#RegValueName}ContextMenu');
   end;

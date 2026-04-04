@@ -44,7 +44,7 @@ struct ExplorerCommandInjector;
 impl IExplorerCommand_Impl for ExplorerCommandInjector_Impl {
     fn GetTitle(&self, _: Ref<IShellItemArray>) -> Result<windows_core::PWSTR> {
         let command_description =
-            retrieve_command_description().unwrap_or(HSTRING::from("Open with Zed"));
+            retrieve_command_description().unwrap_or(HSTRING::from("Open with Neo Zed"));
         unsafe { SHStrDupW(&command_description) }
     }
 
@@ -127,15 +127,44 @@ impl IClassFactory_Impl for ExplorerCommandInjectorFactory_Impl {
     }
 }
 
-#[cfg(all(feature = "stable", not(feature = "preview"), not(feature = "nightly")))]
+#[cfg(all(
+    feature = "stable",
+    not(feature = "preview"),
+    not(feature = "nightly"),
+    not(feature = "dev")
+))]
 const MODULE_ID: GUID = GUID::from_u128(0x6a1f6b13_3b82_48a1_9e06_7bb0a6d0bffd);
-#[cfg(all(feature = "preview", not(feature = "stable"), not(feature = "nightly")))]
+#[cfg(all(
+    feature = "preview",
+    not(feature = "stable"),
+    not(feature = "nightly"),
+    not(feature = "dev")
+))]
 const MODULE_ID: GUID = GUID::from_u128(0xaf8e85ea_fb20_4db2_93cf_56513c1ec697);
-#[cfg(all(feature = "nightly", not(feature = "stable"), not(feature = "preview")))]
+#[cfg(all(
+    feature = "nightly",
+    not(feature = "stable"),
+    not(feature = "preview"),
+    not(feature = "dev")
+))]
 const MODULE_ID: GUID = GUID::from_u128(0x266f2cfe_1653_42af_b55c_fe3590c83871);
+#[cfg(all(
+    feature = "dev",
+    not(feature = "stable"),
+    not(feature = "preview"),
+    not(feature = "nightly")
+))]
+const MODULE_ID: GUID = GUID::from_u128(0x3f7fd42e_3a77_4d1a_a491_3887b0b8f1ba);
 
 // Make cargo clippy happy
-#[cfg(all(feature = "nightly", feature = "stable", feature = "preview"))]
+#[cfg(any(
+    all(feature = "stable", feature = "preview"),
+    all(feature = "stable", feature = "nightly"),
+    all(feature = "stable", feature = "dev"),
+    all(feature = "preview", feature = "nightly"),
+    all(feature = "preview", feature = "dev"),
+    all(feature = "nightly", feature = "dev")
+))]
 const MODULE_ID: GUID = GUID::from_u128(0x685f4d49_6718_4c55_b271_ebb5c6a48d6f);
 
 #[unsafe(no_mangle)]
@@ -183,16 +212,45 @@ fn get_zed_exe_path() -> Option<String> {
 
 #[inline]
 fn retrieve_command_description() -> Result<HSTRING> {
-    #[cfg(all(feature = "stable", not(feature = "preview"), not(feature = "nightly")))]
-    const REG_PATH: &str = "Software\\Classes\\ZedEditorContextMenu";
-    #[cfg(all(feature = "preview", not(feature = "stable"), not(feature = "nightly")))]
-    const REG_PATH: &str = "Software\\Classes\\ZedEditorPreviewContextMenu";
-    #[cfg(all(feature = "nightly", not(feature = "stable"), not(feature = "preview")))]
-    const REG_PATH: &str = "Software\\Classes\\ZedEditorNightlyContextMenu";
+    #[cfg(all(
+        feature = "stable",
+        not(feature = "preview"),
+        not(feature = "nightly"),
+        not(feature = "dev")
+    ))]
+    const REG_PATH: &str = "Software\\Classes\\NeoZedContextMenu";
+    #[cfg(all(
+        feature = "preview",
+        not(feature = "stable"),
+        not(feature = "nightly"),
+        not(feature = "dev")
+    ))]
+    const REG_PATH: &str = "Software\\Classes\\NeoZedPreviewContextMenu";
+    #[cfg(all(
+        feature = "nightly",
+        not(feature = "stable"),
+        not(feature = "preview"),
+        not(feature = "dev")
+    ))]
+    const REG_PATH: &str = "Software\\Classes\\NeoZedNightlyContextMenu";
+    #[cfg(all(
+        feature = "dev",
+        not(feature = "stable"),
+        not(feature = "preview"),
+        not(feature = "nightly")
+    ))]
+    const REG_PATH: &str = "Software\\Classes\\NeoZedDevContextMenu";
 
     // Make cargo clippy happy
-    #[cfg(all(feature = "nightly", feature = "stable", feature = "preview"))]
-    const REG_PATH: &str = "Software\\Classes\\ZedEditorClippyContextMenu";
+    #[cfg(any(
+        all(feature = "stable", feature = "preview"),
+        all(feature = "stable", feature = "nightly"),
+        all(feature = "stable", feature = "dev"),
+        all(feature = "preview", feature = "nightly"),
+        all(feature = "preview", feature = "dev"),
+        all(feature = "nightly", feature = "dev")
+    ))]
+    const REG_PATH: &str = "Software\\Classes\\NeoZedClippyContextMenu";
 
     let key = windows_registry::CURRENT_USER.open(REG_PATH)?;
     key.get_hstring("Title")
