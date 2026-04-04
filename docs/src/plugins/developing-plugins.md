@@ -10,8 +10,8 @@ Zed plugins are directories containing a `plugin.toml` manifest. They can provid
 Plugins run out of process.
 
 - On macOS, Zed launches plugins through a host-managed sandbox with plugin-scoped writable paths. Development plugins still receive the writable paths they need for Cargo builds, plugin state, temp files, and localhost callbacks.
-- On Linux, Zed launches plugins with `PR_SET_NO_NEW_PRIVS` and a seccomp filter that blocks mount, namespace, tracing, and kernel-instrumentation syscalls.
-- On Windows, Zed launches plugins in dedicated Job Objects so the host can contain and tear down the full plugin process tree.
+- On Linux, Zed launches plugins with `PR_SET_NO_NEW_PRIVS`, a Landlock filesystem sandbox, and a seccomp filter that blocks mount, namespace, tracing, and kernel-instrumentation syscalls.
+- On Windows, Zed launches plugins inside AppContainers with plugin-scoped filesystem access, then attaches them to dedicated Job Objects so the host can tear down the full plugin process tree.
 
 ## Plugin Features {#plugin-features}
 

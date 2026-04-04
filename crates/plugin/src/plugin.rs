@@ -616,7 +616,10 @@ fn ensure_not_symlink(path: &Path) -> Result<()> {
         .file_type()
         .is_symlink()
     {
-        bail!("plugin source directory {} must not be a symlink", path.display());
+        bail!(
+            "plugin source directory {} must not be a symlink",
+            path.display()
+        );
     }
 
     Ok(())
