@@ -12,8 +12,8 @@ Open the Plugins page with {#kb zed::Plugins}, or select "Zed > Plugins" from th
 Zed launches plugins out of process.
 
 - On macOS, plugins run inside a host-managed sandbox with plugin-scoped writable paths.
-- On Linux, plugins run with `PR_SET_NO_NEW_PRIVS` and a seccomp filter that blocks mount, namespace, tracing, and kernel-instrumentation syscalls.
-- On Windows, plugins run in dedicated Job Objects so Zed can contain the process tree and tear it down cleanly with the host.
+- On Linux, plugins run with `PR_SET_NO_NEW_PRIVS`, a Landlock filesystem sandbox, and a seccomp filter that blocks mount, namespace, tracing, and kernel-instrumentation syscalls.
+- On Windows, plugins run inside AppContainers with plugin-scoped filesystem access, and Zed also places them in dedicated Job Objects so the process tree is torn down cleanly with the host.
 
 Plugins still run with your user account and can make network requests. Only install plugins you trust.
 
