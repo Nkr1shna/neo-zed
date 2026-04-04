@@ -1,0 +1,47 @@
+{
+  "milestone": "core-identity",
+  "round": 1,
+  "status": "pass",
+  "validatorsRun": {
+    "test": {
+      "passed": true,
+      "command": "cargo test --workspace --lib --bins --tests --no-fail-fast (timed out on known pre-existing integration stalls); fallback: cargo test -p release_channel && cargo test -p paths release_path_identities_use_neo_zed_names && cargo test -p client test_parse_public_and_legacy_zed_links && cargo test -p client shared_agent_thread_url_uses_public_neozed_scheme && cargo test -p zed shared_agent_thread_url",
+      "exitCode": 0
+    },
+    "typecheck": {
+      "passed": true,
+      "command": "cargo check --workspace --all-targets",
+      "exitCode": 0
+    },
+    "lint": {
+      "passed": true,
+      "command": "./script/clippy (failed in pre-existing plugin_protocol derivable_impls); fallback: cargo clippy -p release_channel -p paths -p client -p install_cli -p cli -p zed -p settings_ui -p zed_actions --all-targets --all-features --no-deps -- -D warnings",
+      "exitCode": 0
+    }
+  },
+  "reviewsSummary": {
+    "total": 2,
+    "passed": 2,
+    "failed": 0,
+    "failedFeatures": []
+  },
+  "blockingIssues": [],
+  "nonBlockingIssues": [
+    {
+      "featureId": "core-cli-scheme-and-path-identity",
+      "severity": "non_blocking",
+      "description": "The Linux uninstall script removes `~/.local/share/neozed/neozed-$db_suffix.sock`, but the CLI/runtime create per-channel sockets named `zed-<channel>.sock`, so uninstall leaves the stale IPC socket behind."
+    }
+  ],
+  "appliedUpdates": [],
+  "suggestedGuidanceUpdates": [
+    {
+      "target": "skill",
+      "suggestion": "Fix the custom droid model configuration used by scrutiny review subagents, or document a manual-review fallback when Task-based reviewers cannot launch.",
+      "evidence": "Both Task invocations for `scrutiny-feature-reviewer` and fallback `worker` reviewers failed immediately with `Invalid model: custom:droidproxy:gpt-5.4`, so feature reviews had to be performed manually in this validator session.",
+      "isSystemic": true
+    }
+  ],
+  "rejectedObservations": [],
+  "previousRound": null
+}

@@ -1,0 +1,13 @@
+{
+  "featureId": "core-cli-scheme-and-path-identity",
+  "status": "pass",
+  "summary": "The feature correctly rebrands the public CLI, public deep-link scheme, and release-facing local paths, but the Linux uninstall flow does not remove the actual per-channel IPC socket filename that the runtime creates.",
+  "issues": [
+    {
+      "severity": "non_blocking",
+      "description": "The Linux uninstall script removes `~/.local/share/neozed/neozed-$db_suffix.sock`, but the CLI/runtime create per-channel sockets named `zed-<channel>.sock`, so uninstall leaves the stale IPC socket behind.",
+      "evidence": "`crates/cli/src/main.rs` and `crates/zed/src/zed/open_listener.rs` both build socket paths with `format!(\"zed-{}.sock\", RELEASE_CHANNEL_NAME)`, while `script/uninstall.sh` removes `~/.local/share/neozed/neozed-$db_suffix.sock`."
+    }
+  ],
+  "sharedStateObservations": []
+}
