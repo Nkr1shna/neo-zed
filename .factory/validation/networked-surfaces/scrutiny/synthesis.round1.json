@@ -1,7 +1,7 @@
 {
   "milestone": "networked-surfaces",
-  "round": 2,
-  "status": "pass",
+  "round": 1,
+  "status": "fail",
   "validatorsRun": {
     "test": {
       "passed": true,
@@ -20,21 +20,29 @@
     }
   },
   "reviewsSummary": {
-    "total": 1,
+    "total": 2,
     "passed": 1,
-    "failed": 0,
-    "failedFeatures": []
+    "failed": 1,
+    "failedFeatures": [
+      "support-feedback-and-release-service-rebrand"
+    ]
   },
-  "blockingIssues": [],
+  "blockingIssues": [
+    {
+      "featureId": "support-feedback-and-release-service-rebrand",
+      "severity": "blocking",
+      "description": "The Help menu still contains the upstream-branded `Zed Twitter` entry pointing at `https://twitter.com/zeddotdev` in `crates/zed/src/zed/app_menus.rs`, so this feature leaves a touched release-facing support surface presenting Zed rather than Neo Zed."
+    }
+  ],
   "appliedUpdates": [],
   "suggestedGuidanceUpdates": [
     {
       "target": "skill",
       "suggestion": "Fix the custom droid model configuration used by scrutiny review subagents, or document a manual-review fallback when Task-based reviewers cannot launch.",
-      "evidence": "Round 1 Task launches for `network-domain-topology-and-update-surfaces` and `support-feedback-and-release-service-rebrand`, plus this rerun's launch for `network-help-menu-social-link-rebrand`, all failed immediately with `Invalid model: custom:droidproxy:gpt-5.4`, so scrutiny review still needs a documented manual fallback.",
+      "evidence": "Both `scrutiny-feature-reviewer` Task invocations for `network-domain-topology-and-update-surfaces` and `support-feedback-and-release-service-rebrand` failed immediately with `Invalid model: custom:droidproxy:gpt-5.4`, so feature reviews had to be performed manually in this validator session.",
       "isSystemic": true
     }
   ],
   "rejectedObservations": [],
-  "previousRound": ".factory/validation/networked-surfaces/scrutiny/synthesis.round1.json"
+  "previousRound": null
 }

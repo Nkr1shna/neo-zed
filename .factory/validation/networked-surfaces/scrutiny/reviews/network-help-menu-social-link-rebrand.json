@@ -1,0 +1,7 @@
+{
+  "featureId": "network-help-menu-social-link-rebrand",
+  "status": "pass",
+  "summary": "The fix feature replaces the Help menu's upstream `Zed Twitter` entry with the approved Neo Zed-branded `Neo Zed on X` link to `https://x.com/neozed_editor`, which resolves the prior blocking finding from `support-feedback-and-release-service-rebrand` without introducing any new high-confidence issue in the touched menu surface.",
+  "issues": [],
+  "sharedStateObservations": []
+}
