@@ -9,7 +9,13 @@ Plugins add functionality to Zed, including dock panels and title bar widgets.
 
 Open the Plugins page with {#kb zed::Plugins}, or select "Zed > Plugins" from the menu bar.
 
-On macOS, Zed launches plugins inside a host-managed sandbox that limits writable paths while still allowing network access, localhost callbacks, and the plugin runtime itself. On other platforms, plugins currently run with the same user, filesystem, network, and environment access as Zed. Only install plugins you trust.
+Zed launches plugins out of process.
+
+- On macOS, plugins run inside a host-managed sandbox with plugin-scoped writable paths.
+- On Linux, plugins run with `PR_SET_NO_NEW_PRIVS` and a seccomp filter that blocks mount, namespace, tracing, and kernel-instrumentation syscalls.
+- On Windows, plugins run in dedicated Job Objects so Zed can contain the process tree and tear it down cleanly with the host.
+
+Plugins still run with your user account and can make network requests. Only install plugins you trust.
 
 To install a plugin you are developing locally, click the `Install Dev Plugin` button (or the {#action zed::InstallDevPlugin} action) and select the directory containing your plugin.
 
