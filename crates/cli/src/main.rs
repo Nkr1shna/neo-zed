@@ -37,6 +37,12 @@ const URL_PREFIX: [&str; 6] = [
     "ssh://",
 ];
 
+#[cfg(all(
+    any(target_os = "linux", target_os = "macos"),
+    not(feature = "no-bundled-uninstall")
+))]
+static UNINSTALL_SCRIPT: &[u8] = include_bytes!("../../../script/uninstall.sh");
+
 struct Detect;
 
 trait InstalledApp {
@@ -414,6 +420,18 @@ mod tests {
         .unwrap();
         assert_eq!(result, expected);
     }
+
+    #[cfg(all(
+        any(target_os = "linux", target_os = "macos"),
+        not(feature = "no-bundled-uninstall")
+    ))]
+    #[test]
+    fn bundled_uninstall_script_removes_runtime_socket_name() {
+        let script =
+            std::str::from_utf8(UNINSTALL_SCRIPT).expect("bundled uninstall script is valid utf-8");
+        assert!(script.contains("rm -f \"$HOME/.local/share/neozed/zed-$db_suffix.sock\""));
+        assert!(!script.contains("rm -f \"$HOME/.local/share/neozed/neozed-$db_suffix.sock\""));
+    }
 }
 
 fn parse_path_in_wsl(source: &str, wsl: &str) -> Result<String> {
@@ -521,8 +539,6 @@ fn main() -> Result<()> {
         not(feature = "no-bundled-uninstall")
     ))]
     if args.uninstall {
-        static UNINSTALL_SCRIPT: &[u8] = include_bytes!("../../../script/uninstall.sh");
-
         let tmp_dir = tempfile::tempdir()?;
         let script_path = tmp_dir.path().join("uninstall.sh");
         fs::write(&script_path, UNINSTALL_SCRIPT)?;

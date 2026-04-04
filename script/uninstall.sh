@@ -93,7 +93,7 @@ linux() {
     rm -rf "$HOME/.local/share/neozed/db/0-$db_suffix"
 
     # Remove socket file
-    rm -f "$HOME/.local/share/neozed/neozed-$db_suffix.sock"
+    rm -f "$HOME/.local/share/neozed/zed-$db_suffix.sock"
 
     # Remove the entire Neo Zed directory if no installations remain
     if check_remaining_installations; then
