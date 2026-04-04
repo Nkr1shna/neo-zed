@@ -317,9 +317,9 @@ pub fn app_menus(cx: &mut App) -> Vec<Menu> {
                 ),
                 MenuItem::action("Neo Zed Repository", feedback::OpenZedRepo),
                 MenuItem::action(
-                    "Zed Twitter",
+                    "Neo Zed on X",
                     super::OpenBrowser {
-                        url: "https://twitter.com/zeddotdev".into(),
+                        url: "https://x.com/neozed_editor".into(),
                     },
                 ),
                 MenuItem::action(
