@@ -1,0 +1,92 @@
+{
+  "groupId": "support-release-surfaces",
+  "surface": "file/metadata inspection",
+  "toolsUsed": [
+    "rg",
+    "python3"
+  ],
+  "assertions": [
+    {
+      "id": "VAL-NET-002",
+      "status": "pass",
+      "reason": "The release-facing links in the audited networked-surfaces files now point to Neo Zed web and repository destinations, including neozed.dev docs/community pages, the fork GitHub repository, fork issue/discussion flows, and the Help menu social link at https://x.com/neozed_editor. Scoped absence checks across the touched support surfaces found no remaining upstream zed.dev or zed-industries/zed links.",
+      "evidence": [
+        {
+          "kind": "file",
+          "path": "crates/feedback/src/feedback.rs",
+          "summary": "Feedback/report URLs now target https://github.com/Nkr1shna/neo-zed plus the fork issue and discussion flows."
+        },
+        {
+          "kind": "file",
+          "path": "crates/auto_update/src/auto_update.rs",
+          "summary": "Release-notes links now point at the fork commit history for nightly and main release branches."
+        },
+        {
+          "kind": "file",
+          "path": "crates/zed/src/zed/app_menus.rs",
+          "summary": "The Help menu points at https://neozed.dev/docs, https://neozed.dev/jobs, and the Neo Zed on X entry at https://x.com/neozed_editor."
+        },
+        {
+          "kind": "file",
+          "path": ".github/ISSUE_TEMPLATE/10_bug_report.yml",
+          "summary": "The public bug-report template sends users to the fork issues/discussions pages and Neo Zed community support."
+        },
+        {
+          "kind": "command",
+          "command": "python3 evidence generation for link-and-contact-audit.json",
+          "summary": "Saved matched Neo Zed URLs and scoped absence checks for the touched release-facing support files to evidence/networked-surfaces/support-release-surfaces/link-and-contact-audit.json."
+        }
+      ]
+    },
+    {
+      "id": "VAL-NET-003",
+      "status": "pass",
+      "reason": "Public contact and release-facing support surfaces now use @neozed.dev mailboxes and Neo Zed identifiers in the audited support, billing, telemetry, legal, and crash-adjacent files. Scoped absence checks across the touched files found no remaining @zed.dev addresses or upstream-branded public support identifiers.",
+      "evidence": [
+        {
+          "kind": "file",
+          "path": "crates/feedback/src/feedback.rs",
+          "summary": "The support-mail URL now uses mailto:hi@neozed.dev, and bug-report flows point at the fork repository."
+        },
+        {
+          "kind": "file",
+          "path": "crates/ai_onboarding/src/young_account_banner.rs",
+          "summary": "The young-account billing exception message directs users to billing-support@neozed.dev."
+        },
+        {
+          "kind": "file",
+          "path": "docs/src/telemetry.md",
+          "summary": "The telemetry documentation points at the fork repository for crash/telemetry code references and tells users to contact hi@neozed.dev."
+        },
+        {
+          "kind": "file",
+          "path": "legal/privacy-policy.md",
+          "summary": "The public privacy policy consistently uses privacy@neozed.dev and neozed.dev release-facing URLs."
+        },
+        {
+          "kind": "file",
+          "path": "script/terms/terms.rtf",
+          "summary": "The mirrored release terms RTF contains hi@neozed.dev, legal@neozed.dev, arbitration-opt-out@neozed.dev, billing-support@neozed.dev, and neozed.dev account/docs URLs."
+        },
+        {
+          "kind": "file",
+          "path": "crates/system_specs/src/system_specs.rs",
+          "summary": "Copied system information shown in support flows starts with the public product identifier \"Neo Zed\"."
+        },
+        {
+          "kind": "command",
+          "command": "python3 evidence generation for link-and-contact-audit.json",
+          "summary": "Saved matched @neozed.dev surfaces and scoped absence checks for upstream emails/URLs/social labels to evidence/networked-surfaces/support-release-surfaces/link-and-contact-audit.json."
+        }
+      ]
+    }
+  ],
+  "frictions": [
+    "Task-based user-testing-flow-validator subagents failed to launch with \"Invalid model: custom:droidproxy:gpt-5.4\", so this flow report was produced manually in the validator session using the assigned assertion scope."
+  ],
+  "blockers": [],
+  "notes": [
+    "No services or seed data were required for the networked-surfaces milestone.",
+    "The audited scope was limited to the release-facing files touched by commits cf55bebcd44e599657f9cbf5c076b741edffce93 and 2a3256af77b5358723ec040c4d44e4e2a0830f34."
+  ]
+}
