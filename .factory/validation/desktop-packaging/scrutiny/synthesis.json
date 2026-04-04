@@ -1,11 +1,11 @@
 {
   "milestone": "desktop-packaging",
-  "round": 1,
-  "status": "fail",
+  "round": 2,
+  "status": "pass",
   "validatorsRun": {
     "test": {
       "passed": true,
-      "command": "cargo test --workspace --lib --bins --tests --no-fail-fast (timed out on known pre-existing acp_thread/theme noise); fallback: cargo test -p explorer_command_injector --all-features && cargo test -p cli && plutil -lint crates/zed/resources/info/DocumentTypes.plist && plutil -lint crates/zed/resources/info/Permissions.plist && shell syntax checks for script/bundle-mac script/bundle-linux script/install-linux && python3 metadata assertions for macOS/Windows/Linux/workflow packaging identity",
+      "command": "cargo test --workspace --lib --bins --tests --no-fail-fast (timed out on known pre-existing acp_thread/theme failure and long-running git/worktree tests); fallback: cargo test -p explorer_command_injector --all-features --all-targets && cargo test -p cli && plutil -lint crates/zed/resources/info/DocumentTypes.plist && plutil -lint crates/zed/resources/info/Permissions.plist && python3 Windows launcher packaging assertions",
       "exitCode": 0
     },
     "typecheck": {
@@ -20,29 +20,21 @@
     }
   },
   "reviewsSummary": {
-    "total": 4,
-    "passed": 3,
-    "failed": 1,
-    "failedFeatures": [
-      "packaging-windows-identity"
-    ]
+    "total": 1,
+    "passed": 1,
+    "failed": 0,
+    "failedFeatures": []
   },
-  "blockingIssues": [
-    {
-      "featureId": "packaging-windows-identity",
-      "severity": "blocking",
-      "description": "Windows installers still package the CLI as `zed` instead of `neozed`, so users who add the installed `bin` directory to PATH do not get the public Neo Zed command name required by the rebrand."
-    }
-  ],
+  "blockingIssues": [],
   "appliedUpdates": [],
   "suggestedGuidanceUpdates": [
     {
       "target": "skill",
       "suggestion": "Fix the custom droid model configuration used by scrutiny review subagents, or document a manual-review fallback when Task-based reviewers cannot launch.",
-      "evidence": "All four `scrutiny-feature-reviewer` Task invocations for this milestone failed immediately with `Invalid model: custom:droidproxy:gpt-5.4`, so feature reviews had to be performed manually in this validator session.",
+      "evidence": "The `scrutiny-feature-reviewer` Task invocation for `packaging-windows-cli-launcher-rename` failed immediately with `Invalid model: custom:droidproxy:gpt-5.4`, so this re-review also had to fall back to manual review.",
       "isSystemic": true
     }
   ],
   "rejectedObservations": [],
-  "previousRound": null
+  "previousRound": ".factory/validation/desktop-packaging/scrutiny/synthesis.round1.json"
 }

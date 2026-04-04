@@ -1,0 +1,7 @@
+{
+  "featureId": "packaging-windows-cli-launcher-rename",
+  "status": "pass",
+  "summary": "The fix feature updates the Windows bundle so the PATH-facing launchers are packaged as `neozed` and `neozed.exe`, which aligns the installer's `addtopath` flow with the public Neo Zed CLI identity and resolves the prior blocking mismatch from `packaging-windows-identity`.",
+  "issues": [],
+  "sharedStateObservations": []
+}
