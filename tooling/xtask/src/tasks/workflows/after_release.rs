@@ -3,13 +3,17 @@ use gh_workflow::*;
 use crate::tasks::workflows::{
     release::{self, notify_on_failure},
     runners,
-    steps::{CommonJobConditions, NamedJob, checkout_repo, dependant_job, named},
+    steps::{NamedJob, checkout_repo, dependant_job, named},
     vars::{self, StepOutput, WorkflowInput},
 };
 
 const TAG_NAME: &str = "${{ github.event.release.tag_name || inputs.tag_name }}";
 const IS_PRERELEASE: &str = "${{ github.event.release.prerelease || inputs.prerelease }}";
 const RELEASE_BODY: &str = "${{ github.event.release.body || inputs.body }}";
+
+fn use_release_repository_guard(job: Job) -> Job {
+    job.cond(Expression::new(vars::RELEASE_REPOSITORY_OWNER_GUARD))
+}
 
 pub fn after_release() -> Workflow {
     let tag_name = WorkflowInput::string("tag_name", None);
@@ -46,7 +50,7 @@ pub fn after_release() -> Workflow {
 fn rebuild_releases_page() -> NamedJob {
     fn refresh_cloud_releases() -> Step<Run> {
         named::bash(format!(
-            "curl -fX POST https://cloud.zed.dev/releases/refresh?expect_tag={TAG_NAME}"
+            "curl -fX POST https://cloud.neozed.dev/releases/refresh?expect_tag={TAG_NAME}"
         ))
     }
 
@@ -55,9 +59,8 @@ fn rebuild_releases_page() -> NamedJob {
     }
 
     named::job(
-        Job::default()
+        use_release_repository_guard(Job::default())
             .runs_on(runners::LINUX_SMALL)
-            .with_repository_owner_guard()
             .add_step(refresh_cloud_releases())
             .add_step(checkout_repo())
             .add_step(redeploy_zed_dev()),
@@ -68,9 +71,9 @@ fn post_to_discord(deps: &[&NamedJob]) -> NamedJob {
     fn get_release_url() -> Step<Run> {
         named::bash(format!(
             r#"if [ "{IS_PRERELEASE}" == "true" ]; then
-    URL="https://zed.dev/releases/preview"
+    URL="https://neozed.dev/releases/preview"
 else
-    URL="https://zed.dev/releases/stable"
+    URL="https://neozed.dev/releases/stable"
 fi
 
 echo "URL=$URL" >> "$GITHUB_OUTPUT"
@@ -89,7 +92,7 @@ echo "URL=$URL" >> "$GITHUB_OUTPUT"
         .add_with((
             "stringToTruncate",
             format!(
-                "📣 Zed [{TAG_NAME}](<${{{{ steps.get-release-url.outputs.URL }}}}>)  was just released!\n\n{RELEASE_BODY}\n"
+                "📣 Neo Zed [{TAG_NAME}](<${{{{ steps.get-release-url.outputs.URL }}}}>)  was just released!\n\n{RELEASE_BODY}\n"
             ),
         ))
         .add_with(("maxLength", 2000))
@@ -107,7 +110,7 @@ echo "URL=$URL" >> "$GITHUB_OUTPUT"
     }
     let job = dependant_job(deps)
         .runs_on(runners::LINUX_SMALL)
-        .with_repository_owner_guard()
+        .cond(Expression::new(vars::RELEASE_REPOSITORY_OWNER_GUARD))
         .add_step(get_release_url())
         .add_step(get_content())
         .add_step(discord_webhook_action());
@@ -138,9 +141,9 @@ fn publish_winget() -> NamedJob {
     fn set_package_name() -> (Step<Run>, StepOutput) {
         let script = format!(
             r#"if ("{IS_PRERELEASE}" -eq "true") {{
-    $PACKAGE_NAME = "ZedIndustries.Zed.Preview"
+    $PACKAGE_NAME = "dev.neozed.Preview"
 }} else {{
-    $PACKAGE_NAME = "ZedIndustries.Zed"
+    $PACKAGE_NAME = "dev.neozed"
 }}
 
 echo "PACKAGE_NAME=$PACKAGE_NAME" >> $env:GITHUB_OUTPUT
@@ -178,7 +181,7 @@ echo "PACKAGE_NAME=$PACKAGE_NAME" >> $env:GITHUB_OUTPUT
 fn create_sentry_release() -> NamedJob {
     let job = Job::default()
         .runs_on(runners::LINUX_SMALL)
-        .with_repository_owner_guard()
+        .cond(Expression::new(vars::RELEASE_REPOSITORY_OWNER_GUARD))
         .add_step(checkout_repo())
         .add_step(release::create_sentry_release());
     named::job(job)

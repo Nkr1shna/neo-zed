@@ -12,16 +12,33 @@ use crate::tasks::workflows::{
 const CURRENT_ACTION_RUN_URL: &str =
     "${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}";
 
-pub(crate) fn release() -> Workflow {
-    let macos_tests = run_tests::run_platform_tests_no_filter(Platform::Mac);
-    let linux_tests = run_tests::run_platform_tests_no_filter(Platform::Linux);
-    let windows_tests = run_tests::run_platform_tests_no_filter(Platform::Windows);
-    let macos_clippy = run_tests::clippy(Platform::Mac, None);
-    let linux_clippy = run_tests::clippy(Platform::Linux, None);
-    let windows_clippy = run_tests::clippy(Platform::Windows, None);
-    let check_scripts = run_tests::check_scripts();
+fn use_release_repository_guard(job: &mut NamedJob) {
+    let workflow_job = std::mem::take(&mut job.job);
+    job.job = workflow_job.cond(Expression::new(vars::RELEASE_REPOSITORY_OWNER_GUARD));
+}
 
-    let create_draft_release = create_draft_release();
+pub(crate) fn release() -> Workflow {
+    let mut macos_tests = run_tests::run_platform_tests_no_filter(Platform::Mac);
+    let mut linux_tests = run_tests::run_platform_tests_no_filter(Platform::Linux);
+    let mut windows_tests = run_tests::run_platform_tests_no_filter(Platform::Windows);
+    let mut macos_clippy = run_tests::clippy(Platform::Mac, None);
+    let mut linux_clippy = run_tests::clippy(Platform::Linux, None);
+    let mut windows_clippy = run_tests::clippy(Platform::Windows, None);
+    let mut check_scripts = run_tests::check_scripts();
+    let mut create_draft_release = create_draft_release();
+
+    for job in [
+        &mut macos_tests,
+        &mut linux_tests,
+        &mut windows_tests,
+        &mut macos_clippy,
+        &mut linux_clippy,
+        &mut windows_clippy,
+        &mut check_scripts,
+        &mut create_draft_release,
+    ] {
+        use_release_repository_guard(job);
+    }
 
     let bundle = ReleaseBundleJobs {
         linux_aarch64: bundle_linux(
@@ -157,7 +174,7 @@ fn validate_release_assets(deps: &[&NamedJob]) -> NamedJob {
         EXPECTED_ASSETS='{expected_assets_json}'
         TAG="$GITHUB_REF_NAME"
 
-        ACTUAL_ASSETS=$(gh release view "$TAG" --repo=zed-industries/zed --json assets -q '[.assets[].name]')
+        ACTUAL_ASSETS=$(gh release view "$TAG" --repo={} --json assets -q '[.assets[].name]')
 
         MISSING_ASSETS=$(echo "$EXPECTED_ASSETS" | jq -r --argjson actual "$ACTUAL_ASSETS" '. - $actual | .[]')
 
@@ -169,6 +186,7 @@ fn validate_release_assets(deps: &[&NamedJob]) -> NamedJob {
 
         echo "All expected assets are present in the release."
         "#,
+        vars::RELEASE_REPOSITORY,
     };
 
     named::job(
@@ -190,7 +208,10 @@ fn auto_release_preview(deps: &[&NamedJob]) -> NamedJob {
             .add_step(authenticate)
             .add_step(
                 steps::script(
-                    r#"gh release edit "$GITHUB_REF_NAME" --repo=zed-industries/zed --draft=false"#,
+                    &format!(
+                        r#"gh release edit "$GITHUB_REF_NAME" --repo={} --draft=false"#,
+                        vars::RELEASE_REPOSITORY
+                    ),
                 )
                 .add_env(("GITHUB_TOKEN", &token)),
             )
@@ -227,8 +248,11 @@ fn upload_release_assets(deps: &[&NamedJob], bundle: &ReleaseBundleJobs) -> Name
             .add_step(steps::script("ls -lR ./artifacts"))
             .add_step(prep_release_artifacts())
             .add_step(
-                steps::script("gh release upload \"$GITHUB_REF_NAME\" --repo=zed-industries/zed release-artifacts/*")
-                    .add_env(("GITHUB_TOKEN", vars::GITHUB_TOKEN)),
+                steps::script(&format!(
+                    "gh release upload \"$GITHUB_REF_NAME\" --repo={} release-artifacts/*",
+                    vars::RELEASE_REPOSITORY
+                ))
+                .add_env(("GITHUB_TOKEN", vars::GITHUB_TOKEN)),
             ),
     )
 }
@@ -325,7 +349,7 @@ pub(crate) fn push_release_update_notification(
         if [ "$DRAFT_RESULT" == "failure" ]; then
             echo "❌ Draft release creation failed for $TAG: $RUN_URL"
         else
-            RELEASE_URL=$(gh release view "$TAG" --repo=zed-industries/zed --json url -q '.url')
+            RELEASE_URL=$(gh release view "$TAG" --repo={} --json url -q '.url')
             if [ "$UPLOAD_RESULT" == "failure" ]; then
                 echo "❌ Release asset upload failed for $TAG: $RELEASE_URL"
             elif [ "$UPLOAD_RESULT" == "cancelled" ] || [ "$UPLOAD_RESULT" == "skipped" ]; then
@@ -356,6 +380,7 @@ pub(crate) fn push_release_update_notification(
             fi
         fi
         "#,
+        vars::RELEASE_REPOSITORY,
     };
 
     let mut all_deps: Vec<&NamedJob> = vec![

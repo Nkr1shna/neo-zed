@@ -12,7 +12,7 @@ on:
   - cron: 0 7 * * *
 jobs:
   check_style:
-    if: (github.repository_owner == 'zed-industries' || github.repository_owner == 'zed-extensions')
+    if: (github.repository_owner == 'Nkr1shna' || github.repository_owner == 'zed-industries' || github.repository_owner == 'zed-extensions')
     runs-on: namespace-profile-mac-large
     steps:
     - name: steps::checkout_repo
@@ -26,7 +26,7 @@ jobs:
       run: ./script/clippy
     timeout-minutes: 60
   run_tests_windows:
-    if: (github.repository_owner == 'zed-industries' || github.repository_owner == 'zed-extensions')
+    if: (github.repository_owner == 'Nkr1shna' || github.repository_owner == 'zed-industries' || github.repository_owner == 'zed-extensions')
     runs-on: self-32vcpu-windows-2022
     steps:
     - name: steps::checkout_repo
@@ -66,7 +66,7 @@ jobs:
       shell: pwsh
     timeout-minutes: 60
   clippy_windows:
-    if: (github.repository_owner == 'zed-industries' || github.repository_owner == 'zed-extensions')
+    if: (github.repository_owner == 'Nkr1shna' || github.repository_owner == 'zed-industries' || github.repository_owner == 'zed-extensions')
     runs-on: self-32vcpu-windows-2022
     steps:
     - name: steps::checkout_repo
@@ -126,11 +126,11 @@ jobs:
       run: ./script/download-wasi-sdk
     - name: ./script/bundle-linux
       run: ./script/bundle-linux
-    - name: '@actions/upload-artifact zed-linux-aarch64.tar.gz'
+    - name: '@actions/upload-artifact neozed-linux-aarch64.tar.gz'
       uses: actions/upload-artifact@330a01c490aca151604b8cf639adc76d48f6c5d4
       with:
-        name: zed-linux-aarch64.tar.gz
-        path: target/release/zed-linux-aarch64.tar.gz
+        name: neozed-linux-aarch64.tar.gz
+        path: target/release/neozed-linux-aarch64.tar.gz
         if-no-files-found: error
     - name: '@actions/upload-artifact zed-remote-server-linux-aarch64.gz'
       uses: actions/upload-artifact@330a01c490aca151604b8cf639adc76d48f6c5d4
@@ -172,11 +172,11 @@ jobs:
       run: ./script/download-wasi-sdk
     - name: ./script/bundle-linux
       run: ./script/bundle-linux
-    - name: '@actions/upload-artifact zed-linux-x86_64.tar.gz'
+    - name: '@actions/upload-artifact neozed-linux-x86_64.tar.gz'
       uses: actions/upload-artifact@330a01c490aca151604b8cf639adc76d48f6c5d4
       with:
-        name: zed-linux-x86_64.tar.gz
-        path: target/release/zed-linux-x86_64.tar.gz
+        name: neozed-linux-x86_64.tar.gz
+        path: target/release/neozed-linux-x86_64.tar.gz
         if-no-files-found: error
     - name: '@actions/upload-artifact zed-remote-server-linux-x86_64.gz'
       uses: actions/upload-artifact@330a01c490aca151604b8cf639adc76d48f6c5d4
@@ -223,11 +223,11 @@ jobs:
       run: ./script/clear-target-dir-if-larger-than 300
     - name: run_bundling::bundle_mac::bundle_mac
       run: ./script/bundle-mac aarch64-apple-darwin
-    - name: '@actions/upload-artifact Zed-aarch64.dmg'
+    - name: '@actions/upload-artifact neozed-aarch64.dmg'
       uses: actions/upload-artifact@330a01c490aca151604b8cf639adc76d48f6c5d4
       with:
-        name: Zed-aarch64.dmg
-        path: target/aarch64-apple-darwin/release/Zed-aarch64.dmg
+        name: neozed-aarch64.dmg
+        path: target/aarch64-apple-darwin/release/neozed-aarch64.dmg
         if-no-files-found: error
     - name: '@actions/upload-artifact zed-remote-server-macos-aarch64.gz'
       uses: actions/upload-artifact@330a01c490aca151604b8cf639adc76d48f6c5d4
@@ -274,11 +274,11 @@ jobs:
       run: ./script/clear-target-dir-if-larger-than 300
     - name: run_bundling::bundle_mac::bundle_mac
       run: ./script/bundle-mac x86_64-apple-darwin
-    - name: '@actions/upload-artifact Zed-x86_64.dmg'
+    - name: '@actions/upload-artifact neozed-x86_64.dmg'
       uses: actions/upload-artifact@330a01c490aca151604b8cf639adc76d48f6c5d4
       with:
-        name: Zed-x86_64.dmg
-        path: target/x86_64-apple-darwin/release/Zed-x86_64.dmg
+        name: neozed-x86_64.dmg
+        path: target/x86_64-apple-darwin/release/neozed-x86_64.dmg
         if-no-files-found: error
     - name: '@actions/upload-artifact zed-remote-server-macos-x86_64.gz'
       uses: actions/upload-artifact@330a01c490aca151604b8cf639adc76d48f6c5d4
@@ -327,11 +327,11 @@ jobs:
       run: script/bundle-windows.ps1 -Architecture aarch64
       shell: pwsh
       working-directory: ${{ env.ZED_WORKSPACE }}
-    - name: '@actions/upload-artifact Zed-aarch64.exe'
+    - name: '@actions/upload-artifact neozed-aarch64.exe'
       uses: actions/upload-artifact@330a01c490aca151604b8cf639adc76d48f6c5d4
       with:
-        name: Zed-aarch64.exe
-        path: target/Zed-aarch64.exe
+        name: neozed-aarch64.exe
+        path: target/neozed-aarch64.exe
         if-no-files-found: error
     - name: '@actions/upload-artifact zed-remote-server-windows-aarch64.zip'
       uses: actions/upload-artifact@330a01c490aca151604b8cf639adc76d48f6c5d4
@@ -380,11 +380,11 @@ jobs:
       run: script/bundle-windows.ps1 -Architecture x86_64
       shell: pwsh
       working-directory: ${{ env.ZED_WORKSPACE }}
-    - name: '@actions/upload-artifact Zed-x86_64.exe'
+    - name: '@actions/upload-artifact neozed-x86_64.exe'
       uses: actions/upload-artifact@330a01c490aca151604b8cf639adc76d48f6c5d4
       with:
-        name: Zed-x86_64.exe
-        path: target/Zed-x86_64.exe
+        name: neozed-x86_64.exe
+        path: target/neozed-x86_64.exe
         if-no-files-found: error
     - name: '@actions/upload-artifact zed-remote-server-windows-x86_64.zip'
       uses: actions/upload-artifact@330a01c490aca151604b8cf639adc76d48f6c5d4
@@ -397,7 +397,7 @@ jobs:
     needs:
     - check_style
     - run_tests_windows
-    if: (github.repository_owner == 'zed-industries' || github.repository_owner == 'zed-extensions')
+    if: (github.repository_owner == 'Nkr1shna' || github.repository_owner == 'zed-industries' || github.repository_owner == 'zed-extensions')
     runs-on: namespace-profile-32x64-ubuntu-2004
     env:
       ZED_CLIENT_CHECKSUM_SEED: ${{ secrets.ZED_CLIENT_CHECKSUM_SEED }}
@@ -431,7 +431,7 @@ jobs:
     needs:
     - check_style
     - run_tests_windows
-    if: (github.repository_owner == 'zed-industries' || github.repository_owner == 'zed-extensions')
+    if: (github.repository_owner == 'Nkr1shna' || github.repository_owner == 'zed-industries' || github.repository_owner == 'zed-extensions')
     runs-on: namespace-profile-mac-large
     env:
       ZED_CLIENT_CHECKSUM_SEED: ${{ secrets.ZED_CLIENT_CHECKSUM_SEED }}
@@ -502,12 +502,12 @@ jobs:
       run: |-
         mkdir -p release-artifacts/
 
-        mv ./artifacts/Zed-aarch64.dmg/Zed-aarch64.dmg release-artifacts/Zed-aarch64.dmg
-        mv ./artifacts/Zed-x86_64.dmg/Zed-x86_64.dmg release-artifacts/Zed-x86_64.dmg
-        mv ./artifacts/zed-linux-aarch64.tar.gz/zed-linux-aarch64.tar.gz release-artifacts/zed-linux-aarch64.tar.gz
-        mv ./artifacts/zed-linux-x86_64.tar.gz/zed-linux-x86_64.tar.gz release-artifacts/zed-linux-x86_64.tar.gz
-        mv ./artifacts/Zed-x86_64.exe/Zed-x86_64.exe release-artifacts/Zed-x86_64.exe
-        mv ./artifacts/Zed-aarch64.exe/Zed-aarch64.exe release-artifacts/Zed-aarch64.exe
+        mv ./artifacts/neozed-aarch64.dmg/neozed-aarch64.dmg release-artifacts/neozed-aarch64.dmg
+        mv ./artifacts/neozed-x86_64.dmg/neozed-x86_64.dmg release-artifacts/neozed-x86_64.dmg
+        mv ./artifacts/neozed-linux-aarch64.tar.gz/neozed-linux-aarch64.tar.gz release-artifacts/neozed-linux-aarch64.tar.gz
+        mv ./artifacts/neozed-linux-x86_64.tar.gz/neozed-linux-x86_64.tar.gz release-artifacts/neozed-linux-x86_64.tar.gz
+        mv ./artifacts/neozed-x86_64.exe/neozed-x86_64.exe release-artifacts/neozed-x86_64.exe
+        mv ./artifacts/neozed-aarch64.exe/neozed-aarch64.exe release-artifacts/neozed-aarch64.exe
         mv ./artifacts/zed-remote-server-macos-aarch64.gz/zed-remote-server-macos-aarch64.gz release-artifacts/zed-remote-server-macos-aarch64.gz
         mv ./artifacts/zed-remote-server-macos-x86_64.gz/zed-remote-server-macos-x86_64.gz release-artifacts/zed-remote-server-macos-x86_64.gz
         mv ./artifacts/zed-remote-server-linux-aarch64.gz/zed-remote-server-linux-aarch64.gz release-artifacts/zed-remote-server-linux-aarch64.gz

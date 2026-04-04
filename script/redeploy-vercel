@@ -11,7 +11,7 @@ fi
 MAX_ATTEMPTS="60"
 SLEEP_SECONDS="10"
 VERCEL_SCOPE="zed-industries"
-VERCEL_URL="https://zed.dev"
+VERCEL_URL="https://neozed.dev"
 
 echo "Checking for in-progress deployments..."
 
