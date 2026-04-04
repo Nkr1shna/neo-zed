@@ -7598,7 +7598,7 @@ fn network_page() -> SettingsPage {
                     },
                 }),
                 metadata: Some(Box::new(SettingsFieldMetadata {
-                    placeholder: Some("https://zed.dev"),
+                    placeholder: Some("https://neozed.dev"),
                     ..Default::default()
                 })),
                 files: USER,
