@@ -1,0 +1,7 @@
+{
+  "featureId": "core-release-channel-branding",
+  "status": "pass",
+  "summary": "The shared release-channel mapping and matching macOS bundle identifiers are internally consistent for stable, preview, nightly, and dev. I did not find any high-confidence correctness or regression issues in this feature.",
+  "issues": [],
+  "sharedStateObservations": []
+}
