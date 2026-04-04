@@ -12,9 +12,9 @@ main() {
     ZED_VERSION="${ZED_VERSION:-latest}"
     # Use TMPDIR if available (for environments with non-standard temp directories)
     if [ -n "${TMPDIR:-}" ] && [ -d "${TMPDIR}" ]; then
-        temp="$(mktemp -d "$TMPDIR/zed-XXXXXX")"
+        temp="$(mktemp -d "$TMPDIR/neozed-XXXXXX")"
     else
-        temp="$(mktemp -d "/tmp/zed-XXXXXX")"
+        temp="$(mktemp -d "/tmp/neozed-XXXXXX")"
     fi
 
     if [ "$platform" = "Darwin" ]; then
@@ -54,10 +54,10 @@ main() {
 
     "$platform" "$@"
 
-    if [ "$(command -v zed)" = "$HOME/.local/bin/zed" ]; then
-        echo "Zed has been installed. Run with 'zed'"
+    if [ "$(command -v neozed)" = "$HOME/.local/bin/neozed" ]; then
+        echo "Neo Zed has been installed. Run with 'neozed'"
     else
-        echo "To run Zed from your terminal, you must add ~/.local/bin to your PATH"
+        echo "To run Neo Zed from your terminal, you must add ~/.local/bin to your PATH"
         echo "Run:"
 
         case "$SHELL" in
@@ -74,16 +74,17 @@ main() {
                 ;;
         esac
 
-        echo "To run Zed now, '~/.local/bin/zed'"
+        echo "To run Neo Zed now, '~/.local/bin/neozed'"
     fi
 }
 
 linux() {
+    archive_path="$temp/neozed-linux-$arch.tar.gz"
     if [ -n "${ZED_BUNDLE_PATH:-}" ]; then
-        cp "$ZED_BUNDLE_PATH" "$temp/zed-linux-$arch.tar.gz"
+        cp "$ZED_BUNDLE_PATH" "$archive_path"
     else
-        echo "Downloading Zed version: $ZED_VERSION"
-        curl "https://cloud.zed.dev/releases/$channel/$ZED_VERSION/download?asset=zed&arch=$arch&os=linux&source=install.sh" > "$temp/zed-linux-$arch.tar.gz"
+        echo "Downloading Neo Zed version: $ZED_VERSION"
+        curl "https://cloud.zed.dev/releases/$channel/$ZED_VERSION/download?asset=zed&arch=$arch&os=linux&source=install.sh" > "$archive_path"
     fi
 
     suffix=""
@@ -94,68 +95,117 @@ linux() {
     appid=""
     case "$channel" in
       stable)
-        appid="dev.zed.Zed"
+        appid="dev.neozed"
         ;;
       nightly)
-        appid="dev.zed.Zed-Nightly"
+        appid="dev.neozed.Nightly"
         ;;
       preview)
-        appid="dev.zed.Zed-Preview"
+        appid="dev.neozed.Preview"
         ;;
       dev)
-        appid="dev.zed.Zed-Dev"
+        appid="dev.neozed.Dev"
         ;;
       *)
         echo "Unknown release channel: ${channel}. Using stable app ID."
-        appid="dev.zed.Zed"
+        appid="dev.neozed"
         ;;
     esac
 
+    app_dir="$HOME/.local/neozed$suffix.app"
+    bundle_root="$(tar -tzf "$archive_path" | awk -F/ 'NF && $1 != "." { print $1; exit }')"
+    if [ -z "$bundle_root" ]; then
+        echo "Could not determine Neo Zed bundle directory"
+        exit 1
+    fi
+
     # Unpack
-    rm -rf "$HOME/.local/zed$suffix.app"
-    mkdir -p "$HOME/.local/zed$suffix.app"
-    tar -xzf "$temp/zed-linux-$arch.tar.gz" -C "$HOME/.local/"
+    rm -rf "$app_dir"
+    tar -xzf "$archive_path" -C "$HOME/.local/"
+    if [ "$HOME/.local/$bundle_root" != "$app_dir" ]; then
+        mv "$HOME/.local/$bundle_root" "$app_dir"
+    fi
 
     # Setup ~/.local directories
     mkdir -p "$HOME/.local/bin" "$HOME/.local/share/applications"
 
-    # Link the binary
-    if [ -f "$HOME/.local/zed$suffix.app/bin/zed" ]; then
-        ln -sf "$HOME/.local/zed$suffix.app/bin/zed" "$HOME/.local/bin/zed"
+    bundled_cli_path=""
+    if [ -x "$app_dir/bin/neozed" ]; then
+        bundled_cli_path="$app_dir/bin/neozed"
+    elif [ -x "$app_dir/bin/cli" ]; then
+        bundled_cli_path="$app_dir/bin/cli"
     else
-        # support for versions before 0.139.x.
-        ln -sf "$HOME/.local/zed$suffix.app/bin/cli" "$HOME/.local/bin/zed"
+        for candidate in "$app_dir"/bin/*; do
+            [ -x "$candidate" ] || continue
+            bundled_cli_path="$candidate"
+            break
+        done
     fi
+    if [ -z "$bundled_cli_path" ]; then
+        echo "Could not determine Neo Zed CLI path"
+        exit 1
+    fi
+
+    if [ "$bundled_cli_path" != "$app_dir/bin/neozed" ]; then
+        ln -sf "$bundled_cli_path" "$app_dir/bin/neozed"
+    fi
+    ln -sf "$app_dir/bin/neozed" "$HOME/.local/bin/neozed"
 
     # Copy .desktop file
     desktop_file_path="$HOME/.local/share/applications/${appid}.desktop"
-    src_dir="$HOME/.local/zed$suffix.app/share/applications"
+    src_dir="$app_dir/share/applications"
+    desktop_source=""
     if [ -f "$src_dir/${appid}.desktop" ]; then
-        cp "$src_dir/${appid}.desktop" "${desktop_file_path}"
+        desktop_source="$src_dir/${appid}.desktop"
     else
-        # Fallback for older tarballs
-        cp "$src_dir/zed$suffix.desktop" "${desktop_file_path}"
+        for candidate in "$src_dir"/*.desktop; do
+            [ -f "$candidate" ] || continue
+            desktop_source="$candidate"
+            break
+        done
     fi
-    sed -i "s|Icon=zed|Icon=$HOME/.local/zed$suffix.app/share/icons/hicolor/512x512/apps/zed.png|g" "${desktop_file_path}"
-    sed -i "s|Exec=zed|Exec=$HOME/.local/zed$suffix.app/bin/zed|g" "${desktop_file_path}"
+    if [ -z "$desktop_source" ]; then
+        echo "Could not determine Neo Zed desktop file"
+        exit 1
+    fi
+    cp "$desktop_source" "${desktop_file_path}"
+
+    icon_dir="$app_dir/share/icons/hicolor/512x512/apps"
+    icon_path="$icon_dir/neozed.png"
+    if [ ! -f "$icon_path" ]; then
+        for candidate in "$icon_dir"/*; do
+            [ -f "$candidate" ] || continue
+            ln -sf "$candidate" "$icon_path"
+            break
+        done
+    fi
+    if [ -f "$icon_path" ]; then
+        sed -i "s|^Icon=.*$|Icon=$icon_path|g" "${desktop_file_path}"
+    fi
+    sed -i "s|^Exec=.*$|Exec=$app_dir/bin/neozed|g" "${desktop_file_path}"
+    sed -i "s|^TryExec=.*$|TryExec=$app_dir/bin/neozed|g" "${desktop_file_path}"
 }
 
 macos() {
-    echo "Downloading Zed version: $ZED_VERSION"
-    curl "https://cloud.zed.dev/releases/$channel/$ZED_VERSION/download?asset=zed&os=macos&arch=$arch&source=install.sh" > "$temp/Zed-$arch.dmg"
-    hdiutil attach -quiet "$temp/Zed-$arch.dmg" -mountpoint "$temp/mount"
+    dmg_path="$temp/Neo-Zed-$arch.dmg"
+    echo "Downloading Neo Zed version: $ZED_VERSION"
+    curl "https://cloud.zed.dev/releases/$channel/$ZED_VERSION/download?asset=zed&os=macos&arch=$arch&source=install.sh" > "$dmg_path"
+    hdiutil attach -quiet "$dmg_path" -mountpoint "$temp/mount"
     app="$(cd "$temp/mount/"; echo *.app)"
-    echo "Installing $app"
+    echo "Installing Neo Zed"
     if [ -d "/Applications/$app" ]; then
-        echo "Removing existing $app"
+        echo "Removing existing Neo Zed app bundle"
         rm -rf "/Applications/$app"
     fi
     ditto "$temp/mount/$app" "/Applications/$app"
     hdiutil detach -quiet "$temp/mount"
 
     mkdir -p "$HOME/.local/bin"
-    # Link the binary
-    ln -sf "/Applications/$app/Contents/MacOS/cli" "$HOME/.local/bin/zed"
+    cli_path="/Applications/$app/Contents/MacOS/neozed"
+    if [ ! -f "$cli_path" ]; then
+        cli_path="/Applications/$app/Contents/MacOS/cli"
+    fi
+    ln -sf "$cli_path" "$HOME/.local/bin/neozed"
 }
 
 main "$@"

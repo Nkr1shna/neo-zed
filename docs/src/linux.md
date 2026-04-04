@@ -83,51 +83,52 @@ Download the `.tar.gz` file:
 - [zed-linux-aarch64.tar.gz](https://cloud.zed.dev/releases/stable/latest/download?asset=zed&arch=aarch64&os=linux&source=docs)
   ([preview](https://cloud.zed.dev/releases/preview/latest/download?asset=zed&arch=aarch64&os=linux&source=docs))
 
-Then ensure that the `zed` binary in the tarball is on your path. The easiest way is to unpack the tarball and create a symlink:
+Then ensure that the `neozed` binary is on your path. The easiest way is to unpack the tarball and create a symlink:
 
 ```sh
 mkdir -p ~/.local
-# extract zed to ~/.local/zed.app/
+# extract Neo Zed to ~/.local/neozed.app/
 tar -xvf <path/to/download>.tar.gz -C ~/.local
-# link the zed binary to ~/.local/bin (or another directory in your $PATH)
-ln -sf ~/.local/zed.app/bin/zed ~/.local/bin/zed
+# link the neozed binary to ~/.local/bin (or another directory in your $PATH)
+ln -sf ~/.local/neozed.app/bin/neozed ~/.local/bin/neozed
 ```
 
 If you'd like integration with an XDG-compatible desktop environment, you will also need to install the `.desktop` file:
 
 ```sh
-install -D ~/.local/zed.app/share/applications/dev.zed.Zed.desktop -t ~/.local/share/applications
-sed -i "s|Icon=zed|Icon=$HOME/.local/zed.app/share/icons/hicolor/512x512/apps/zed.png|g" ~/.local/share/applications/dev.zed.Zed.desktop
-sed -i "s|Exec=zed|Exec=$HOME/.local/zed.app/bin/zed|g" ~/.local/share/applications/dev.zed.Zed.desktop
+cp ~/.local/neozed.app/share/applications/*.desktop ~/.local/share/applications/dev.neozed.desktop
+sed -i "s|^Icon=.*$|Icon=$HOME/.local/neozed.app/share/icons/hicolor/512x512/apps/neozed.png|g" ~/.local/share/applications/dev.neozed.desktop
+sed -i "s|^TryExec=.*$|TryExec=$HOME/.local/neozed.app/bin/neozed|g" ~/.local/share/applications/dev.neozed.desktop
+sed -i "s|^Exec=.*$|Exec=$HOME/.local/neozed.app/bin/neozed|g" ~/.local/share/applications/dev.neozed.desktop
 ```
 
-## Uninstalling Zed
+## Uninstalling Neo Zed
 
 ### Standard Uninstall
 
-If Zed was installed using the default installation script, it can be uninstalled by supplying the `--uninstall` flag to the `zed` shell command
+If Neo Zed was installed using the default installation script, it can be uninstalled by supplying the `--uninstall` flag to the `neozed` shell command
 
 ```sh
-zed --uninstall
+neozed --uninstall
 ```
 
-If there are no errors, the shell will then prompt you whether you'd like to keep your preferences or delete them. After making a choice, you should see a message that Zed was successfully uninstalled.
+If there are no errors, the shell will then prompt you whether you'd like to keep your preferences or delete them. After making a choice, you should see a message that Neo Zed was successfully uninstalled.
 
 In the case that the `zed` shell command was not found in your PATH, you can try one of the following commands
 
 ```sh
-$HOME/.local/bin/zed --uninstall
+$HOME/.local/bin/neozed --uninstall
 ```
 
 or
 
 ```sh
-$HOME/.local/zed.app/bin.zed --uninstall
+$HOME/.local/neozed.app/bin/neozed --uninstall
 ```
 
-The first case might fail if a symlink was not properly established between `$HOME/.local/bin/zed` and `$HOME/.local/zed.app/bin.zed`. But the second case should work as long as Zed was installed to its default location.
+The first case might fail if a symlink was not properly established between `$HOME/.local/bin/neozed` and `$HOME/.local/neozed.app/bin/neozed`. But the second case should work as long as Neo Zed was installed to its default location.
 
-If Zed was installed to a different location, you must invoke the `zed` binary stored in that installation directory and pass the `--uninstall` flag to it in the same format as the previous commands.
+If Neo Zed was installed to a different location, invoke the `neozed` binary stored in that installation directory and pass the `--uninstall` flag to it in the same format as the previous commands.
 
 ### Package Manager
 

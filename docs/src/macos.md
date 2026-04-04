@@ -65,17 +65,19 @@ See the [CLI Reference](./reference/cli.md) for all available options.
 3. Optionally, remove your settings and extensions:
 
 ```sh
-rm -rf ~/.config/zed
-rm -rf ~/Library/Application\ Support/Zed
-rm -rf ~/Library/Caches/Zed
-rm -rf ~/Library/Logs/Zed
-rm -rf ~/Library/Saved\ Application\ State/dev.zed.Zed.savedState
+rm -rf ~/.config/neozed
+rm -rf ~/Library/Application\ Support/Neo\ Zed
+rm -rf ~/Library/Caches/Neo\ Zed
+rm -rf ~/Library/Caches/dev.neozed
+rm -rf ~/Library/Logs/Neo\ Zed
+rm -rf ~/Library/Preferences/dev.neozed.plist
+rm -rf ~/Library/Saved\ Application\ State/dev.neozed.savedState
 ```
 
 If you installed the CLI, remove it with:
 
 ```sh
-rm /usr/local/bin/zed
+rm /usr/local/bin/neozed
 ```
 
 ## Troubleshooting

@@ -1,24 +1,24 @@
 ---
 title: CLI Reference
-description: "Reference for Zed's command-line interface (CLI), including opening files and directories, integrating with tools, and controlling Zed from scripts."
+description: "Reference for Neo Zed's command-line interface (CLI), including opening files and directories, integrating with other tools, and controlling Neo Zed from scripts."
 ---
 
 # CLI Reference
 
-Use Zed's command-line interface (CLI) to open files and directories, integrate with other tools, and control Zed from scripts.
+Use Neo Zed's command-line interface (CLI) to open files and directories, integrate with other tools, and control Neo Zed from scripts.
 
 ## Installation
 
-**macOS:** Run the `cli: install` command from the command palette ({#kb command_palette::Toggle}) to install the `zed` CLI to `/usr/local/bin/zed`.
+**macOS:** Run the `cli: install` command from the command palette ({#kb command_palette::Toggle}) to install the `neozed` CLI to `/usr/local/bin/neozed`.
 
-**Linux:** The CLI is included with Zed packages. The binary name may vary by distribution (commonly `zed` or `zeditor`).
+**Linux:** The CLI is included with Neo Zed packages. The binary name is `neozed` for official releases.
 
-**Windows:** The CLI is included with Zed. Add Zed's installation directory to your PATH, or use the full path to `zed.exe`.
+**Windows:** The CLI is included with Neo Zed. Add Neo Zed's installation directory to your PATH, or use the full path to `neozed.exe`.
 
 ## Usage
 
 ```sh
-zed [OPTIONS] [PATHS]...
+neozed [OPTIONS] [PATHS]...
 ```
 
 ## Opening Files and Directories
@@ -26,26 +26,26 @@ zed [OPTIONS] [PATHS]...
 Open a file:
 
 ```sh
-zed myfile.txt
+neozed myfile.txt
 ```
 
 Open a directory as a workspace:
 
 ```sh
-zed ~/projects/myproject
+neozed ~/projects/myproject
 ```
 
 Open multiple files or directories:
 
 ```sh
-zed file1.txt file2.txt ~/projects/myproject
+neozed file1.txt file2.txt ~/projects/myproject
 ```
 
 Open a file at a specific line and column:
 
 ```sh
-zed myfile.txt:42        # Open at line 42
-zed myfile.txt:42:10     # Open at line 42, column 10
+neozed myfile.txt:42        # Open at line 42
+neozed myfile.txt:42:10     # Open at line 42, column 10
 ```
 
 ## Options
@@ -54,11 +54,11 @@ zed myfile.txt:42:10     # Open at line 42, column 10
 
 Wait for all opened files to be closed before the CLI exits. When opening a directory, waits until the window is closed.
 
-This is useful for integrating Zed with tools that expect an editor to block until editing is complete (e.g., `git commit`):
+This is useful for integrating Neo Zed with tools that expect an editor to block until editing is complete (e.g., `git commit`):
 
 ```sh
-export EDITOR="zed --wait"
-git commit  # Opens Zed and waits for you to close the commit message file
+export EDITOR="neozed --wait"
+git commit  # Opens Neo Zed and waits for you to close the commit message file
 ```
 
 ### `-n`, `--new`
@@ -66,7 +66,7 @@ git commit  # Opens Zed and waits for you to close the commit message file
 Open paths in a new workspace window, even if the paths are already open in an existing window:
 
 ```sh
-zed -n ~/projects/myproject
+neozed -n ~/projects/myproject
 ```
 
 ### `-a`, `--add`
@@ -74,7 +74,7 @@ zed -n ~/projects/myproject
 Add paths to the currently focused workspace instead of opening a new window. When multiple workspace windows are open, files open in the focused window:
 
 ```sh
-zed -a newfile.txt
+neozed -a newfile.txt
 ```
 
 ### `-r`, `--reuse`
@@ -82,7 +82,7 @@ zed -a newfile.txt
 Reuse an existing window, replacing its current workspace with the new paths:
 
 ```sh
-zed -r ~/projects/different-project
+neozed -r ~/projects/different-project
 ```
 
 ### `--diff <OLD_PATH> <NEW_PATH>`
@@ -90,16 +90,16 @@ zed -r ~/projects/different-project
 Open a diff view comparing two files. Can be specified multiple times:
 
 ```sh
-zed --diff file1.txt file2.txt
-zed --diff old.rs new.rs --diff old2.rs new2.rs
+neozed --diff file1.txt file2.txt
+neozed --diff old.rs new.rs --diff old2.rs new2.rs
 ```
 
 ### `--foreground`
 
-Run Zed in the foreground, keeping the terminal attached. Useful for debugging:
+Run Neo Zed in the foreground, keeping the terminal attached. Useful for debugging:
 
 ```sh
-zed --foreground
+neozed --foreground
 ```
 
 ### `--user-data-dir <DIR>`
@@ -107,67 +107,69 @@ zed --foreground
 Use a custom directory for all user data (database, extensions, logs) instead of the default location:
 
 ```sh
-zed --user-data-dir ~/.zed-custom
+neozed --user-data-dir ~/.neozed-custom
 ```
 
 Default locations:
 
-- **macOS:** `~/Library/Application Support/Zed`
-- **Linux:** `$XDG_DATA_HOME/zed` (typically `~/.local/share/zed`)
-- **Windows:** `%LOCALAPPDATA%\Zed`
+- **macOS:** `~/Library/Application Support/Neo Zed`
+- **Linux:** `$XDG_DATA_HOME/neozed` (typically `~/.local/share/neozed`)
+- **Windows:** `%LOCALAPPDATA%\Neo Zed`
 
 ### `-v`, `--version`
 
-Print Zed's version and exit:
+Print Neo Zed's version and exit:
 
 ```sh
-zed --version
+neozed --version
 ```
 
 ### `--uninstall`
 
-Uninstall Zed and remove all related files (macOS and Linux only):
+Uninstall Neo Zed and remove all related files (macOS and Linux only):
 
 ```sh
-zed --uninstall
+neozed --uninstall
 ```
 
-### `--zed <PATH>`
+### `--neozed <PATH>`
 
-Specify a custom path to the Zed application or binary:
+Specify a custom path to the Neo Zed application or binary:
 
 ```sh
-zed --zed /path/to/Zed.app myfile.txt
+neozed --neozed /path/to/Neo\ Zed.app myfile.txt
 ```
+
+The legacy `--zed` alias still works for compatibility.
 
 ## Reading from Standard Input
 
 Read content from stdin by passing `-` as the path:
 
 ```sh
-echo "Hello, World!" | zed -
-cat myfile.txt | zed -
-ps aux | zed -
+echo "Hello, World!" | neozed -
+cat myfile.txt | neozed -
+ps aux | neozed -
 ```
 
-This creates a temporary file with the stdin content and opens it in Zed.
+This creates a temporary file with the stdin content and opens it in Neo Zed.
 
 ## URL Handling
 
-The CLI can open `zed://`, `http://`, and `https://` URLs:
+The CLI can open `neozed://`, `http://`, and `https://` URLs:
 
 ```sh
-zed zed://settings
-zed https://github.com/zed-industries/zed
+neozed neozed://settings
+neozed https://github.com/Nkr1shna/neo-zed
 ```
 
-## Using Zed as Your Default Editor
+## Using Neo Zed as Your Default Editor
 
-Set Zed as your default editor for Git and other tools:
+Set Neo Zed as your default editor for Git and other tools:
 
 ```sh
-export EDITOR="zed --wait"
-export VISUAL="zed --wait"
+export EDITOR="neozed --wait"
+export VISUAL="neozed --wait"
 ```
 
 Add these lines to your shell configuration file (e.g., `~/.bashrc`, `~/.zshrc`).
@@ -177,14 +179,14 @@ Add these lines to your shell configuration file (e.g., `~/.bashrc`, `~/.zshrc`)
 On macOS, you can launch a specific release channel by passing the channel name as the first argument:
 
 ```sh
-zed --stable myfile.txt
-zed --preview myfile.txt
-zed --nightly myfile.txt
+neozed --stable myfile.txt
+neozed --preview myfile.txt
+neozed --nightly myfile.txt
 ```
 
 ## WSL Integration (Windows)
 
-On Windows, the CLI supports opening paths from WSL distributions. This is handled automatically when launching Zed from within WSL.
+On Windows, the CLI supports opening paths from WSL distributions. This is handled automatically when launching Neo Zed from within WSL.
 
 ## Exit Codes
 

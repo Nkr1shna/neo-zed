@@ -7,7 +7,7 @@
 use gpui::App;
 use settings::Settings;
 
-use crate::ClientSettings;
+use crate::{ClientSettings, PUBLIC_ZED_URL_SCHEME};
 
 fn server_url(cx: &App) -> &str {
     &ClientSettings::get_global(cx).server_url
@@ -66,5 +66,18 @@ pub fn parallel_agents_blog(cx: &App) -> String {
 }
 
 pub fn shared_agent_thread_url(session_id: &str) -> String {
-    format!("zed://agent/shared/{}", session_id)
+    format!("{PUBLIC_ZED_URL_SCHEME}://agent/shared/{session_id}")
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn shared_agent_thread_url_uses_public_neozed_scheme() {
+        assert_eq!(
+            shared_agent_thread_url("session-id"),
+            "neozed://agent/shared/session-id"
+        );
+    }
 }

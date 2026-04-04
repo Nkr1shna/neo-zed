@@ -4,7 +4,7 @@ use agent_ui::ExternalSourcePrompt;
 use anyhow::{Context as _, Result, anyhow};
 use cli::{CliRequest, CliResponse, ipc::IpcSender};
 use cli::{IpcHandshake, ipc};
-use client::{ZedLink, parse_zed_link};
+use client::{PUBLIC_ZED_URL_SCHEME, ZED_URL_SCHEME, ZedLink, parse_zed_link};
 use db::kvp::KeyValueStore;
 use editor::Editor;
 use fs::Fs;
@@ -73,6 +73,11 @@ pub enum OpenRequestKind {
     },
 }
 
+fn strip_public_or_legacy_zed_scheme(url: &str) -> Option<&str> {
+    url.strip_prefix(&format!("{PUBLIC_ZED_URL_SCHEME}://"))
+        .or_else(|| url.strip_prefix(&format!("{ZED_URL_SCHEME}://")))
+}
+
 impl OpenRequest {
     pub fn parse(request: RawOpenRequest, cx: &App) -> Result<Self> {
         let mut this = Self::default();
@@ -104,39 +109,43 @@ impl OpenRequest {
                 });
             } else if let Some(file) = url.strip_prefix("file://") {
                 this.parse_file_path(file)
-            } else if let Some(file) = url.strip_prefix("zed://file") {
-                this.parse_file_path(file)
-            } else if let Some(file) = url.strip_prefix("zed://ssh") {
-                let ssh_url = "ssh:/".to_string() + file;
-                this.parse_ssh_file_path(&ssh_url, cx)?
-            } else if let Some(extension_id) = url.strip_prefix("zed://extension/") {
-                this.kind = Some(OpenRequestKind::Extension {
-                    extension_id: extension_id.to_string(),
-                });
-            } else if let Some(session_id_str) = url.strip_prefix("zed://agent/shared/") {
-                if uuid::Uuid::parse_str(session_id_str).is_ok() {
-                    this.kind = Some(OpenRequestKind::SharedAgentThread {
-                        session_id: session_id_str.to_string(),
+            } else if let Some(zed_url) = strip_public_or_legacy_zed_scheme(&url) {
+                if let Some(file) = zed_url.strip_prefix("file") {
+                    this.parse_file_path(file)
+                } else if let Some(file) = zed_url.strip_prefix("ssh") {
+                    let ssh_url = "ssh:/".to_string() + file;
+                    this.parse_ssh_file_path(&ssh_url, cx)?
+                } else if let Some(extension_id) = zed_url.strip_prefix("extension/") {
+                    this.kind = Some(OpenRequestKind::Extension {
+                        extension_id: extension_id.to_string(),
                     });
+                } else if let Some(session_id_str) = zed_url.strip_prefix("agent/shared/") {
+                    if uuid::Uuid::parse_str(session_id_str).is_ok() {
+                        this.kind = Some(OpenRequestKind::SharedAgentThread {
+                            session_id: session_id_str.to_string(),
+                        });
+                    } else {
+                        log::error!("Invalid session ID in URL: {}", session_id_str);
+                    }
+                } else if let Some(agent_path) = zed_url.strip_prefix("agent") {
+                    this.parse_agent_url(agent_path)
+                } else if let Some(schema_path) = zed_url.strip_prefix("schemas/") {
+                    this.kind = Some(OpenRequestKind::BuiltinJsonSchema {
+                        schema_path: schema_path.to_string(),
+                    });
+                } else if zed_url == "settings" || zed_url == "settings/" {
+                    this.kind = Some(OpenRequestKind::Setting { setting_path: None });
+                } else if let Some(setting_path) = zed_url.strip_prefix("settings/") {
+                    this.kind = Some(OpenRequestKind::Setting {
+                        setting_path: Some(setting_path.to_string()),
+                    });
+                } else if let Some(clone_path) = zed_url.strip_prefix("git/clone") {
+                    this.parse_git_clone_url(clone_path)?
+                } else if let Some(commit_path) = zed_url.strip_prefix("git/commit/") {
+                    this.parse_git_commit_url(commit_path)?
                 } else {
-                    log::error!("Invalid session ID in URL: {}", session_id_str);
+                    log::error!("unhandled url: {}", url);
                 }
-            } else if let Some(agent_path) = url.strip_prefix("zed://agent") {
-                this.parse_agent_url(agent_path)
-            } else if let Some(schema_path) = url.strip_prefix("zed://schemas/") {
-                this.kind = Some(OpenRequestKind::BuiltinJsonSchema {
-                    schema_path: schema_path.to_string(),
-                });
-            } else if url == "zed://settings" || url == "zed://settings/" {
-                this.kind = Some(OpenRequestKind::Setting { setting_path: None });
-            } else if let Some(setting_path) = url.strip_prefix("zed://settings/") {
-                this.kind = Some(OpenRequestKind::Setting {
-                    setting_path: Some(setting_path.to_string()),
-                });
-            } else if let Some(clone_path) = url.strip_prefix("zed://git/clone") {
-                this.parse_git_clone_url(clone_path)?
-            } else if let Some(commit_path) = url.strip_prefix("zed://git/commit/") {
-                this.parse_git_commit_url(commit_path)?
             } else if url.starts_with("ssh://") {
                 this.parse_ssh_file_path(&url, cx)?
             } else if let Some(zed_link) = parse_zed_link(&url, cx) {
@@ -876,6 +885,32 @@ mod tests {
 
     #[gpui::test]
     fn test_parse_shared_agent_thread_url(cx: &mut TestAppContext) {
+        let _app_state = init_test(cx);
+        let session_id = "123e4567-e89b-12d3-a456-426614174000";
+
+        let request = cx.update(|cx| {
+            OpenRequest::parse(
+                RawOpenRequest {
+                    urls: vec![format!("neozed://agent/shared/{session_id}")],
+                    ..Default::default()
+                },
+                cx,
+            )
+            .unwrap()
+        });
+
+        match request.kind {
+            Some(OpenRequestKind::SharedAgentThread {
+                session_id: parsed_session_id,
+            }) => {
+                assert_eq!(parsed_session_id, session_id);
+            }
+            _ => panic!("Expected SharedAgentThread kind"),
+        }
+    }
+
+    #[gpui::test]
+    fn test_parse_legacy_shared_agent_thread_url(cx: &mut TestAppContext) {
         let _app_state = init_test(cx);
         let session_id = "123e4567-e89b-12d3-a456-426614174000";
 
