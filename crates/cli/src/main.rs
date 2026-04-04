@@ -962,6 +962,11 @@ mod flatpak {
 
     const EXTRA_LIB_ENV_NAME: &str = "ZED_FLATPAK_LIB_PATH";
     const NO_ESCAPE_ENV_NAME: &str = "ZED_FLATPAK_NO_ESCAPE";
+    const FLATPAK_ID_PREFIX: &str = "dev.neozed";
+
+    fn is_neozed_flatpak_id(flatpak_id: &str) -> bool {
+        flatpak_id == FLATPAK_ID_PREFIX || flatpak_id.starts_with("dev.neozed.")
+    }
 
     /// Adds bundled libraries to LD_LIBRARY_PATH if running under flatpak
     pub fn ld_extra_libs() {
@@ -991,7 +996,7 @@ mod flatpak {
                 )
                 .into(),
             );
-            args.push(flatpak_dir.join("bin").join("zed").into());
+            args.push(flatpak_dir.join("bin").join("neozed").into());
 
             let mut is_app_location_set = false;
             for arg in &env::args_os().collect::<Vec<_>>()[1..] {
@@ -1012,11 +1017,16 @@ mod flatpak {
 
     pub fn set_bin_if_no_escape(mut args: super::Args) -> super::Args {
         if env::var(NO_ESCAPE_ENV_NAME).is_ok()
-            && env::var("FLATPAK_ID").is_ok_and(|id| id.starts_with("dev.zed.Zed"))
+            && env::var("FLATPAK_ID").is_ok_and(|id| is_neozed_flatpak_id(&id))
             && args.zed.is_none()
         {
             args.zed = Some("/app/libexec/zed-editor".into());
-            unsafe { env::set_var("ZED_UPDATE_EXPLANATION", "Please use flatpak to update zed") };
+            unsafe {
+                env::set_var(
+                    "ZED_UPDATE_EXPLANATION",
+                    "Please use flatpak to update neozed",
+                )
+            };
         }
         args
     }
@@ -1027,7 +1037,7 @@ mod flatpak {
         }
 
         if let Ok(flatpak_id) = env::var("FLATPAK_ID") {
-            if !flatpak_id.starts_with("dev.zed.Zed") {
+            if !is_neozed_flatpak_id(&flatpak_id) {
                 return None;
             }
 
@@ -1043,6 +1053,30 @@ mod flatpak {
             Some(install_dir.join("files"))
         } else {
             None
+        }
+    }
+
+    #[cfg(test)]
+    mod tests {
+        use super::is_neozed_flatpak_id;
+
+        #[test]
+        fn recognizes_neo_zed_flatpak_ids() {
+            for flatpak_id in [
+                "dev.neozed",
+                "dev.neozed.Preview",
+                "dev.neozed.Nightly",
+                "dev.neozed.Dev",
+            ] {
+                assert!(is_neozed_flatpak_id(flatpak_id));
+            }
+        }
+
+        #[test]
+        fn rejects_non_neo_zed_flatpak_ids() {
+            for flatpak_id in ["dev.zed.Zed", "dev.zed.ZedPreview", "org.example.Other"] {
+                assert!(!is_neozed_flatpak_id(flatpak_id));
+            }
         }
     }
 
