@@ -1,0 +1,136 @@
+{
+  "groupId": "linux-release-packaging",
+  "surface": "file/metadata inspection",
+  "toolsUsed": [
+    "python3",
+    "rg"
+  ],
+  "assertions": [
+    {
+      "id": "VAL-LINUX-001",
+      "status": "pass",
+      "reason": "The Linux desktop-entry template and bundle script consistently render Neo Zed identities: neozed is the CLI/icon name, x-scheme-handler/neozed is registered, APP_ID values are dev.neozed*, and archive/app directory names are neozed-based.",
+      "evidence": [
+        {
+          "kind": "file",
+          "path": "crates/zed/resources/zed.desktop.in",
+          "summary": "The desktop template uses TryExec=$APP_CLI, Exec=$APP_CLI $APP_ARGS, Icon=$APP_ICON, Keywords=neozed, and MimeType x-scheme-handler/neozed."
+        },
+        {
+          "kind": "file",
+          "path": "script/bundle-linux",
+          "summary": "The Linux bundle script exports APP_CLI=\"neozed\", APP_ICON=\"neozed\", per-channel Neo Zed APP_NAME/APP_ID values, creates neozed$suffix.app, and archives neozed-linux-${arch}.tar.gz."
+        },
+        {
+          "kind": "file",
+          "path": "crates/zed/resources/snap/snapcraft.yaml.in",
+          "summary": "The Snap app stanza exposes command: usr/bin/neozed and common-id: dev.neozed alongside the Neo Zed package name."
+        },
+        {
+          "kind": "command",
+          "command": "python3 evidence generation for metadata-audit.json",
+          "summary": "Saved the Linux desktop integration evidence and scoped absence checks to evidence/desktop-packaging/linux-release-packaging/metadata-audit.json."
+        }
+      ]
+    },
+    {
+      "id": "VAL-LINUX-002",
+      "status": "pass",
+      "reason": "Linux package metadata and install flows now use Neo Zed names, commands, URLs, and repo links across Snap, Flatpak, and the install/uninstall scripts.",
+      "evidence": [
+        {
+          "kind": "file",
+          "path": "crates/zed/resources/snap/snapcraft.yaml.in",
+          "summary": "Snap metadata uses name neozed, title Neo Zed, website https://neozed.dev/, source-code https://github.com/Nkr1shna/neo-zed/, and the neozed release tarball URL."
+        },
+        {
+          "kind": "file",
+          "path": "crates/zed/resources/flatpak/zed.metainfo.xml.in",
+          "summary": "Flatpak metadata uses developer id dev.neozed, Neo Zed branding, neozed.dev URLs, and fork repository links."
+        },
+        {
+          "kind": "file",
+          "path": "script/install.sh",
+          "summary": "The installer downloads asset=neozed from cloud.neozed.dev, emits Neo Zed messaging, and installs neozed binaries and dev.neozed app IDs."
+        },
+        {
+          "kind": "file",
+          "path": "script/uninstall.sh",
+          "summary": "The uninstall flow removes Neo Zed app bundles, neozed CLI symlinks, and dev.neozed-derived Linux/macOS data directories."
+        },
+        {
+          "kind": "command",
+          "command": "python3 evidence generation for metadata-audit.json",
+          "summary": "Saved the Linux package-metadata audit to evidence/desktop-packaging/linux-release-packaging/metadata-audit.json."
+        }
+      ]
+    },
+    {
+      "id": "VAL-REL-001",
+      "status": "pass",
+      "reason": "The audited bundling and release workflows publish Neo Zed desktop app artifact names for the Linux tarball, macOS DMGs, and Windows EXEs, with no old zed-prefixed desktop app artifact names remaining in those release-facing files.",
+      "evidence": [
+        {
+          "kind": "file",
+          "path": ".github/workflows/run_bundling.yml",
+          "summary": "The run_bundling workflow uploads neozed-linux-*.tar.gz, neozed-*.dmg, and neozed-*.exe artifacts."
+        },
+        {
+          "kind": "file",
+          "path": ".github/workflows/release.yml",
+          "summary": "The release workflow uploads, renames, and verifies the expected Neo Zed desktop app artifact set before gh release upload."
+        },
+        {
+          "kind": "file",
+          "path": ".github/workflows/release_nightly.yml",
+          "summary": "The nightly release workflow mirrors the Neo Zed artifact naming for tarball, DMG, and EXE outputs."
+        },
+        {
+          "kind": "command",
+          "command": "python3 evidence generation for metadata-audit.json",
+          "summary": "Saved the workflow artifact-name matrix and scoped absence checks to evidence/desktop-packaging/linux-release-packaging/metadata-audit.json."
+        }
+      ]
+    },
+    {
+      "id": "VAL-REL-002",
+      "status": "pass",
+      "reason": "Registry/package metadata in the audited package manifests and release workflows points at Neo Zed fork surfaces, including neozed.dev URLs and the Nkr1shna/neo-zed repository.",
+      "evidence": [
+        {
+          "kind": "file",
+          "path": "crates/zed/resources/snap/snapcraft.yaml.in",
+          "summary": "Snap metadata points at neozed.dev and https://github.com/Nkr1shna/neo-zed/ for website, source-code, issues, and release asset URLs."
+        },
+        {
+          "kind": "file",
+          "path": "crates/zed/resources/flatpak/zed.metainfo.xml.in",
+          "summary": "Flatpak metadata uses neozed.dev for homepage/help/contact/faq and the fork repository for bugtracker, vcs-browser, and contribute URLs."
+        },
+        {
+          "kind": "file",
+          "path": ".github/workflows/release.yml",
+          "summary": "Release publication uses gh release upload/view/edit commands against the Nkr1shna/neo-zed repository."
+        },
+        {
+          "kind": "file",
+          "path": ".github/workflows/after_release.yml",
+          "summary": "After-release refresh and announcement URLs point at cloud.neozed.dev and neozed.dev release pages."
+        },
+        {
+          "kind": "command",
+          "command": "python3 evidence generation for metadata-audit.json",
+          "summary": "Saved the registry/package URL audit and scoped absence checks to evidence/desktop-packaging/linux-release-packaging/metadata-audit.json."
+        }
+      ]
+    }
+  ],
+  "frictions": [
+    "Task-based user-testing-flow-validator subagents still failed to launch with \"Invalid model: custom:droidproxy:gpt-5.4\", so this flow report was produced manually in the validator session using the assigned assertion scope."
+  ],
+  "blockers": [],
+  "notes": [
+    "No services or seed data were required for the desktop-packaging milestone.",
+    "Scoped workflow absence checks excluded zed-remote-server-* artifacts because the contract for this milestone targets Neo Zed desktop app tarball, DMG, and EXE names rather than compatibility-sensitive remote-server payload names."
+  ]
+}

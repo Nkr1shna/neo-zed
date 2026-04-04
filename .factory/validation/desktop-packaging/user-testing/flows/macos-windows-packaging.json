@@ -1,0 +1,122 @@
+{
+  "groupId": "macos-windows-packaging",
+  "surface": "file/metadata inspection",
+  "toolsUsed": [
+    "python3",
+    "rg",
+    "plutil"
+  ],
+  "assertions": [
+    {
+      "id": "VAL-MAC-001",
+      "status": "pass",
+      "reason": "The Cargo macOS bundle metadata defines stable, preview, nightly, and dev variants with Neo Zed display names, dev.neozed-derived identifiers, and the neozed URL scheme.",
+      "evidence": [
+        {
+          "kind": "file",
+          "path": "crates/zed/Cargo.toml",
+          "summary": "bundle-stable, bundle-preview, bundle-nightly, and bundle-dev each expose the expected Neo Zed name, dev.neozed* identifier, and osx_url_schemes = [\"neozed\"]."
+        },
+        {
+          "kind": "command",
+          "command": "python3 evidence generation for metadata-audit.json",
+          "summary": "Saved the extracted per-channel macOS bundle metadata and scoped legacy-identity absence check to evidence/desktop-packaging/macos-windows-packaging/metadata-audit.json."
+        }
+      ]
+    },
+    {
+      "id": "VAL-MAC-002",
+      "status": "pass",
+      "reason": "The audited macOS packaging resources and install/uninstall flows use Neo Zed names: DocumentTypes advertises Neo Zed Text Document, the bundle script emits neozed DMG archives, and install/uninstall scripts use Neo Zed app names and neozed CLI paths.",
+      "evidence": [
+        {
+          "kind": "file",
+          "path": "crates/zed/resources/info/DocumentTypes.plist",
+          "summary": "CFBundleTypeName is set to Neo Zed Text Document in the release-facing macOS document type metadata."
+        },
+        {
+          "kind": "file",
+          "path": "script/bundle-mac",
+          "summary": "The bundling script sets bundle_archive_name=\"neozed\" so generated DMGs use the Neo Zed archive name."
+        },
+        {
+          "kind": "file",
+          "path": "script/install.sh",
+          "summary": "The macOS installer downloads Neo-Zed-$arch.dmg, prints Installing Neo Zed, and symlinks /Applications/$app/Contents/MacOS/neozed."
+        },
+        {
+          "kind": "file",
+          "path": "script/uninstall.sh",
+          "summary": "The macOS uninstall flow switches among Neo Zed.app, Neo Zed Preview.app, Neo Zed Nightly.app, and Neo Zed Dev.app with matching dev.neozed* app IDs."
+        },
+        {
+          "kind": "command",
+          "command": "plutil -lint crates/zed/resources/info/DocumentTypes.plist",
+          "summary": "plutil reported the DocumentTypes plist as OK before the metadata audit was recorded."
+        }
+      ]
+    },
+    {
+      "id": "VAL-WIN-001",
+      "status": "pass",
+      "reason": "The Windows installer-visible product metadata is rebranded to Neo Zed across the Inno Setup script and per-channel bundling definitions, with Neo Zed app names, dev.neozed AppUserModelIDs, and neozed setup artifact names.",
+      "evidence": [
+        {
+          "kind": "file",
+          "path": "script/bundle-windows.ps1",
+          "summary": "Each channel maps to Neo Zed / Neo Zed Preview / Neo Zed Nightly / Neo Zed Dev, uses neozed-$Architecture setup names, and publishes dev.neozed* AppUserModelIDs."
+        },
+        {
+          "kind": "file",
+          "path": "crates/zed/resources/windows/zed.iss",
+          "summary": "The installer metadata sets AppPublisher=Neo Zed and points AppPublisherURL, AppSupportURL, and AppUpdatesURL to https://neozed.dev/."
+        },
+        {
+          "kind": "command",
+          "command": "python3 evidence generation for metadata-audit.json",
+          "summary": "Saved the per-channel Windows installer mapping plus scoped legacy-string absence checks to evidence/desktop-packaging/macos-windows-packaging/metadata-audit.json."
+        }
+      ]
+    },
+    {
+      "id": "VAL-WIN-002",
+      "status": "pass",
+      "reason": "Windows package identities and shell integration use Neo Zed values: AppX manifests declare dev.neozed* identities and Neo Zed display names, Inno Setup registers the neozed protocol, and the explorer command uses the Open with Neo Zed label.",
+      "evidence": [
+        {
+          "kind": "file",
+          "path": "crates/explorer_command_injector/AppxManifest.xml",
+          "summary": "The stable AppX manifest uses Name=\"dev.neozed\", Publisher=\"CN=Neo Zed, O=Neo Zed, C=US\", and DisplayName/PublisherDisplayName values for Neo Zed."
+        },
+        {
+          "kind": "file",
+          "path": "crates/explorer_command_injector/AppxManifest-Preview.xml",
+          "summary": "The preview/nightly/dev AppX manifests follow the same pattern with dev.neozed.Preview, dev.neozed.Nightly, and dev.neozed.Dev identities and matching Neo Zed display names."
+        },
+        {
+          "kind": "file",
+          "path": "crates/explorer_command_injector/src/explorer_command_injector.rs",
+          "summary": "The Windows explorer command fallback label is Open with Neo Zed."
+        },
+        {
+          "kind": "file",
+          "path": "crates/zed/resources/windows/zed.iss",
+          "summary": "Inno Setup registers Software\\Classes\\neozed with the URL:Neo Zed Protocol label and uses AppUserModelID references throughout the shell integration rules."
+        },
+        {
+          "kind": "command",
+          "command": "python3 evidence generation for metadata-audit.json",
+          "summary": "Saved the AppX identity matrix, shell-label evidence, and scoped absence checks to evidence/desktop-packaging/macos-windows-packaging/metadata-audit.json."
+        }
+      ]
+    }
+  ],
+  "frictions": [
+    "Task-based user-testing-flow-validator subagents still failed to launch with \"Invalid model: custom:droidproxy:gpt-5.4\", so this flow report was produced manually in the validator session using the assigned assertion scope."
+  ],
+  "blockers": [],
+  "notes": [
+    "No services or seed data were required for the desktop-packaging milestone.",
+    "Remaining Windows payload names such as Zed.exe and zed_explorer_command_injector.appx are non-user-facing internal/runtime identifiers outside the installer-visible/package-identity assertions."
+  ]
+}

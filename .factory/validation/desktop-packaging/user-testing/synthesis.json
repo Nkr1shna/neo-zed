@@ -1,0 +1,25 @@
+{
+  "milestone": "desktop-packaging",
+  "round": 1,
+  "status": "pass",
+  "assertionsSummary": {
+    "total": 8,
+    "passed": 8,
+    "failed": 0,
+    "blocked": 0
+  },
+  "passedAssertions": [
+    "VAL-LINUX-001",
+    "VAL-LINUX-002",
+    "VAL-MAC-001",
+    "VAL-MAC-002",
+    "VAL-REL-001",
+    "VAL-REL-002",
+    "VAL-WIN-001",
+    "VAL-WIN-002"
+  ],
+  "failedAssertions": [],
+  "blockedAssertions": [],
+  "appliedUpdates": [],
+  "previousRound": null
+}
