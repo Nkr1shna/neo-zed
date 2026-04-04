@@ -1,0 +1,45 @@
+{
+  "groupId": "network-topology",
+  "surface": "file/metadata inspection",
+  "toolsUsed": [
+    "python3",
+    "rg"
+  ],
+  "assertions": [
+    {
+      "id": "VAL-NET-001",
+      "status": "pass",
+      "reason": "The default release topology now routes the shipped server setting to https://neozed.dev and maps that release base URL to https://api.neozed.dev and https://cloud.neozed.dev in the shared HTTP helper builders. The remaining upstream/staging branches in the HTTP client are explicit compatibility overrides rather than the default Neo Zed release topology.",
+      "evidence": [
+        {
+          "kind": "file",
+          "path": "assets/settings/default.json",
+          "summary": "The default settings file sets server_url to https://neozed.dev for the shipped release configuration."
+        },
+        {
+          "kind": "file",
+          "path": "crates/settings_ui/src/page_data.rs",
+          "summary": "The Network settings placeholder shows https://neozed.dev, matching the default server topology exposed to users."
+        },
+        {
+          "kind": "file",
+          "path": "crates/http_client/src/http_client.rs",
+          "summary": "The helper URL builders map https://neozed.dev to https://api.neozed.dev and https://cloud.neozed.dev for API, client, RPC, and edit-prediction requests."
+        },
+        {
+          "kind": "command",
+          "command": "python3 evidence generation for topology-audit.json",
+          "summary": "Saved extracted topology lines and preserved compatibility branches to evidence/networked-surfaces/network-topology/topology-audit.json."
+        }
+      ]
+    }
+  ],
+  "frictions": [
+    "Task-based user-testing-flow-validator subagents failed to launch with \"Invalid model: custom:droidproxy:gpt-5.4\", so this flow report was produced manually in the validator session using the assigned assertion scope."
+  ],
+  "blockers": [],
+  "notes": [
+    "No services or seed data were required for the networked-surfaces milestone.",
+    "The audited scope was limited to the files touched by commit 9d467608e89de8524ed2bcae97c8e7fa14b36a64."
+  ]
+}
