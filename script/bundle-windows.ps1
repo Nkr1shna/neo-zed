@@ -268,7 +268,7 @@ function BuildInstaller {
             $appIconName = "app-icon"
             $appName = "Neo Zed"
             $appDisplayName = "Neo Zed"
-            $appSetupName = "Zed-$Architecture"
+            $appSetupName = "neozed-$Architecture"
             $appExeName = "Zed"
             $regValueName = "NeoZed"
             $appUserId = "dev.neozed"
@@ -280,7 +280,7 @@ function BuildInstaller {
             $appIconName = "app-icon-preview"
             $appName = "Neo Zed Preview"
             $appDisplayName = "Neo Zed Preview"
-            $appSetupName = "Zed-$Architecture"
+            $appSetupName = "neozed-$Architecture"
             $appExeName = "Zed"
             $regValueName = "NeoZedPreview"
             $appUserId = "dev.neozed.Preview"
@@ -292,7 +292,7 @@ function BuildInstaller {
             $appIconName = "app-icon-nightly"
             $appName = "Neo Zed Nightly"
             $appDisplayName = "Neo Zed Nightly"
-            $appSetupName = "Zed-$Architecture"
+            $appSetupName = "neozed-$Architecture"
             $appExeName = "Zed"
             $regValueName = "NeoZedNightly"
             $appUserId = "dev.neozed.Nightly"
@@ -304,7 +304,7 @@ function BuildInstaller {
             $appIconName = "app-icon-dev"
             $appName = "Neo Zed Dev"
             $appDisplayName = "Neo Zed Dev"
-            $appSetupName = "Zed-$Architecture"
+            $appSetupName = "neozed-$Architecture"
             $appExeName = "Zed"
             $regValueName = "NeoZedDev"
             $appUserId = "dev.neozed.Dev"
@@ -362,7 +362,8 @@ function BuildInstaller {
 
     if ($process.ExitCode -eq 0) {
         Write-Host "✅ Inno Setup successfully compiled the installer"
-        Write-Output "SETUP_PATH=target/$appSetupName.exe" >> $env:GITHUB_ENV
+        $script:setupPath = "target/$appSetupName.exe"
+        Write-Output "SETUP_PATH=$script:setupPath" >> $env:GITHUB_ENV
         $script:buildSuccess = $true
     }
     else {
@@ -396,8 +397,8 @@ if($env:CI) {
 if ($buildSuccess) {
     Write-Output "Build successful"
     if ($Install) {
-        Write-Output "Installing Zed..."
-        Start-Process -FilePath "$env:ZED_WORKSPACE/target/ZedEditorUserSetup-x64-$env:RELEASE_VERSION.exe"
+        Write-Output "Installing Neo Zed..."
+        Start-Process -FilePath (Join-Path $env:ZED_WORKSPACE $script:setupPath)
     }
     exit 0
 }

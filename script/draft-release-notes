@@ -1,6 +1,7 @@
 #!/usr/bin/env node --redirect-warnings=/dev/null
 
 const { execFileSync } = require("child_process");
+const REPOSITORY_URL = "https://github.com/Nkr1shna/neo-zed";
 
 main();
 
@@ -32,7 +33,7 @@ async function main() {
     execFileSync("rm", ["-rf", "target/shallow_clone"]);
     execFileSync("git", [
       "clone",
-      "https://github.com/zed-industries/zed",
+      REPOSITORY_URL,
       "target/shallow_clone",
       "--filter=tree:0",
       "--no-checkout",
@@ -60,11 +61,11 @@ async function main() {
   let skipped = [];
 
   for (const commit of newCommits) {
-    let link = "https://github.com/zed-industries/zed/pull/" + commit.pr;
+    let link = REPOSITORY_URL + "/pull/" + commit.pr;
     let notes = commit.releaseNotes;
     if (commit.pr == "") {
-      link = "https://github.com/zed-industries/zed/commits/" + commit.hash;
-    } else if (!notes.includes("zed-industries/zed/issues")) {
+      link = REPOSITORY_URL + "/commits/" + commit.hash;
+    } else if (!notes.includes("Nkr1shna/neo-zed/issues")) {
       notes = notes + " ([#" + commit.pr + "](" + link + "))";
     }
 
@@ -78,7 +79,7 @@ async function main() {
   }
 
   if (releaseNotes.length === 0) {
-    const compareUrl = `https://github.com/zed-industries/zed/compare/${priorTag}...${tag}#commits_bucket`;
+    const compareUrl = `${REPOSITORY_URL}/compare/${priorTag}...${tag}#commits_bucket`;
     console.log(`No public-facing changes in this release. [View the commits](${compareUrl}).\n`);
   } else {
     console.log(releaseNotes.join("\n") + "\n");

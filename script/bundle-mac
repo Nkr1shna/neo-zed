@@ -225,7 +225,7 @@ function sign_app_binaries() {
 
     bundle_name=$(basename "$app_path")
     bundle_display_name="${bundle_name%.app}"
-    bundle_archive_name=$(echo "$bundle_display_name" | tr ' ' '-')
+    bundle_archive_name="neozed"
 
     if [ "$local_install" = true ]; then
         rm -rf "/Applications/$bundle_name"

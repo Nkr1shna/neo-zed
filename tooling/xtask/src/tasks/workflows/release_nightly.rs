@@ -7,7 +7,7 @@ use crate::tasks::workflows::{
     run_bundling::{bundle_linux, bundle_mac, bundle_windows},
     run_tests::{clippy, run_platform_tests_no_filter},
     runners::{Arch, Platform, ReleaseChannel},
-    steps::{CommonJobConditions, FluentBuilder, NamedJob},
+    steps::{FluentBuilder, NamedJob},
 };
 
 use super::{runners, steps, steps::named, vars};
@@ -17,9 +17,14 @@ use gh_workflow::*;
 pub fn release_nightly() -> Workflow {
     let style = check_style();
     // run only on windows as that's our fastest platform right now.
-    let tests = run_platform_tests_no_filter(Platform::Windows);
-    let clippy_job = clippy(Platform::Windows, None);
+    let mut tests = run_platform_tests_no_filter(Platform::Windows);
+    let mut clippy_job = clippy(Platform::Windows, None);
     let nightly = Some(ReleaseChannel::Nightly);
+
+    tests.job =
+        std::mem::take(&mut tests.job).cond(Expression::new(vars::RELEASE_REPOSITORY_OWNER_GUARD));
+    clippy_job.job = std::mem::take(&mut clippy_job.job)
+        .cond(Expression::new(vars::RELEASE_REPOSITORY_OWNER_GUARD));
 
     let bundle = ReleaseBundleJobs {
         linux_aarch64: bundle_linux(Arch::AARCH64, nightly, &[&style, &tests, &clippy_job]),
@@ -30,20 +35,24 @@ pub fn release_nightly() -> Workflow {
         windows_x86_64: bundle_windows(Arch::X86_64, nightly, &[&style, &tests, &clippy_job]),
     };
 
-    let nix_linux_x86 = build_nix(
+    let mut nix_linux_x86 = build_nix(
         Platform::Linux,
         Arch::X86_64,
         "default",
         None,
         &[&style, &tests],
     );
-    let nix_mac_arm = build_nix(
+    let mut nix_mac_arm = build_nix(
         Platform::Mac,
         Arch::AARCH64,
         "default",
         None,
         &[&style, &tests],
     );
+    nix_linux_x86.job = std::mem::take(&mut nix_linux_x86.job)
+        .cond(Expression::new(vars::RELEASE_REPOSITORY_OWNER_GUARD));
+    nix_mac_arm.job = std::mem::take(&mut nix_mac_arm.job)
+        .cond(Expression::new(vars::RELEASE_REPOSITORY_OWNER_GUARD));
     let update_nightly_tag = update_nightly_tag_job(&bundle);
     let notify_on_failure = notify_on_failure(&bundle.jobs());
 
@@ -81,7 +90,7 @@ fn check_style() -> NamedJob {
 
 fn release_job(deps: &[&NamedJob]) -> Job {
     let job = Job::default()
-        .with_repository_owner_guard()
+        .cond(Expression::new(vars::RELEASE_REPOSITORY_OWNER_GUARD))
         .timeout_minutes(60u32);
     if deps.len() > 0 {
         job.needs(deps.iter().map(|j| j.name.clone()).collect::<Vec<_>>())
