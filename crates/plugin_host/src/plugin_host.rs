@@ -108,9 +108,8 @@ impl<T: Render + 'static> PanelSession<T> {
 
 mod host {
     use anyhow::{Context as _, Result};
-    use futures::future::{Either, select};
     use futures::io::{BufReader, BufWriter};
-    use futures::{AsyncBufReadExt as _, AsyncWriteExt as _, FutureExt as _, pin_mut};
+    use futures::{AsyncBufReadExt as _, AsyncWriteExt as _};
     use gpui::{
         Action, App, Context, Entity, EventEmitter, FocusHandle, Focusable, Global,
         InteractiveElement, ParentElement, Render, SharedString, StatefulInteractiveElement,
@@ -128,11 +127,16 @@ mod host {
     };
     use serde::Deserialize;
     use smol::{channel, process::Command};
+    #[cfg(target_os = "linux")]
+    use std::os::unix::process::CommandExt as _;
+    #[cfg(target_os = "windows")]
+    use std::os::windows::io::AsRawHandle as _;
     use std::{
         any::TypeId,
         collections::{BTreeMap, BTreeSet},
         env,
         ffi::OsString,
+        io,
         path::{Path, PathBuf},
         process::Stdio,
         time::Duration,
@@ -3247,29 +3251,149 @@ mod host {
             .context("failed to queue plugin host message")
     }
 
+    struct PluginChild {
+        inner: smol::process::Child,
+        #[cfg(target_os = "windows")]
+        job: WindowsJobObject,
+    }
+
+    impl PluginChild {
+        fn new(inner: smol::process::Child) -> Self {
+            Self {
+                inner,
+                #[cfg(target_os = "windows")]
+                job: WindowsJobObject::none(),
+            }
+        }
+
+        #[cfg(target_os = "windows")]
+        fn with_job(inner: smol::process::Child, job: WindowsJobObject) -> Self {
+            Self { inner, job }
+        }
+
+        fn take_stdin(&mut self) -> Option<smol::process::ChildStdin> {
+            self.inner.stdin.take()
+        }
+
+        fn take_stdout(&mut self) -> Option<smol::process::ChildStdout> {
+            self.inner.stdout.take()
+        }
+
+        fn take_stderr(&mut self) -> Option<smol::process::ChildStderr> {
+            self.inner.stderr.take()
+        }
+
+        async fn status(&mut self) -> io::Result<std::process::ExitStatus> {
+            self.inner.status().await
+        }
+
+        fn try_status(&mut self) -> io::Result<Option<std::process::ExitStatus>> {
+            self.inner.try_status()
+        }
+
+        fn kill(&mut self) -> io::Result<()> {
+            #[cfg(target_os = "windows")]
+            self.job.terminate()?;
+            self.inner.kill()
+        }
+    }
+
+    #[cfg(target_os = "windows")]
+    struct WindowsJobObject(Option<windows::Win32::Foundation::HANDLE>);
+
+    #[cfg(target_os = "windows")]
+    impl WindowsJobObject {
+        fn none() -> Self {
+            Self(None)
+        }
+
+        fn create_for_child(child: &smol::process::Child) -> Result<Self> {
+            use windows::Win32::Foundation::HANDLE;
+            use windows::Win32::System::JobObjects::{
+                AssignProcessToJobObject, CreateJobObjectW, JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE,
+                JOBOBJECT_EXTENDED_LIMIT_INFORMATION, JobObjectExtendedLimitInformation,
+                SetInformationJobObject,
+            };
+
+            unsafe {
+                let job = CreateJobObjectW(None, None)?;
+                let mut limits = JOBOBJECT_EXTENDED_LIMIT_INFORMATION::default();
+                limits.BasicLimitInformation.LimitFlags = JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE;
+                SetInformationJobObject(
+                    job,
+                    JobObjectExtendedLimitInformation,
+                    &limits as *const _ as *const core::ffi::c_void,
+                    std::mem::size_of::<JOBOBJECT_EXTENDED_LIMIT_INFORMATION>() as u32,
+                )?;
+                AssignProcessToJobObject(job, HANDLE(child.as_raw_handle() as isize))?;
+                Ok(Self(Some(job)))
+            }
+        }
+
+        fn terminate(&self) -> io::Result<()> {
+            use windows::Win32::System::JobObjects::TerminateJobObject;
+
+            if let Some(job) = self.0 {
+                unsafe {
+                    TerminateJobObject(job, 1)
+                        .map_err(|error| io::Error::other(error.to_string()))?;
+                }
+            }
+            Ok(())
+        }
+    }
+
+    #[cfg(target_os = "windows")]
+    impl Drop for WindowsJobObject {
+        fn drop(&mut self) {
+            if let Some(job) = self.0.take() {
+                let _ = unsafe { windows::Win32::Foundation::CloseHandle(job) };
+            }
+        }
+    }
+
+    fn spawn_plugin_child(plugin: &InstalledPlugin) -> Result<PluginChild> {
+        let mut command = build_command(plugin)?;
+        let child = command
+            .spawn()
+            .with_context(|| format!("failed to spawn plugin process {command:?}"))?;
+
+        #[cfg(target_os = "windows")]
+        {
+            let job = match WindowsJobObject::create_for_child(&child) {
+                Ok(job) => job,
+                Err(error) => {
+                    let mut child = child;
+                    child.kill().ok();
+                    return Err(error);
+                }
+            };
+            return Ok(PluginChild::with_job(child, job));
+        }
+
+        #[cfg(not(target_os = "windows"))]
+        {
+            Ok(PluginChild::new(child))
+        }
+    }
+
     fn spawn_process(
         plugin: &InstalledPlugin,
         event_sender: channel::Sender<PluginHostEvent>,
         async_cx: gpui::AsyncApp,
         process_instance_id: u64,
     ) -> Result<SpawnedPluginProcess> {
-        let mut command = build_command(plugin)?;
         let plugin_id = plugin.manifest.id.clone();
-        let mut child = command
-            .spawn()
-            .with_context(|| format!("failed to spawn plugin process {command:?}"))?;
+        let mut child = spawn_plugin_child(plugin)?;
 
         let stdin = child
-            .stdin
-            .take()
+            .take_stdin()
             .context("plugin process did not expose stdin")?;
         let stdout = child
-            .stdout
-            .take()
+            .take_stdout()
             .context("plugin process did not expose stdout")?;
         let stderr = child
-            .stderr
-            .take()
+            .take_stderr()
             .context("plugin process did not expose stderr")?;
 
         let (sender, receiver) = channel::unbounded::<String>();
@@ -3335,20 +3459,28 @@ mod host {
             .detach();
 
         let exit_plugin_id = plugin_id.clone();
+        let background_executor = async_cx.background_executor().clone();
         async_cx
             .background_spawn(async move {
                 let mut termination_reason = None;
-                let status = child.status().fuse();
-                let terminate = terminate_receiver.recv().fuse();
-                pin_mut!(status, terminate);
-
-                let exit_status = match select(status, terminate).await {
-                    Either::Left((status, _)) => status.ok().and_then(|status| status.code()),
-                    Either::Right((termination, _)) => {
-                        termination_reason = termination.ok();
-                        child.kill().ok();
-                        child.status().await.ok().and_then(|status| status.code())
+                let exit_status = loop {
+                    if let Some(status) = child.try_status().ok().flatten() {
+                        break status.code();
                     }
+
+                    match terminate_receiver.try_recv() {
+                        Ok(termination) => {
+                            termination_reason = Some(termination);
+                            child.kill().ok();
+                            break child.status().await.ok().and_then(|status| status.code());
+                        }
+                        Err(channel::TryRecvError::Closed) => {
+                            break child.status().await.ok().and_then(|status| status.code());
+                        }
+                        Err(channel::TryRecvError::Empty) => {}
+                    }
+
+                    background_executor.timer(Duration::from_millis(50)).await;
                 };
                 event_sender
                     .send(PluginHostEvent::Exited {
@@ -3650,6 +3782,180 @@ mod host {
         Ok(launch_spec)
     }
 
+    #[cfg(target_os = "linux")]
+    const LINUX_SECCOMP_AUDIT_ARCH: u32 = if cfg!(target_arch = "x86_64") {
+        0xC000_003E
+    } else if cfg!(target_arch = "aarch64") {
+        0xC000_00B7
+    } else {
+        0
+    };
+
+    #[cfg(target_os = "linux")]
+    const LINUX_BLOCKED_SYSCALLS: [libc::c_long; 20] = [
+        libc::SYS_bpf,
+        libc::SYS_clone3,
+        libc::SYS_finit_module,
+        libc::SYS_fsconfig,
+        libc::SYS_fsmount,
+        libc::SYS_fsopen,
+        libc::SYS_fspick,
+        libc::SYS_init_module,
+        libc::SYS_kexec_file_load,
+        libc::SYS_kexec_load,
+        libc::SYS_mount,
+        libc::SYS_mount_setattr,
+        libc::SYS_move_mount,
+        libc::SYS_open_tree,
+        libc::SYS_perf_event_open,
+        libc::SYS_pivot_root,
+        libc::SYS_ptrace,
+        libc::SYS_setns,
+        libc::SYS_umount2,
+        libc::SYS_unshare,
+    ];
+
+    #[cfg(target_os = "linux")]
+    const LINUX_BPF_LD: u16 = 0x00;
+    #[cfg(target_os = "linux")]
+    const LINUX_BPF_W: u16 = 0x00;
+    #[cfg(target_os = "linux")]
+    const LINUX_BPF_ABS: u16 = 0x20;
+    #[cfg(target_os = "linux")]
+    const LINUX_BPF_JMP: u16 = 0x05;
+    #[cfg(target_os = "linux")]
+    const LINUX_BPF_JEQ: u16 = 0x10;
+    #[cfg(target_os = "linux")]
+    const LINUX_BPF_K: u16 = 0x00;
+    #[cfg(target_os = "linux")]
+    const LINUX_BPF_RET: u16 = 0x06;
+    #[cfg(target_os = "linux")]
+    const LINUX_SECCOMP_RET_ALLOW: u32 = 0x7fff_0000;
+    #[cfg(target_os = "linux")]
+    const LINUX_SECCOMP_RET_ERRNO: u32 = 0x0005_0000;
+    #[cfg(target_os = "linux")]
+    const LINUX_SECCOMP_RET_KILL_PROCESS: u32 = 0x8000_0000;
+    #[cfg(target_os = "linux")]
+    const LINUX_SECCOMP_ERRNO_OPERATION_NOT_PERMITTED: u32 = 1;
+    #[cfg(target_os = "linux")]
+    const LINUX_SECCOMP_ARCH_OFFSET: u32 = 4;
+    #[cfg(target_os = "linux")]
+    const LINUX_SECCOMP_NR_OFFSET: u32 = 0;
+    #[cfg(target_os = "linux")]
+    const LINUX_SECCOMP_FILTER_LEN: usize = 5 + (LINUX_BLOCKED_SYSCALLS.len() * 2);
+
+    #[cfg(target_os = "linux")]
+    const fn linux_bpf_stmt(code: u16, k: u32) -> libc::sock_filter {
+        libc::sock_filter {
+            code,
+            jt: 0,
+            jf: 0,
+            k,
+        }
+    }
+
+    #[cfg(target_os = "linux")]
+    const fn linux_bpf_jump(code: u16, k: u32, jt: u8, jf: u8) -> libc::sock_filter {
+        libc::sock_filter { code, jt, jf, k }
+    }
+
+    #[cfg(target_os = "linux")]
+    fn linux_seccomp_program() -> [libc::sock_filter; LINUX_SECCOMP_FILTER_LEN] {
+        let mut program = [linux_bpf_stmt(LINUX_BPF_RET | LINUX_BPF_K, LINUX_SECCOMP_RET_ALLOW);
+            LINUX_SECCOMP_FILTER_LEN];
+        program[0] = linux_bpf_stmt(
+            LINUX_BPF_LD | LINUX_BPF_W | LINUX_BPF_ABS,
+            LINUX_SECCOMP_ARCH_OFFSET,
+        );
+        program[1] = linux_bpf_jump(
+            LINUX_BPF_JMP | LINUX_BPF_JEQ | LINUX_BPF_K,
+            LINUX_SECCOMP_AUDIT_ARCH,
+            1,
+            0,
+        );
+        program[2] = linux_bpf_stmt(LINUX_BPF_RET | LINUX_BPF_K, LINUX_SECCOMP_RET_KILL_PROCESS);
+        program[3] = linux_bpf_stmt(
+            LINUX_BPF_LD | LINUX_BPF_W | LINUX_BPF_ABS,
+            LINUX_SECCOMP_NR_OFFSET,
+        );
+
+        let mut instruction_index = 4;
+        let deny_result = LINUX_SECCOMP_RET_ERRNO | LINUX_SECCOMP_ERRNO_OPERATION_NOT_PERMITTED;
+        for syscall in LINUX_BLOCKED_SYSCALLS {
+            program[instruction_index] = linux_bpf_jump(
+                LINUX_BPF_JMP | LINUX_BPF_JEQ | LINUX_BPF_K,
+                syscall as u32,
+                0,
+                1,
+            );
+            program[instruction_index + 1] =
+                linux_bpf_stmt(LINUX_BPF_RET | LINUX_BPF_K, deny_result);
+            instruction_index += 2;
+        }
+
+        program[instruction_index] =
+            linux_bpf_stmt(LINUX_BPF_RET | LINUX_BPF_K, LINUX_SECCOMP_RET_ALLOW);
+        program
+    }
+
+    #[cfg(target_os = "linux")]
+    fn install_linux_seccomp() -> io::Result<()> {
+        if LINUX_SECCOMP_AUDIT_ARCH == 0 {
+            return Err(io::Error::other(
+                "plugin seccomp sandbox does not support this linux architecture",
+            ));
+        }
+
+        let program = linux_seccomp_program();
+        let filter_program = libc::sock_fprog {
+            len: program.len() as u16,
+            filter: program.as_ptr() as *mut libc::sock_filter,
+        };
+
+        unsafe {
+            if libc::prctl(libc::PR_SET_NO_NEW_PRIVS, 1, 0, 0, 0) != 0 {
+                return Err(io::Error::last_os_error());
+            }
+
+            if libc::prctl(
+                libc::PR_SET_SECCOMP,
+                libc::SECCOMP_MODE_FILTER,
+                &filter_program,
+            ) != 0
+            {
+                return Err(io::Error::last_os_error());
+            }
+        }
+
+        Ok(())
+    }
+
+    #[cfg(target_os = "linux")]
+    fn build_command(plugin: &InstalledPlugin) -> Result<Command> {
+        let launch_spec = sandbox_launch_spec(plugin, build_launch_spec(plugin)?)?;
+        let mut std_command = std::process::Command::new(&launch_spec.program);
+        std_command.args(&launch_spec.args);
+
+        if let Some(cargo_target_dir) = launch_spec.cargo_target_dir {
+            std_command.env("CARGO_TARGET_DIR", cargo_target_dir);
+        }
+
+        std_command
+            .current_dir(launch_spec.current_dir)
+            .stdin(Stdio::piped())
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped());
+
+        unsafe {
+            std_command.pre_exec(|| install_linux_seccomp());
+        }
+
+        let mut command = Command::from(std_command);
+        command.kill_on_drop(true);
+        Ok(command)
+    }
+
+    #[cfg(not(target_os = "linux"))]
     fn build_command(plugin: &InstalledPlugin) -> Result<Command> {
         let launch_spec = sandbox_launch_spec(plugin, build_launch_spec(plugin)?)?;
         let mut command = Command::new(&launch_spec.program);
@@ -3657,6 +3963,14 @@ mod host {
 
         if let Some(cargo_target_dir) = launch_spec.cargo_target_dir {
             command.env("CARGO_TARGET_DIR", cargo_target_dir);
+        }
+
+        #[cfg(target_os = "windows")]
+        {
+            use smol::process::windows::CommandExt as _;
+            use windows::Win32::System::Threading::{CREATE_BREAKAWAY_FROM_JOB, CREATE_NO_WINDOW};
+
+            command.creation_flags(CREATE_NO_WINDOW.0 | CREATE_BREAKAWAY_FROM_JOB.0);
         }
 
         command
@@ -4213,6 +4527,25 @@ edition = "2021"
             assert_eq!(
                 registration_timeout_for_plugin(&plugin, true),
                 Duration::from_millis(75)
+            );
+        }
+
+        #[cfg(target_os = "linux")]
+        #[test]
+        fn linux_seccomp_program_blocks_mount_and_namespace_escape_syscalls() {
+            assert!(LINUX_BLOCKED_SYSCALLS.contains(&libc::SYS_mount));
+            assert!(LINUX_BLOCKED_SYSCALLS.contains(&libc::SYS_umount2));
+            assert!(LINUX_BLOCKED_SYSCALLS.contains(&libc::SYS_unshare));
+            assert!(LINUX_BLOCKED_SYSCALLS.contains(&libc::SYS_setns));
+            assert!(LINUX_BLOCKED_SYSCALLS.contains(&libc::SYS_bpf));
+
+            let program = linux_seccomp_program();
+            assert_eq!(program.len(), LINUX_SECCOMP_FILTER_LEN);
+            assert_eq!(program[0].k, LINUX_SECCOMP_ARCH_OFFSET);
+            assert_eq!(program[3].k, LINUX_SECCOMP_NR_OFFSET);
+            assert_eq!(
+                program.last().expect("seccomp program terminator").k,
+                LINUX_SECCOMP_RET_ALLOW
             );
         }
 
