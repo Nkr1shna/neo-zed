@@ -34,41 +34,41 @@ brew uninstall --cask zed@preview
 
 ### Removing User Data (Optional)
 
-To completely remove all Zed configuration files and data:
+To completely remove all Neo Zed configuration files and data:
 
 1. Open Finder
 2. Press `Cmd + Shift + G` to open "Go to Folder"
 3. Delete the following directories if they exist:
-   - `~/Library/Application Support/Zed`
-   - `~/Library/Saved Application State/dev.zed.Zed.savedState`
-   - `~/Library/Logs/Zed`
-   - `~/Library/Caches/dev.zed.Zed`
-   - `~/Library/Caches/Zed`
-   - `~/.config/zed`
-   - `~/.local/state/Zed`
+   - `~/Library/Application Support/Neo Zed`
+   - `~/Library/Saved Application State/dev.neozed.savedState`
+   - `~/Library/Logs/Neo Zed`
+   - `~/Library/Caches/dev.neozed`
+   - `~/Library/Caches/Neo Zed`
+   - `~/.config/neozed`
+   - `~/.local/state/Neo Zed`
 
 ## Linux
 
 ### Standard Uninstall
 
-If Zed was installed using the default installation script, run:
+If Neo Zed was installed using the default installation script, run:
 
 ```sh
-zed --uninstall
+neozed --uninstall
 ```
 
 You'll be prompted whether to keep or delete your preferences. After making a choice, you should see a message that Zed was successfully uninstalled.
 
-If the `zed` command is not found in your PATH, try:
+If the `neozed` command is not found in your PATH, try:
 
 ```sh
-$HOME/.local/bin/zed --uninstall
+$HOME/.local/bin/neozed --uninstall
 ```
 
 or:
 
 ```sh
-$HOME/.local/zed.app/bin/zed --uninstall
+$HOME/.local/neozed.app/bin/neozed --uninstall
 ```
 
 ### Package Manager
@@ -79,9 +79,9 @@ If you installed Zed using a package manager (such as Flatpak, Snap, or a distri
 
 If the uninstall command fails or Zed was installed to a custom location, you can manually remove:
 
-- Installation directory: `~/.local/zed.app` (or your custom installation path)
-- Binary symlink: `~/.local/bin/zed`
-- Configuration and data: `~/.config/zed`
+- Installation directory: `~/.local/neozed.app` (or your custom installation path)
+- Binary symlink: `~/.local/bin/neozed`
+- Configuration and data: `~/.config/neozed`
 
 ## Windows
 
@@ -102,20 +102,20 @@ Alternatively, you can:
 
 ### Removing User Data (Optional)
 
-To completely remove all Zed configuration files and data:
+To completely remove all Neo Zed configuration files and data:
 
 1. Press `Windows key + R` to open Run
 2. Type `%APPDATA%` and press Enter
-3. Delete the `Zed` folder if it exists
+3. Delete the `Neo Zed` folder if it exists
 4. Press `Windows key + R` again, type `%LOCALAPPDATA%` and press Enter
-5. Delete the `Zed` folder if it exists
+5. Delete the `Neo Zed` folder if it exists
 
 ## Troubleshooting
 
 If you encounter issues during uninstallation:
 
-- **macOS/Windows**: Ensure Zed is completely quit before attempting to uninstall. Check Activity Manager (macOS) or Task Manager (Windows) for any running Zed processes.
+- **macOS/Windows**: Ensure Neo Zed is completely quit before attempting to uninstall. Check Activity Monitor (macOS) or Task Manager (Windows) for any running Neo Zed processes.
 - **Linux**: If the uninstall script fails, check the error message and consider manual removal of the directories listed above.
-- **All platforms**: If you want to start fresh while keeping Zed installed, you can delete the configuration directories instead of uninstalling the application entirely.
+- **All platforms**: If you want to start fresh while keeping Neo Zed installed, you can delete the configuration directories instead of uninstalling the application entirely.
 
 For additional help, see our [Linux-specific documentation](./linux.md) or visit the [Zed community](https://zed.dev/community-links).

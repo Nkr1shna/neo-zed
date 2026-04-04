@@ -1781,14 +1781,14 @@ fn stdout_is_a_pty() -> bool {
 }
 
 #[derive(Parser, Debug)]
-#[command(name = "zed", disable_version_flag = true, max_term_width = 100)]
+#[command(name = "neozed", disable_version_flag = true, max_term_width = 100)]
 struct Args {
     /// A sequence of space-separated paths or urls that you want to open.
     ///
     /// Use `path:line:row` syntax to open a file at a specific location.
     /// Non-existing paths and directories will ignore `:line:row` suffix.
     ///
-    /// URLs can either be `file://` or `zed://` scheme, or relative to <https://zed.dev>.
+    /// URLs can either be `file://` or `neozed://`, or relative to <https://zed.dev>.
     paths_or_urls: Vec<String>,
 
     /// Pairs of file paths to diff. Can be specified multiple times.
@@ -1799,9 +1799,9 @@ struct Args {
     /// Sets a custom directory for all user data (e.g., database, extensions, logs).
     ///
     /// This overrides the default platform-specific data directory location.
-    /// On macOS, the default is `~/Library/Application Support/Zed`.
-    /// On Linux/FreeBSD, the default is `$XDG_DATA_HOME/zed`.
-    /// On Windows, the default is `%LOCALAPPDATA%\Zed`.
+    /// On macOS, the default is `~/Library/Application Support/Neo Zed`.
+    /// On Linux/FreeBSD, the default is `$XDG_DATA_HOME/neozed`.
+    /// On Windows, the default is `%LOCALAPPDATA%\Neo Zed`.
     #[arg(long, value_name = "DIR", verbatim_doc_comment)]
     user_data_dir: Option<String>,
 
@@ -1913,6 +1913,7 @@ fn parse_url_arg(arg: &str, cx: &App) -> String {
         Ok(path) => format!("file://{}", path.display()),
         Err(_) => {
             if arg.starts_with("file://")
+                || arg.starts_with("neozed://")
                 || arg.starts_with("zed://")
                 || arg.starts_with("zed-cli://")
                 || arg.starts_with("ssh://")

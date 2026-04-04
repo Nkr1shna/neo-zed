@@ -1,3 +1,4 @@
+use client::{PUBLIC_ZED_URL_SCHEME, ZED_URL_SCHEME};
 use editor::Editor;
 use gpui::{AppContext as _, DismissEvent, Entity, EventEmitter, Focusable, ReadGlobal, Styled};
 use ui::{
@@ -27,7 +28,7 @@ impl OpenUrlModal {
     pub fn new(window: &mut Window, cx: &mut Context<Self>) -> Self {
         let editor = cx.new(|cx| {
             let mut editor = Editor::single_line(window, cx);
-            editor.set_placeholder_text("zed://...", window, cx);
+            editor.set_placeholder_text("neozed://...", window, cx);
             editor
         });
 
@@ -53,8 +54,11 @@ impl OpenUrlModal {
             return;
         }
 
-        // Handle zed:// URLs internally.
-        if url.starts_with("zed://") || url.starts_with("zed-cli://") {
+        // Handle Neo Zed URLs internally.
+        if url.starts_with(&format!("{PUBLIC_ZED_URL_SCHEME}://"))
+            || url.starts_with(&format!("{ZED_URL_SCHEME}://"))
+            || url.starts_with("zed-cli://")
+        {
             OpenListener::global(cx).open(RawOpenRequest {
                 urls: vec![url],
                 ..Default::default()

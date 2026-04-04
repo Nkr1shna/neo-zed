@@ -271,7 +271,7 @@ identifier = "dev.neozed.Dev"
 name = "Neo Zed Dev"
 osx_minimum_system_version = "10.15.7"
 osx_info_plist_exts = ["resources/info/*"]
-osx_url_schemes = ["zed"]
+osx_url_schemes = ["neozed"]
 
 [package.metadata.bundle-nightly]
 icon = ["resources/app-icon-nightly@2x.png", "resources/app-icon-nightly.png"]
@@ -279,7 +279,7 @@ identifier = "dev.neozed.Nightly"
 name = "Neo Zed Nightly"
 osx_minimum_system_version = "10.15.7"
 osx_info_plist_exts = ["resources/info/*"]
-osx_url_schemes = ["zed"]
+osx_url_schemes = ["neozed"]
 
 [package.metadata.bundle-preview]
 icon = ["resources/app-icon-preview@2x.png", "resources/app-icon-preview.png"]
@@ -287,7 +287,7 @@ identifier = "dev.neozed.Preview"
 name = "Neo Zed Preview"
 osx_minimum_system_version = "10.15.7"
 osx_info_plist_exts = ["resources/info/*"]
-osx_url_schemes = ["zed"]
+osx_url_schemes = ["neozed"]
 
 [package.metadata.bundle-stable]
 icon = ["resources/app-icon@2x.png", "resources/app-icon.png"]
@@ -295,7 +295,7 @@ identifier = "dev.neozed"
 name = "Neo Zed"
 osx_minimum_system_version = "10.15.7"
 osx_info_plist_exts = ["resources/info/*"]
-osx_url_schemes = ["zed"]
+osx_url_schemes = ["neozed"]
 
 [package.metadata.cargo-machete]
 ignored = ["profiling", "zstd", "tracing"]

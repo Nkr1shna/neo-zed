@@ -1801,19 +1801,31 @@ impl ProtoClient for Client {
     }
 }
 
-/// prefix for the zed:// url scheme
+/// Prefix for the legacy internal `zed://` URL scheme.
 pub const ZED_URL_SCHEME: &str = "zed";
+/// Prefix for the public `neozed://` URL scheme.
+pub const PUBLIC_ZED_URL_SCHEME: &str = "neozed";
 
 /// A parsed Zed link that can be handled internally by the application.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum ZedLink {
-    /// Join a channel: `zed.dev/channel/channel-name-123` or `zed://channel/channel-name-123`
+    /// Join a channel: `zed.dev/channel/channel-name-123`, `neozed://channel/channel-name-123`,
+    /// or `zed://channel/channel-name-123`
     Channel { channel_id: u64 },
     /// Open channel notes: `zed.dev/channel/channel-name-123/notes` or with heading `notes#heading`
     ChannelNotes {
         channel_id: u64,
         heading: Option<String>,
     },
+}
+
+fn strip_public_or_legacy_zed_scheme(link: &str) -> Option<&str> {
+    link.strip_prefix(PUBLIC_ZED_URL_SCHEME)
+        .and_then(|result| result.strip_prefix("://"))
+        .or_else(|| {
+            link.strip_prefix(ZED_URL_SCHEME)
+                .and_then(|result| result.strip_prefix("://"))
+        })
 }
 
 /// Parses the given link into a Zed link.
@@ -1826,10 +1838,7 @@ pub fn parse_zed_link(link: &str, cx: &App) -> Option<ZedLink> {
     let path = link
         .strip_prefix(server_url)
         .and_then(|result| result.strip_prefix('/'))
-        .or_else(|| {
-            link.strip_prefix(ZED_URL_SCHEME)
-                .and_then(|result| result.strip_prefix("://"))
-        })?;
+        .or_else(|| strip_public_or_legacy_zed_scheme(link))?;
 
     let mut parts = path.split('/');
 
@@ -1886,6 +1895,22 @@ mod tests {
             ProxySettings::from_settings(&content).proxy.as_deref(),
             Some("http://127.0.0.1:10809")
         );
+    }
+
+    #[gpui::test]
+    fn test_parse_public_and_legacy_zed_links(cx: &mut TestAppContext) {
+        init_test(cx);
+
+        cx.update(|cx| {
+            assert_eq!(
+                parse_zed_link("neozed://channel/neo-zed-42", cx),
+                Some(ZedLink::Channel { channel_id: 42 })
+            );
+            assert_eq!(
+                parse_zed_link("zed://channel/neo-zed-42", cx),
+                Some(ZedLink::Channel { channel_id: 42 })
+            );
+        });
     }
 
     #[gpui::test(iterations = 10)]
