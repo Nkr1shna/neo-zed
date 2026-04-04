@@ -1,0 +1,27 @@
+[package]
+name = "gpui_plugin"
+version = "0.1.0"
+edition.workspace = true
+publish.workspace = true
+
+[lib]
+path = "src/gpui_plugin.rs"
+
+[lints]
+workspace = true
+
+[dependencies]
+anyhow.workspace = true
+futures.workspace = true
+gpui.workspace = true
+gpui_api = { workspace = true, features = ["test-support"] }
+gpui_macros.workspace = true
+plugin_protocol.workspace = true
+serde = { workspace = true, features = ["derive"] }
+serde_json.workspace = true
+smol.workspace = true
+theme.workspace = true
+toml.workspace = true
+
+[dev-dependencies]
+ui_plugin.workspace = true

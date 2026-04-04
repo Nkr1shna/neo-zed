@@ -28,7 +28,7 @@ use gpui::Global;
 use gpui::{
     App, AssetSource, Hsla, Pixels, SharedString, WindowAppearance, WindowBackgroundAppearance, px,
 };
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 
 pub use crate::default_colors::*;
 pub use crate::fallback_themes::{apply_status_color_defaults, apply_theme_color_defaults};
@@ -51,7 +51,7 @@ pub const CLIENT_SIDE_DECORATION_ROUNDING: Pixels = px(10.0);
 pub const CLIENT_SIDE_DECORATION_SHADOW: Pixels = px(10.0);
 
 /// The appearance of the theme.
-#[derive(Debug, PartialEq, Clone, Copy, Deserialize)]
+#[derive(Debug, PartialEq, Clone, Copy, Serialize, Deserialize)]
 pub enum Appearance {
     /// A light appearance.
     Light,
