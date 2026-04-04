@@ -12843,6 +12843,7 @@ dependencies = [
  "gpui_api",
  "gpui_plugin",
  "libc",
+ "log",
  "node_runtime",
  "paths",
  "plugin",

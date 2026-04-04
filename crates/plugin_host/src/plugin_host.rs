@@ -108,6 +108,7 @@ impl<T: Render + 'static> PanelSession<T> {
 
 mod host {
     use anyhow::{Context as _, Result};
+    use futures::future::{self, Either};
     use futures::io::{BufReader, BufWriter};
     use futures::{AsyncBufReadExt as _, AsyncWriteExt as _};
     use gpui::{
@@ -186,7 +187,7 @@ mod host {
                 if let Err(error) =
                     registry.update(cx, |registry, cx| registry.sync_active_theme(cx))
                 {
-                    eprintln!("failed to sync plugin themes after theme change: {error:#}");
+                    log::error!("failed to sync plugin themes after theme change: {error:#}");
                 }
             }
         })
@@ -233,7 +234,7 @@ mod host {
             if let Err(error) =
                 sync_workspace_panels_for_workspace(&registry, workspace, window, cx)
             {
-                eprintln!("failed to sync plugin panels for workspace startup: {error:#}");
+                log::error!("failed to sync plugin panels for workspace startup: {error:#}");
             }
         })
         .detach();
@@ -245,7 +246,7 @@ mod host {
             registry.refresh_catalog(cx);
             Ok::<(), anyhow::Error>(())
         }) {
-            eprintln!("failed to refresh plugin catalog: {error:#}");
+            log::error!("failed to refresh plugin catalog: {error:#}");
         }
 
         for window_handle in workspace::local_workspace_windows(cx) {
@@ -270,7 +271,7 @@ mod host {
             match result {
                 Ok(Ok(())) => {}
                 Ok(Err(error)) | Err(error) => {
-                    eprintln!("failed to refresh plugin panels in workspace window: {error:#}");
+                    log::error!("failed to refresh plugin panels in workspace window: {error:#}");
                 }
             }
         }
@@ -340,6 +341,27 @@ mod host {
         Right,
     }
 
+    #[derive(Clone, Copy, Debug, PartialEq, Eq)]
+    enum RemotePluginStartupState {
+        Building,
+        Starting,
+        Cancelling,
+    }
+
+    impl RemotePluginStartupState {
+        fn message(self) -> &'static str {
+            match self {
+                Self::Building => "Building plugin...",
+                Self::Starting => "Starting plugin...",
+                Self::Cancelling => "Cancelling plugin startup...",
+            }
+        }
+
+        fn can_cancel(self) -> bool {
+            matches!(self, Self::Building | Self::Starting)
+        }
+    }
+
     pub struct PluginTitlebarStrip {
         side: TitlebarStripSide,
         workspace: WeakEntity<Workspace>,
@@ -379,7 +401,7 @@ mod host {
                     registry.titlebar_widget_views(self.side, self.workspace.clone(), cx)
                 })
                 .unwrap_or_else(|error| {
-                    eprintln!("failed to render plugin titlebar strip: {error:#}");
+                    log::error!("failed to render plugin titlebar strip: {error:#}");
                     Vec::new()
                 });
 
@@ -396,6 +418,7 @@ mod host {
         descriptor: TitlebarWidgetDescriptor,
         panel_instance_id: PanelInstanceId,
         tree: Option<UiNode>,
+        startup_state: Option<RemotePluginStartupState>,
         error_message: Option<SharedString>,
         event_sender: channel::Sender<PluginHostEvent>,
         workspace: WeakEntity<Workspace>,
@@ -418,6 +441,7 @@ mod host {
                 descriptor,
                 panel_instance_id,
                 tree: None,
+                startup_state: None,
                 error_message: None,
                 event_sender,
                 workspace,
@@ -428,17 +452,37 @@ mod host {
 
         fn update_tree(&mut self, tree: UiNode, cx: &mut Context<Self>) {
             self.tree = Some(tree);
+            self.startup_state = None;
             self.error_message = None;
             cx.notify();
         }
 
         fn set_error(&mut self, message: impl Into<String>, cx: &mut Context<Self>) {
+            self.startup_state = None;
             self.error_message = Some(message.into().into());
             cx.notify();
         }
 
-        fn clear_error(&mut self, cx: &mut Context<Self>) {
+        fn prepare_for_open(
+            &mut self,
+            startup_state: Option<RemotePluginStartupState>,
+            cx: &mut Context<Self>,
+        ) {
+            self.tree = None;
+            self.startup_state = startup_state;
             self.error_message = None;
+            cx.notify();
+        }
+
+        fn set_startup_state(
+            &mut self,
+            startup_state: Option<RemotePluginStartupState>,
+            cx: &mut Context<Self>,
+        ) {
+            self.startup_state = startup_state;
+            if startup_state.is_some() {
+                self.error_message = None;
+            }
             cx.notify();
         }
 
@@ -460,8 +504,7 @@ mod host {
                 .registry
                 .update(cx, |registry, _cx| registry.dispatch_event(event));
             if let Err(error) = result {
-                self.error_message = Some(error.to_string().into());
-                cx.notify();
+                self.set_error(error.to_string(), cx);
             }
         }
 
@@ -481,115 +524,7 @@ mod host {
             });
 
             if let Err(error) = result {
-                self.error_message = Some(error.to_string().into());
-                cx.notify();
-            }
-        }
-
-        fn render_node(&self, node: &UiNode, cx: &mut Context<Self>) -> gpui::AnyElement {
-            match node.kind {
-                UiNodeKind::Empty => gpui::Empty.into_any_element(),
-                UiNodeKind::Div => {
-                    let element = apply_styles(div(), &node.styles).children(
-                        node.children
-                            .iter()
-                            .map(|child| self.render_node(child, cx)),
-                    );
-                    let element = if node.events.is_empty() {
-                        element.into_any_element()
-                    } else {
-                        apply_div_events(
-                            element.id(format!(
-                                "plugin-titlebar-div-{}-{}",
-                                self.panel_instance_id, node.events[0].handler_id
-                            )),
-                            node,
-                            cx,
-                        )
-                        .into_any_element()
-                    };
-                    wrap_action_bindings(element, node, cx)
-                }
-                UiNodeKind::Label => {
-                    let mut label = Label::new(node.text.clone().unwrap_or_default());
-                    if let Some(size) = style_text(&node.props, "label_size")
-                        .as_deref()
-                        .and_then(label_size_from_prop)
-                    {
-                        label = label.size(size);
-                    }
-                    if let Some(weight) =
-                        style_number(&node.props, "font_weight").map(gpui::FontWeight)
-                    {
-                        label = label.weight(weight);
-                    }
-                    if let Some(color) = style_text(&node.props, "label_color")
-                        .as_deref()
-                        .and_then(color_from_prop)
-                    {
-                        label = label.color(color);
-                    }
-                    if let Some(line_height_style) = style_text(&node.props, "line_height_style")
-                        .as_deref()
-                        .and_then(line_height_style_from_prop)
-                    {
-                        label = label.line_height_style(line_height_style);
-                    }
-                    if matches!(
-                        node.props.get("strikethrough"),
-                        Some(StyleValue::Bool(true))
-                    ) {
-                        label = label.strikethrough();
-                    }
-                    if matches!(node.props.get("italic"), Some(StyleValue::Bool(true))) {
-                        label = label.italic();
-                    }
-                    if matches!(node.props.get("underline"), Some(StyleValue::Bool(true))) {
-                        label = label.underline();
-                    }
-                    if let Some(alpha) = style_number(&node.props, "alpha") {
-                        label = label.alpha(alpha);
-                    }
-                    label.into_any_element()
-                }
-                UiNodeKind::Button => {
-                    let button_id = node
-                        .events
-                        .first()
-                        .map(|event| format!("plugin-titlebar-button-{}", event.handler_id))
-                        .unwrap_or_else(|| {
-                            format!(
-                                "plugin-titlebar-button-{}-{}",
-                                self.panel_instance_id, self.widget_entity_id
-                            )
-                        });
-                    render_button_node(node, button_id, cx)
-                }
-                UiNodeKind::Divider => render_divider_node(node),
-                UiNodeKind::Indicator => render_indicator_node(node),
-                UiNodeKind::Icon => {
-                    let mut icon = Icon::new(
-                        icon_name_from_descriptor(node.text.as_deref())
-                            .unwrap_or(IconName::AiOpenAi),
-                    );
-                    if let Some(size) = style_text(&node.props, "icon_size")
-                        .as_deref()
-                        .and_then(icon_size_from_prop)
-                    {
-                        icon = icon.size(size);
-                    } else {
-                        icon = icon.size(IconSize::Small);
-                    }
-                    if let Some(color) = style_text(&node.props, "icon_color")
-                        .as_deref()
-                        .and_then(color_from_prop)
-                    {
-                        icon = icon.color(color);
-                    }
-                    icon.into_any_element()
-                }
-                UiNodeKind::ProgressBar => render_progress_bar_node(node, cx),
-                UiNodeKind::MenuItem => gpui::Empty.into_any_element(),
+                self.set_error(error.to_string(), cx);
             }
         }
     }
@@ -615,7 +550,11 @@ mod host {
                     .color(Color::Error)
                     .into_any_element()
             } else if let Some(tree) = self.tree.clone() {
-                self.render_node(&tree, cx)
+                render_remote_node(self, &tree, &[], cx)
+            } else if let Some(startup_state) = self.startup_state {
+                Label::new(startup_state.message())
+                    .color(Color::Muted)
+                    .into_any_element()
             } else {
                 Label::new(self.descriptor.title.clone())
                     .color(Color::Muted)
@@ -710,16 +649,21 @@ mod host {
         }
 
         pub fn remove_plugin(&mut self, plugin_id: &str) -> Result<bool> {
-            if let Some(process) = self.processes.get(&PluginId::new(plugin_id)) {
+            let plugin_id = PluginId::new(plugin_id);
+            if let Some(process) = self.processes.get(&plugin_id) {
                 send_message(&process.sender, &HostToPlugin::Shutdown)?;
             }
             let mut store = self.store();
-            store.remove(plugin_id)
+            let removed = store.remove(plugin_id.as_str())?;
+            if removed {
+                self.processes.remove(&plugin_id);
+            }
+            Ok(removed)
         }
 
         pub fn refresh_catalog(&mut self, cx: &mut Context<Self>) {
             if let Err(error) = self.prune_titlebar_widget_bindings(cx) {
-                eprintln!("failed to prune plugin titlebar widgets: {error:#}");
+                log::error!("failed to prune plugin titlebar widgets: {error:#}");
             }
             cx.notify();
         }
@@ -898,7 +842,14 @@ mod host {
                 process.view_instances.insert(panel_instance_id.clone());
             }
 
-            panel.update(cx, |panel, cx| panel.clear_error(cx))?;
+            let startup_state = self
+                .processes
+                .get(&plugin.manifest.id)
+                .and_then(|process| initial_startup_state_for_plugin(&plugin, process.registered));
+
+            panel.update(cx, |panel, cx| {
+                panel.prepare_for_open(startup_state, cx);
+            })?;
 
             send_message(
                 &sender,
@@ -941,7 +892,14 @@ mod host {
                 process.view_entity_ids.insert(widget.entity_id());
             }
 
-            widget.update(cx, |widget, cx| widget.clear_error(cx));
+            let startup_state = self
+                .processes
+                .get(&plugin.manifest.id)
+                .and_then(|process| initial_startup_state_for_plugin(&plugin, process.registered));
+
+            widget.update(cx, |widget, cx| {
+                widget.prepare_for_open(startup_state, cx);
+            });
 
             send_message(
                 &sender,
@@ -969,7 +927,7 @@ mod host {
             }
 
             if let Err(error) = self.close_remote_view(&binding.plugin_id, panel_instance_id) {
-                eprintln!("failed to close plugin panel view {panel_instance_id}: {error:#}");
+                log::error!("failed to close plugin panel view {panel_instance_id}: {error:#}");
             }
             self.terminate_process_if_idle(&binding.plugin_id);
             Ok(Some(binding))
@@ -989,7 +947,7 @@ mod host {
             }
 
             if let Err(error) = self.close_remote_view(&binding.plugin_id, panel_instance_id) {
-                eprintln!(
+                log::error!(
                     "failed to close plugin titlebar widget view {panel_instance_id}: {error:#}"
                 );
             }
@@ -1067,7 +1025,7 @@ mod host {
                         return;
                     }
                     if let Err(error) = self.apply_message(plugin_id, message, cx) {
-                        eprintln!("plugin host message error: {error:#}");
+                        log::error!("plugin host message error: {error:#}");
                     }
                 }
                 PluginHostEvent::RegistrationTimedOut {
@@ -1085,19 +1043,19 @@ mod host {
                         .terminate_sender
                         .try_send(ProcessTermination::RegistrationTimedOut)
                     {
-                        eprintln!("failed to terminate timed out plugin `{plugin_id}`: {error}");
+                        log::error!("failed to terminate timed out plugin `{plugin_id}`: {error}");
                     }
                 }
                 PluginHostEvent::ViewDetached { panel_instance_id } => {
                     if let Err(error) = self.detach_panel_binding(&panel_instance_id) {
-                        eprintln!(
+                        log::error!(
                             "failed to detach dropped plugin panel `{panel_instance_id}`: {error:#}"
                         );
                         return;
                     }
 
                     if let Err(error) = self.detach_titlebar_widget_binding(&panel_instance_id) {
-                        eprintln!(
+                        log::error!(
                             "failed to detach dropped plugin titlebar widget `{panel_instance_id}`: {error:#}"
                         );
                     }
@@ -1148,17 +1106,51 @@ mod host {
             message: PluginToHost,
             cx: &mut Context<Self>,
         ) -> Result<()> {
+            if !matches!(&message, PluginToHost::Register { .. }) {
+                let Some(process) = self.processes.get(&plugin_id) else {
+                    return Ok(());
+                };
+                if !process.registered {
+                    request_process_termination(
+                        &process.terminate_sender,
+                        ProcessTermination::ProtocolViolation {
+                            message: format!(
+                                "plugin `{plugin_id}` sent a {} message before registering with the host",
+                                plugin_to_host_message_kind(&message)
+                            ),
+                        },
+                        "message before plugin registration",
+                    );
+                    return Ok(());
+                }
+            }
+
             match message {
                 PluginToHost::Register { plugin } => {
                     if plugin.id != plugin_id {
-                        eprintln!(
-                            "plugin `{}` registered itself as `{}`",
-                            plugin_id, plugin.id
-                        );
+                        if let Some(process) = self.processes.get(&plugin_id) {
+                            request_process_termination(
+                                &process.terminate_sender,
+                                ProcessTermination::ProtocolViolation {
+                                    message: format!(
+                                        "plugin `{plugin_id}` registered itself as `{}`",
+                                        plugin.id
+                                    ),
+                                },
+                                "plugin registration identity mismatch",
+                            );
+                        }
+                        return Ok(());
                     }
                     if let Some(process) = self.processes.get_mut(&plugin_id) {
                         process.registered = true;
                     }
+                    self.set_plugin_view_startup_state(
+                        &plugin_id,
+                        Some(RemotePluginStartupState::Starting),
+                        None,
+                        cx,
+                    );
                 }
                 PluginToHost::Render {
                     panel_instance_id,
@@ -1313,10 +1305,10 @@ mod host {
                                 widget.set_error(message.clone(), cx);
                             });
                         } else {
-                            eprintln!("plugin view error for {}: {}", panel_instance_id, message);
+                            log::error!("plugin view error for {}: {}", panel_instance_id, message);
                         }
                     } else {
-                        eprintln!("plugin `{}` error: {}", plugin_id, message);
+                        log::error!("plugin `{}` error: {}", plugin_id, message);
                     }
                 }
             }
@@ -1392,7 +1384,7 @@ mod host {
             }
 
             if let Err(error) = process.terminate_sender.try_send(ProcessTermination::Idle) {
-                eprintln!("failed to terminate idle plugin `{plugin_id}`: {error}");
+                log::error!("failed to terminate idle plugin `{plugin_id}`: {error}");
             }
         }
 
@@ -1401,6 +1393,77 @@ mod host {
                 .get(plugin_id)
                 .map(|process| process.instance_id == process_instance_id)
                 .unwrap_or(false)
+        }
+
+        fn set_plugin_view_startup_state(
+            &mut self,
+            plugin_id: &PluginId,
+            startup_state: Option<RemotePluginStartupState>,
+            excluded_entity_id: Option<u64>,
+            cx: &mut Context<Self>,
+        ) {
+            let panel_bindings = self
+                .panels
+                .values()
+                .filter(|binding| &binding.plugin_id == plugin_id)
+                .filter(|binding| {
+                    excluded_entity_id
+                        .map(|entity_id| binding.panel_entity_id.as_u64() != entity_id)
+                        .unwrap_or(true)
+                })
+                .cloned()
+                .collect::<Vec<_>>();
+            for binding in panel_bindings {
+                binding
+                    .panel
+                    .update(cx, |panel, cx| {
+                        panel.set_startup_state(startup_state, cx);
+                    })
+                    .ok();
+            }
+
+            let widget_bindings = self
+                .titlebar_widgets
+                .values()
+                .filter(|binding| &binding.plugin_id == plugin_id)
+                .filter(|binding| {
+                    excluded_entity_id
+                        .map(|entity_id| binding.widget.entity_id().as_u64() != entity_id)
+                        .unwrap_or(true)
+                })
+                .cloned()
+                .collect::<Vec<_>>();
+            for binding in widget_bindings {
+                binding.widget.update(cx, |widget, cx| {
+                    widget.set_startup_state(startup_state, cx);
+                });
+            }
+        }
+
+        fn cancel_plugin_startup(
+            &mut self,
+            plugin_id: &PluginId,
+            excluded_entity_id: Option<u64>,
+            cx: &mut Context<Self>,
+        ) -> Result<()> {
+            let Some(process) = self.processes.get(plugin_id) else {
+                anyhow::bail!("plugin `{plugin_id}` is not running");
+            };
+
+            process
+                .terminate_sender
+                .try_send(ProcessTermination::StartupCancelled)
+                .map_err(|error| anyhow::anyhow!(error.to_string()))
+                .with_context(|| format!("failed to cancel startup for plugin `{plugin_id}`"))?;
+
+            self.set_plugin_view_startup_state(
+                plugin_id,
+                Some(RemotePluginStartupState::Cancelling),
+                excluded_entity_id,
+                cx,
+            );
+
+            Ok(())
         }
     }
 
@@ -1423,6 +1486,7 @@ mod host {
     #[derive(Clone, Debug)]
     enum ProcessTermination {
         Idle,
+        StartupCancelled,
         RegistrationTimedOut,
         ProtocolViolation { message: String },
     }
@@ -1431,12 +1495,27 @@ mod host {
         fn error_message(self, plugin_id: &PluginId) -> Option<String> {
             match self {
                 Self::Idle => None,
+                Self::StartupCancelled => {
+                    Some(format!("plugin `{plugin_id}` startup was cancelled"))
+                }
                 Self::RegistrationTimedOut => Some(format!(
                     "plugin `{plugin_id}` did not register with the host before the startup timeout"
                 )),
                 Self::ProtocolViolation { message } => Some(message),
             }
         }
+    }
+
+    fn is_cargo_backed_plugin(plugin: &InstalledPlugin) -> bool {
+        plugin.installation.root.join("Cargo.toml").exists()
+    }
+
+    fn initial_startup_state_for_plugin(
+        plugin: &InstalledPlugin,
+        registered: bool,
+    ) -> Option<RemotePluginStartupState> {
+        (!registered && is_cargo_backed_plugin(plugin))
+            .then_some(RemotePluginStartupState::Building)
     }
 
     async fn read_bounded_line<R>(reader: &mut R, max_bytes: usize) -> Result<Option<String>>
@@ -1489,7 +1568,17 @@ mod host {
         context: &str,
     ) {
         if let Err(error) = terminate_sender.try_send(reason) {
-            eprintln!("failed to request plugin termination after {context}: {error}");
+            log::error!("failed to request plugin termination after {context}: {error}");
+        }
+    }
+
+    fn plugin_to_host_message_kind(message: &PluginToHost) -> &'static str {
+        match message {
+            PluginToHost::Register { .. } => "register",
+            PluginToHost::Render { .. } => "render",
+            PluginToHost::RenderDelta { .. } => "render delta",
+            PluginToHost::ClosePanel { .. } => "close panel",
+            PluginToHost::ReportError { .. } => "report error",
         }
     }
 
@@ -1551,7 +1640,7 @@ mod host {
                 })
                 .await
             {
-                eprintln!("failed to forward plugin stdout message: {error}");
+                log::error!("failed to forward plugin stdout message: {error}");
                 return Ok(());
             }
         }
@@ -1587,7 +1676,7 @@ mod host {
             let Some(line) = line else {
                 break;
             };
-            eprintln!("plugin stderr: {}", line.trim());
+            log::warn!("plugin stderr: {}", line.trim());
         }
 
         Ok(())
@@ -1615,11 +1704,12 @@ mod host {
     }
 
     pub struct RemotePluginPanel {
-        _plugin_id: PluginId,
+        plugin_id: PluginId,
         descriptor: PanelDescriptor,
         panel_instance_id: PanelInstanceId,
         activation_priority: u32,
         tree: Option<UiNode>,
+        startup_state: Option<RemotePluginStartupState>,
         error_message: Option<SharedString>,
         event_sender: channel::Sender<PluginHostEvent>,
         focus_handle: FocusHandle,
@@ -1638,11 +1728,12 @@ mod host {
             cx: &mut Context<Self>,
         ) -> Self {
             Self {
-                _plugin_id: PluginId::new(plugin_id),
+                plugin_id: PluginId::new(plugin_id),
                 descriptor,
                 panel_instance_id,
                 activation_priority,
                 tree: None,
+                startup_state: None,
                 error_message: None,
                 event_sender,
                 focus_handle: cx.focus_handle(),
@@ -1653,18 +1744,52 @@ mod host {
 
         fn update_tree(&mut self, tree: UiNode, cx: &mut Context<Self>) {
             self.tree = Some(tree);
+            self.startup_state = None;
             self.error_message = None;
             cx.notify();
         }
 
         fn set_error(&mut self, message: impl Into<String>, cx: &mut Context<Self>) {
+            self.startup_state = None;
             self.error_message = Some(message.into().into());
             cx.notify();
         }
 
-        fn clear_error(&mut self, cx: &mut Context<Self>) {
+        fn prepare_for_open(
+            &mut self,
+            startup_state: Option<RemotePluginStartupState>,
+            cx: &mut Context<Self>,
+        ) {
+            self.tree = None;
+            self.startup_state = startup_state;
             self.error_message = None;
             cx.notify();
+        }
+
+        fn set_startup_state(
+            &mut self,
+            startup_state: Option<RemotePluginStartupState>,
+            cx: &mut Context<Self>,
+        ) {
+            self.startup_state = startup_state;
+            if startup_state.is_some() {
+                self.error_message = None;
+            }
+            cx.notify();
+        }
+
+        fn cancel_startup(&mut self, cx: &mut Context<Self>) {
+            self.set_startup_state(Some(RemotePluginStartupState::Cancelling), cx);
+            let result = self.registry.update(cx, |registry, registry_cx| {
+                registry.cancel_plugin_startup(
+                    &self.plugin_id,
+                    Some(self.panel_entity_id),
+                    registry_cx,
+                )
+            });
+            if let Err(error) = result {
+                self.set_error(error.to_string(), cx);
+            }
         }
 
         fn dispatch_event(
@@ -1684,120 +1809,12 @@ mod host {
                 .registry
                 .update(cx, |registry, _cx| registry.dispatch_event(event));
             if let Err(error) = result {
-                self.error_message = Some(error.to_string().into());
-                cx.notify();
+                self.set_error(error.to_string(), cx);
             }
         }
 
         fn dispatch_click(&mut self, handler_id: EventHandlerId, cx: &mut Context<Self>) {
             self.dispatch_event(handler_id, UiEventKind::Click, None, cx);
-        }
-
-        fn render_node(&self, node: &UiNode, cx: &mut Context<Self>) -> gpui::AnyElement {
-            match node.kind {
-                UiNodeKind::Empty => gpui::Empty.into_any_element(),
-                UiNodeKind::Div => {
-                    let element = apply_styles(div(), &node.styles).children(
-                        node.children
-                            .iter()
-                            .map(|child| self.render_node(child, cx)),
-                    );
-                    let element = if node.events.is_empty() {
-                        element.into_any_element()
-                    } else {
-                        apply_div_events(
-                            element.id(format!(
-                                "plugin-panel-div-{}-{}",
-                                self.panel_instance_id, node.events[0].handler_id
-                            )),
-                            node,
-                            cx,
-                        )
-                        .into_any_element()
-                    };
-                    wrap_action_bindings(element, node, cx)
-                }
-                UiNodeKind::Label => {
-                    let mut label = Label::new(node.text.clone().unwrap_or_default());
-                    if let Some(size) = style_text(&node.props, "label_size")
-                        .as_deref()
-                        .and_then(label_size_from_prop)
-                    {
-                        label = label.size(size);
-                    }
-                    if let Some(weight) =
-                        style_number(&node.props, "font_weight").map(gpui::FontWeight)
-                    {
-                        label = label.weight(weight);
-                    }
-                    if let Some(color) = style_text(&node.props, "label_color")
-                        .as_deref()
-                        .and_then(color_from_prop)
-                    {
-                        label = label.color(color);
-                    }
-                    if let Some(line_height_style) = style_text(&node.props, "line_height_style")
-                        .as_deref()
-                        .and_then(line_height_style_from_prop)
-                    {
-                        label = label.line_height_style(line_height_style);
-                    }
-                    if matches!(
-                        node.props.get("strikethrough"),
-                        Some(StyleValue::Bool(true))
-                    ) {
-                        label = label.strikethrough();
-                    }
-                    if matches!(node.props.get("italic"), Some(StyleValue::Bool(true))) {
-                        label = label.italic();
-                    }
-                    if matches!(node.props.get("underline"), Some(StyleValue::Bool(true))) {
-                        label = label.underline();
-                    }
-                    if let Some(alpha) = style_number(&node.props, "alpha") {
-                        label = label.alpha(alpha);
-                    }
-                    label.into_any_element()
-                }
-                UiNodeKind::Button => {
-                    let button_id = node
-                        .events
-                        .first()
-                        .map(|event| format!("plugin-button-{}", event.handler_id))
-                        .unwrap_or_else(|| {
-                            format!(
-                                "plugin-button-{}-{}",
-                                self.panel_instance_id, self.panel_entity_id
-                            )
-                        });
-                    render_button_node(node, button_id, cx)
-                }
-                UiNodeKind::Divider => render_divider_node(node),
-                UiNodeKind::Indicator => render_indicator_node(node),
-                UiNodeKind::Icon => {
-                    let mut icon = Icon::new(
-                        icon_name_from_descriptor(node.text.as_deref())
-                            .unwrap_or(IconName::AiOpenAi),
-                    );
-                    if let Some(size) = style_text(&node.props, "icon_size")
-                        .as_deref()
-                        .and_then(icon_size_from_prop)
-                    {
-                        icon = icon.size(size);
-                    } else {
-                        icon = icon.size(IconSize::Small);
-                    }
-                    if let Some(color) = style_text(&node.props, "icon_color")
-                        .as_deref()
-                        .and_then(color_from_prop)
-                    {
-                        icon = icon.color(color);
-                    }
-                    icon.into_any_element()
-                }
-                UiNodeKind::ProgressBar => render_progress_bar_node(node, cx),
-                UiNodeKind::MenuItem => gpui::Empty.into_any_element(),
-            }
         }
 
         fn collect_menu_items(tree: &UiNode) -> Vec<&UiNode> {
@@ -1935,7 +1952,7 @@ mod host {
         }
 
         fn panel_key_for_persistence(&self) -> SharedString {
-            plugin_panel_persistence_key(self._plugin_id.as_str(), &self.descriptor.id).into()
+            plugin_panel_persistence_key(self.plugin_id.as_str(), &self.descriptor.id).into()
         }
 
         fn position(&self, _window: &Window, _cx: &App) -> DockPosition {
@@ -2009,7 +2026,31 @@ mod host {
             }
 
             if let Some(tree) = self.tree.clone() {
-                body.child(self.render_node(&tree, cx))
+                body.child(render_remote_node(self, &tree, &[], cx))
+            } else if let Some(startup_state) = self.startup_state {
+                let mut startup = v_flex()
+                    .id(format!("plugin-panel-startup-{}", self.panel_instance_id))
+                    .gap_2()
+                    .items_center()
+                    .justify_center()
+                    .size_full()
+                    .child(Label::new(startup_state.message()).color(Color::Muted));
+
+                if startup_state.can_cancel() {
+                    startup = startup.child(
+                        Button::new(
+                            format!("cancel-plugin-startup-{}", self.panel_instance_id),
+                            "Cancel startup",
+                        )
+                        .on_click(cx.listener(|this, _, _, cx| {
+                            this.cancel_startup(cx);
+                        })),
+                    );
+                }
+
+                body.child(startup)
+            } else if self.error_message.is_some() {
+                body.child(div().size_full())
             } else {
                 body.child(
                     div()
@@ -2031,6 +2072,14 @@ mod host {
             payload: Option<serde_json::Value>,
             cx: &mut Context<Self>,
         );
+
+        fn remote_panel_instance_id(&self) -> &PanelInstanceId;
+
+        fn remote_entity_id(&self) -> u64;
+
+        fn remote_div_id_prefix(&self) -> &'static str;
+
+        fn remote_button_id_prefix(&self) -> &'static str;
     }
 
     impl RemoteEventDispatcher for RemotePluginTitlebarWidget {
@@ -2042,6 +2091,22 @@ mod host {
             cx: &mut Context<Self>,
         ) {
             self.dispatch_event(handler_id, kind, payload, cx);
+        }
+
+        fn remote_panel_instance_id(&self) -> &PanelInstanceId {
+            &self.panel_instance_id
+        }
+
+        fn remote_entity_id(&self) -> u64 {
+            self.widget_entity_id
+        }
+
+        fn remote_div_id_prefix(&self) -> &'static str {
+            "plugin-titlebar-div"
+        }
+
+        fn remote_button_id_prefix(&self) -> &'static str {
+            "plugin-titlebar-button"
         }
     }
 
@@ -2137,7 +2202,7 @@ mod host {
                                     cx,
                                 );
                             }) {
-                                eprintln!("failed to dispatch remote action event: {error:?}");
+                                log::error!("failed to dispatch remote action event: {error:?}");
                             }
                         }
                         (UiEventPhase::Capture, gpui::DispatchPhase::Bubble) => cx.propagate(),
@@ -2157,6 +2222,22 @@ mod host {
             cx: &mut Context<Self>,
         ) {
             self.dispatch_event(handler_id, kind, payload, cx);
+        }
+
+        fn remote_panel_instance_id(&self) -> &PanelInstanceId {
+            &self.panel_instance_id
+        }
+
+        fn remote_entity_id(&self) -> u64 {
+            self.panel_entity_id
+        }
+
+        fn remote_div_id_prefix(&self) -> &'static str {
+            "plugin-panel-div"
+        }
+
+        fn remote_button_id_prefix(&self) -> &'static str {
+            "plugin-button"
         }
     }
 
@@ -2207,6 +2288,166 @@ mod host {
         }
 
         Ok(())
+    }
+
+    fn render_remote_node<T: RemoteEventDispatcher + 'static>(
+        dispatcher: &T,
+        node: &UiNode,
+        node_path: &[usize],
+        cx: &mut Context<T>,
+    ) -> gpui::AnyElement {
+        match node.kind {
+            UiNodeKind::Empty => gpui::Empty.into_any_element(),
+            UiNodeKind::Div => {
+                let element = apply_styles(div(), &node.styles).children(
+                    node.children.iter().enumerate().map(|(index, child)| {
+                        let mut child_path = Vec::with_capacity(node_path.len().saturating_add(1));
+                        child_path.extend_from_slice(node_path);
+                        child_path.push(index);
+                        render_remote_node(dispatcher, child, &child_path, cx)
+                    }),
+                );
+                let element = if node.events.is_empty() {
+                    element.into_any_element()
+                } else {
+                    apply_div_events(
+                        element.id(format!(
+                            "{}-{}-{}",
+                            dispatcher.remote_div_id_prefix(),
+                            dispatcher.remote_panel_instance_id(),
+                            node.events[0].handler_id
+                        )),
+                        node,
+                        cx,
+                    )
+                    .into_any_element()
+                };
+                wrap_action_bindings(element, node, cx)
+            }
+            UiNodeKind::Label => {
+                let mut label = Label::new(node.text.clone().unwrap_or_default());
+                if let Some(size) = style_text(&node.props, "label_size")
+                    .as_deref()
+                    .and_then(label_size_from_prop)
+                {
+                    label = label.size(size);
+                }
+                if let Some(weight) = style_number(&node.props, "font_weight").map(gpui::FontWeight)
+                {
+                    label = label.weight(weight);
+                }
+                if let Some(color) = style_text(&node.props, "label_color")
+                    .as_deref()
+                    .and_then(color_from_prop)
+                {
+                    label = label.color(color);
+                }
+                if let Some(line_height_style) = style_text(&node.props, "line_height_style")
+                    .as_deref()
+                    .and_then(line_height_style_from_prop)
+                {
+                    label = label.line_height_style(line_height_style);
+                }
+                if matches!(
+                    node.props.get("strikethrough"),
+                    Some(StyleValue::Bool(true))
+                ) {
+                    label = label.strikethrough();
+                }
+                if matches!(node.props.get("italic"), Some(StyleValue::Bool(true))) {
+                    label = label.italic();
+                }
+                if matches!(node.props.get("underline"), Some(StyleValue::Bool(true))) {
+                    label = label.underline();
+                }
+                if let Some(alpha) = style_number(&node.props, "alpha") {
+                    label = label.alpha(alpha);
+                }
+                label.into_any_element()
+            }
+            UiNodeKind::Button => {
+                let button_id = node
+                    .events
+                    .first()
+                    .map(|event| {
+                        format!(
+                            "{}-{}",
+                            dispatcher.remote_button_id_prefix(),
+                            event.handler_id
+                        )
+                    })
+                    .unwrap_or_else(|| {
+                        format!(
+                            "{}-{}-{}",
+                            dispatcher.remote_button_id_prefix(),
+                            dispatcher.remote_panel_instance_id(),
+                            dispatcher.remote_entity_id()
+                        )
+                    });
+                render_button_node(node, button_id, cx)
+            }
+            UiNodeKind::Divider => render_divider_node(node),
+            UiNodeKind::Indicator => render_indicator_node(node),
+            UiNodeKind::Icon => {
+                let mut icon = Icon::new(
+                    icon_name_from_descriptor(node.text.as_deref()).unwrap_or(IconName::AiOpenAi),
+                );
+                if let Some(size) = style_text(&node.props, "icon_size")
+                    .as_deref()
+                    .and_then(icon_size_from_prop)
+                {
+                    icon = icon.size(size);
+                } else {
+                    icon = icon.size(IconSize::Small);
+                }
+                if let Some(color) = style_text(&node.props, "icon_color")
+                    .as_deref()
+                    .and_then(color_from_prop)
+                {
+                    icon = icon.color(color);
+                }
+                icon.into_any_element()
+            }
+            UiNodeKind::ProgressBar => {
+                render_progress_bar_node(node, dispatcher.remote_panel_instance_id(), node_path, cx)
+            }
+            UiNodeKind::MenuItem => gpui::Empty.into_any_element(),
+        }
+    }
+
+    fn format_remote_node_path(node_path: &[usize]) -> String {
+        if node_path.is_empty() {
+            return "root".to_string();
+        }
+
+        let mut formatted = String::new();
+        for (index, segment) in node_path.iter().enumerate() {
+            if index > 0 {
+                formatted.push('-');
+            }
+            formatted.push_str(&segment.to_string());
+        }
+        formatted
+    }
+
+    fn remote_progress_bar_id(
+        node: &UiNode,
+        panel_instance_id: &PanelInstanceId,
+        node_path: &[usize],
+    ) -> String {
+        node.props
+            .get("element_id")
+            .and_then(|value| match value {
+                StyleValue::Text(value) => Some(value.clone()),
+                _ => None,
+            })
+            .unwrap_or_else(|| {
+                format!(
+                    "plugin-progress-{}-{}",
+                    panel_instance_id,
+                    format_remote_node_path(node_path)
+                )
+            })
     }
 
     fn wrap_action_bindings<T: RemoteEventDispatcher + 'static>(
@@ -2744,15 +2985,13 @@ mod host {
         divider.into_any_element()
     }
 
-    fn render_progress_bar_node(node: &UiNode, cx: &mut App) -> gpui::AnyElement {
-        let progress_id = node
-            .props
-            .get("element_id")
-            .and_then(|value| match value {
-                StyleValue::Text(value) => Some(value.clone()),
-                _ => None,
-            })
-            .unwrap_or_else(|| "plugin-progress".to_string());
+    fn render_progress_bar_node(
+        node: &UiNode,
+        panel_instance_id: &PanelInstanceId,
+        node_path: &[usize],
+        cx: &mut App,
+    ) -> gpui::AnyElement {
+        let progress_id = remote_progress_bar_id(node, panel_instance_id, node_path);
         let value = style_number(&node.props, "value").unwrap_or_default();
         let max_value = style_number(&node.props, "max_value").unwrap_or(100.);
         let mut progress = ProgressBar::new(progress_id, value, max_value, cx);
@@ -3242,7 +3481,7 @@ mod host {
                 let snapshot = panel.read(cx);
                 panels.push(WorkspaceRemotePanel {
                     panel: panel.clone(),
-                    plugin_id: snapshot._plugin_id.clone(),
+                    plugin_id: snapshot.plugin_id.clone(),
                     panel_id: snapshot.descriptor.id.clone(),
                     panel_instance_id: snapshot.panel_instance_id.clone(),
                     panel_key: snapshot.panel_key_for_persistence().to_string(),
@@ -3321,11 +3560,11 @@ mod host {
             }
         }
 
-        fn try_status(&mut self) -> io::Result<Option<std::process::ExitStatus>> {
+        async fn wait_status(&mut self) -> io::Result<std::process::ExitStatus> {
             match self {
-                Self::Async(child) => child.try_status(),
+                Self::Async(child) => child.status().await,
                 #[cfg(target_os = "windows")]
-                Self::Windows(child) => child.try_status(),
+                Self::Windows(child) => child.wait_status().await,
             }
         }
 
@@ -3380,21 +3619,33 @@ mod host {
 
     #[cfg(target_os = "windows")]
     impl WindowsPluginChild {
-        fn try_status(&mut self) -> io::Result<Option<std::process::ExitStatus>> {
-            use windows::Win32::Foundation::STILL_ACTIVE;
-            use windows::Win32::System::Threading::GetExitCodeProcess;
+        async fn wait_status(&mut self) -> io::Result<std::process::ExitStatus> {
+            use windows::Win32::Foundation::{WAIT_FAILED, WAIT_OBJECT_0};
+            use windows::Win32::System::Threading::{
+                GetExitCodeProcess, INFINITE, WaitForSingleObject,
+            };
 
-            let mut exit_code = 0_u32;
-            unsafe {
-                GetExitCodeProcess(self.process.raw(), &mut exit_code)
-                    .map_err(|error| io::Error::other(error.to_string()))?;
-            }
+            let process = self.process.raw();
+            smol::unblock(move || {
+                let wait_result = unsafe { WaitForSingleObject(process, INFINITE) };
+                if wait_result == WAIT_FAILED {
+                    return Err(io::Error::last_os_error());
+                }
+                if wait_result != WAIT_OBJECT_0 {
+                    return Err(io::Error::other(format!(
+                        "unexpected WaitForSingleObject result: {}",
+                        wait_result.0
+                    )));
+                }
 
-            if exit_code == STILL_ACTIVE.0 {
-                Ok(None)
-            } else {
-                Ok(Some(std::process::ExitStatus::from_raw(exit_code)))
-            }
+                let mut exit_code = 0_u32;
+                unsafe {
+                    GetExitCodeProcess(process, &mut exit_code)
+                        .map_err(|error| io::Error::other(error.to_string()))?;
+                }
+                Ok(std::process::ExitStatus::from_raw(exit_code))
+            })
+            .await
         }
 
         fn kill(&mut self) -> io::Result<()> {
@@ -3595,6 +3846,9 @@ mod host {
     ) -> Result<()> {
         ensure_windows_os_string_has_no_nuls(argument)?;
         let mut encoded = argument.encode_wide().peekable();
+        // `CreateProcessW` passes this string directly to the child process, so only empty
+        // arguments and arguments containing spaces or tabs need quoting for the standard argv
+        // parser. Shell metacharacters are not interpreted here.
         let should_quote = encoded.peek().is_none()
             || argument
                 .to_string_lossy()
@@ -4343,38 +4597,54 @@ mod host {
             .detach();
 
         let exit_plugin_id = plugin_id.clone();
-        let background_executor = async_cx.background_executor().clone();
         async_cx
             .background_spawn(async move {
+                enum ExitWaitOutcome {
+                    Exited(io::Result<std::process::ExitStatus>),
+                    TerminationRequested(Option<ProcessTermination>),
+                }
+
                 let mut termination_reason = None;
-                let mut kill_requested = false;
-                let mut post_kill_polls = 0_u32;
-                let exit_status = loop {
-                    if let Some(status) = child.try_status().ok().flatten() {
-                        break status.code();
+                let wait_outcome = match future::select(
+                    Box::pin(child.wait_status()),
+                    Box::pin(terminate_receiver.recv()),
+                )
+                .await
+                {
+                    Either::Left((status, _)) => ExitWaitOutcome::Exited(status),
+                    Either::Right((termination, child_status)) => {
+                        drop(child_status);
+                        ExitWaitOutcome::TerminationRequested(termination.ok())
                     }
+                };
+                let exit_status = match wait_outcome {
+                    ExitWaitOutcome::Exited(status) => status
+                        .map(|status| status.code())
+                        .unwrap_or_else(|error| {
+                            log::error!(
+                                "failed while waiting for plugin `{exit_plugin_id}` to exit: {error}"
+                            );
+                            None
+                        }),
+                    ExitWaitOutcome::TerminationRequested(termination) => {
+                        termination_reason = termination;
 
-                    if !kill_requested {
-                        match terminate_receiver.try_recv() {
-                            Ok(termination) => {
-                                termination_reason = Some(termination);
-                                child.kill().ok();
-                                kill_requested = true;
-                            }
-                            Err(channel::TryRecvError::Closed) => {
-                                child.kill().ok();
-                                kill_requested = true;
-                            }
-                            Err(channel::TryRecvError::Empty) => {}
+                        if let Err(error) = child.kill() {
+                            log::warn!(
+                                "failed to kill plugin `{exit_plugin_id}` after a termination request: {error}"
+                            );
                         }
-                    } else {
-                        post_kill_polls += 1;
-                        if post_kill_polls >= 100 {
-                            break None;
-                        }
+
+                        child.wait_status()
+                            .await
+                            .map(|status| status.code())
+                            .unwrap_or_else(|error| {
+                                log::error!(
+                                    "failed while waiting for plugin `{exit_plugin_id}` to exit after termination: {error}"
+                                );
+                                None
+                            })
                     }
-
-                    background_executor.timer(Duration::from_millis(50)).await;
                 };
                 event_sender
                     .send(PluginHostEvent::Exited {
@@ -4402,7 +4672,7 @@ mod host {
     fn registration_timeout_for_plugin(plugin: &InstalledPlugin, test_mode: bool) -> Duration {
         if test_mode {
             Duration::from_millis(75)
-        } else if plugin.installation.root.join("Cargo.toml").exists() {
+        } else if is_cargo_backed_plugin(plugin) {
             Duration::from_secs(180)
         } else {
             Duration::from_secs(5)
@@ -5424,6 +5694,56 @@ mod host {
             (receiver, terminate_receiver)
         }
 
+        fn attach_test_panel(
+            registry: &Entity<PluginHostRegistry>,
+            plugin_id: &str,
+            panel_id: &str,
+            title: &str,
+            cx: &mut TestAppContext,
+        ) -> Entity<RemotePluginPanel> {
+            let panel_instance_id =
+                PanelInstanceId::new(format!("test-panel-{plugin_id}-{panel_id}"));
+            let registry_weak = registry.downgrade();
+            cx.update(|cx| {
+                registry
+                    .update(cx, |registry, registry_cx| {
+                        let descriptor = PanelDescriptor {
+                            id: panel_id.to_string(),
+                            title: title.to_string(),
+                            dock: PluginDockPosition::Right,
+                            icon_name: None,
+                            tooltip: None,
+                            activation: PanelActivation::OnDemand,
+                        };
+                        let event_sender = registry.event_sender.clone();
+                        let panel = registry_cx.new(|panel_cx| {
+                            RemotePluginPanel::new(
+                                plugin_id,
+                                descriptor.clone(),
+                                panel_instance_id.clone(),
+                                10_000,
+                                registry_weak.clone(),
+                                event_sender.clone(),
+                                panel_cx,
+                            )
+                        });
+
+                        registry.attach_panel(
+                            plugin_id,
+                            panel_id,
+                            panel_instance_id,
+                            WeakEntity::<Workspace>::new_invalid(),
+                            panel.downgrade(),
+                            panel.entity_id(),
+                            registry_cx,
+                        )?;
+
+                        Ok::<Entity<RemotePluginPanel>, anyhow::Error>(panel)
+                    })
+                    .expect("attach test panel")
+            })
+        }
+
         fn new_test_workspace(
             project: Entity<Project>,
             window: &mut Window,
@@ -5461,6 +5781,18 @@ mod host {
                     .to_string()
                     .contains("plugin render tree exceeded the host node limit")
             );
+        }
+
+        #[test]
+        fn remote_progress_bar_id_uses_node_path_when_no_element_id_is_provided() {
+            let node = UiNode::new(UiNodeKind::ProgressBar);
+
+            let left_id = remote_progress_bar_id(&node, &PanelInstanceId::new("panel-a"), &[0, 0]);
+            let right_id = remote_progress_bar_id(&node, &PanelInstanceId::new("panel-a"), &[0, 1]);
+
+            assert_ne!(left_id, right_id);
+            assert!(left_id.contains("panel-a"));
+            assert!(right_id.ends_with("0-1"));
         }
 
         #[gpui::test]
@@ -5791,6 +6123,10 @@ activation = "on_startup"
 name = "cargo-plugin"
 version = "0.1.0"
 edition = "2021"
+
+[[bin]]
+name = "fake-plugin"
+path = "src/main.rs"
 "#,
             )
             .expect("write Cargo.toml");
@@ -5825,6 +6161,164 @@ edition = "2021"
                 registration_timeout_for_plugin(&plugin, true),
                 Duration::from_millis(75)
             );
+        }
+
+        #[gpui::test]
+        async fn cargo_plugin_panel_shows_startup_state_and_can_cancel(cx: &mut TestAppContext) {
+            init_test_app(cx);
+
+            let temp_dir = TempDir::new().expect("temp plugin dir");
+            let layout = PluginStoreLayout {
+                installed_root: temp_dir.path().join("installed"),
+                development_root: temp_dir.path().join("development"),
+            };
+            let plugin_root = layout.installed_root.join("cargo-plugin");
+            write_fake_plugin(
+                &plugin_root,
+                r#"
+id = "cargo-plugin"
+name = "Cargo Plugin"
+version = "0.1.0"
+schema_version = 1
+entry = "fake-plugin"
+
+[[panels]]
+id = "panel-a"
+title = "Panel A"
+dock = "right"
+activation = "on_demand"
+"#,
+            )
+            .expect("write fake plugin");
+            fs::write(
+                plugin_root.join("Cargo.toml"),
+                r#"
+[package]
+name = "cargo-plugin"
+version = "0.1.0"
+edition = "2021"
+
+[[bin]]
+name = "fake-plugin"
+path = "src/main.rs"
+"#,
+            )
+            .expect("write Cargo.toml");
+
+            let registry = new_test_registry(layout, cx);
+            let (_process_receiver, terminate_receiver) =
+                seed_process(&registry, "cargo-plugin", false, cx);
+
+            let panel = attach_test_panel(&registry, "cargo-plugin", "panel-a", "Panel A", cx);
+
+            cx.update(|cx| {
+                assert_eq!(
+                    panel.read(cx).startup_state,
+                    Some(RemotePluginStartupState::Building)
+                );
+            });
+
+            cx.update(|cx| {
+                panel.update(cx, |panel, panel_cx| {
+                    panel.cancel_startup(panel_cx);
+                });
+            });
+
+            assert!(matches!(
+                terminate_receiver.try_recv().ok(),
+                Some(ProcessTermination::StartupCancelled)
+            ));
+
+            cx.update(|cx| {
+                assert_eq!(
+                    panel.read(cx).startup_state,
+                    Some(RemotePluginStartupState::Cancelling)
+                );
+            });
+        }
+
+        #[gpui::test]
+        async fn register_message_advances_cargo_plugin_startup_state(cx: &mut TestAppContext) {
+            init_test_app(cx);
+
+            let temp_dir = TempDir::new().expect("temp plugin dir");
+            let layout = PluginStoreLayout {
+                installed_root: temp_dir.path().join("installed"),
+                development_root: temp_dir.path().join("development"),
+            };
+            let plugin_root = layout.installed_root.join("cargo-plugin");
+            write_fake_plugin(
+                &plugin_root,
+                r#"
+id = "cargo-plugin"
+name = "Cargo Plugin"
+version = "0.1.0"
+schema_version = 1
+entry = "fake-plugin"
+
+[[panels]]
+id = "panel-a"
+title = "Panel A"
+dock = "right"
+activation = "on_demand"
+"#,
+            )
+            .expect("write fake plugin");
+            fs::write(
+                plugin_root.join("Cargo.toml"),
+                r#"
+[package]
+name = "cargo-plugin"
+version = "0.1.0"
+edition = "2021"
+
+[[bin]]
+name = "fake-plugin"
+path = "src/main.rs"
+"#,
+            )
+            .expect("write Cargo.toml");
+
+            let registry = new_test_registry(layout, cx);
+            let (_process_receiver, _terminate_receiver) =
+                seed_process(&registry, "cargo-plugin", false, cx);
+
+            let panel = attach_test_panel(&registry, "cargo-plugin", "panel-a", "Panel A", cx);
+
+            cx.update(|cx| {
+                registry.update(cx, |registry, registry_cx| {
+                    registry.handle_event(
+                        PluginHostEvent::Message {
+                            plugin_id: PluginId::new("cargo-plugin"),
+                            process_instance_id: 1,
+                            message: PluginToHost::Register {
+                                plugin: plugin_protocol::PluginMetadata {
+                                    id: PluginId::new("cargo-plugin"),
+                                    name: "Cargo Plugin".to_string(),
+                                    version: "0.1.0".to_string(),
+                                    description: None,
+                                    panels: Vec::new(),
+                                    titlebar_widgets: Vec::new(),
+                                },
+                            },
+                        },
+                        registry_cx,
+                    );
+                });
+
+                assert_eq!(
+                    panel.read(cx).startup_state,
+                    Some(RemotePluginStartupState::Starting)
+                );
+                assert!(
+                    registry
+                        .read(cx)
+                        .processes
+                        .get(&PluginId::new("cargo-plugin"))
+                        .expect("seeded process should exist")
+                        .registered
+                );
+            });
         }
 
         #[cfg(target_os = "linux")]
@@ -6332,6 +6826,155 @@ activation = "on_demand"
                 assert!(registry.panels.is_empty());
                 assert!(!registry.processes.contains_key(&plugin_id));
             });
+        }
+
+        #[gpui::test]
+        async fn mismatched_plugin_registration_requests_protocol_termination(
+            cx: &mut TestAppContext,
+        ) {
+            let temp_dir = TempDir::new().expect("temp plugin dir");
+            let layout = PluginStoreLayout {
+                installed_root: temp_dir.path().join("installed"),
+                development_root: temp_dir.path().join("development"),
+            };
+            let registry = new_test_registry(layout, cx);
+            let (_process_receiver, terminate_receiver) =
+                seed_process(&registry, "expected-plugin", false, cx);
+
+            cx.update(|cx| {
+                registry.update(cx, |registry, registry_cx| {
+                    registry.handle_event(
+                        PluginHostEvent::Message {
+                            plugin_id: PluginId::new("expected-plugin"),
+                            process_instance_id: 1,
+                            message: PluginToHost::Register {
+                                plugin: plugin_protocol::PluginMetadata {
+                                    id: PluginId::new("actual-plugin"),
+                                    name: "Actual Plugin".to_string(),
+                                    version: "0.1.0".to_string(),
+                                    description: None,
+                                    panels: Vec::new(),
+                                    titlebar_widgets: Vec::new(),
+                                },
+                            },
+                        },
+                        registry_cx,
+                    );
+                });
+
+                assert!(
+                    !registry
+                        .read(cx)
+                        .processes
+                        .get(&PluginId::new("expected-plugin"))
+                        .expect("seeded process should exist")
+                        .registered
+                );
+            });
+
+            match terminate_receiver.try_recv() {
+                Ok(ProcessTermination::ProtocolViolation { message }) => {
+                    assert!(message.contains("expected-plugin"));
+                    assert!(message.contains("actual-plugin"));
+                }
+                Ok(other) => panic!("unexpected termination reason: {other:?}"),
+                Err(error) => panic!("expected protocol violation termination, got {error}"),
+            }
+        }
+
+        #[gpui::test]
+        async fn unregistered_plugin_messages_request_protocol_termination(
+            cx: &mut TestAppContext,
+        ) {
+            let temp_dir = TempDir::new().expect("temp plugin dir");
+            let layout = PluginStoreLayout {
+                installed_root: temp_dir.path().join("installed"),
+                development_root: temp_dir.path().join("development"),
+            };
+            let registry = new_test_registry(layout, cx);
+            let (_process_receiver, terminate_receiver) =
+                seed_process(&registry, "test-plugin", false, cx);
+
+            cx.update(|cx| {
+                registry.update(cx, |registry, registry_cx| {
+                    registry.handle_event(
+                        PluginHostEvent::Message {
+                            plugin_id: PluginId::new("test-plugin"),
+                            process_instance_id: 1,
+                            message: PluginToHost::Render {
+                                panel_id: "panel-a".to_string(),
+                                panel_instance_id: PanelInstanceId::new("panel-instance"),
+                                root: UiNode::new(UiNodeKind::Div),
+                            },
+                        },
+                        registry_cx,
+                    );
+                });
+
+                assert!(
+                    !registry
+                        .read(cx)
+                        .processes
+                        .get(&PluginId::new("test-plugin"))
+                        .expect("seeded process should exist")
+                        .registered
+                );
+            });
+
+            match terminate_receiver.try_recv() {
+                Ok(ProcessTermination::ProtocolViolation { message }) => {
+                    assert!(message.contains("test-plugin"));
+                    assert!(message.contains("render message before registering"));
+                }
+                Ok(other) => panic!("unexpected termination reason: {other:?}"),
+                Err(error) => panic!("expected protocol violation termination, got {error}"),
+            }
+        }
+
+        #[gpui::test]
+        async fn remove_plugin_eagerly_cleans_up_running_process_entries(cx: &mut TestAppContext) {
+            let temp_dir = TempDir::new().expect("temp plugin dir");
+            let layout = PluginStoreLayout {
+                installed_root: temp_dir.path().join("installed"),
+                development_root: temp_dir.path().join("development"),
+            };
+            let plugin_root = layout.installed_root.join("test-plugin");
+            write_fake_plugin(
+                &plugin_root,
+                r#"
+id = "test-plugin"
+name = "Test Plugin"
+version = "0.1.0"
+schema_version = 1
+entry = "fake-plugin"
+"#,
+            )
+            .expect("write fake plugin");
+
+            let registry = new_test_registry(layout, cx);
+            let (process_receiver, _terminate_receiver) =
+                seed_process(&registry, "test-plugin", true, cx);
+
+            cx.update(|cx| {
+                let removed = registry
+                    .update(cx, |registry, _| registry.remove_plugin("test-plugin"))
+                    .expect("remove plugin");
+                assert!(removed);
+                assert!(
+                    !registry
+                        .read(cx)
+                        .processes
+                        .contains_key(&PluginId::new("test-plugin"))
+                );
+            });
+
+            let shutdown_message = process_receiver
+                .try_recv()
+                .expect("shutdown should be queued before removal");
+            let decoded: HostToPlugin =
+                serde_json::from_str(&shutdown_message).expect("shutdown message should decode");
+            assert_eq!(decoded, HostToPlugin::Shutdown);
+            assert!(!plugin_root.exists());
         }
 
         #[gpui::test]

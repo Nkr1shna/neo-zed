@@ -1,6 +1,10 @@
 use std::collections::BTreeSet;
 use std::fmt;
 use std::fs;
+#[cfg(unix)]
+use std::os::unix::fs::MetadataExt;
+#[cfg(windows)]
+use std::os::windows::fs::MetadataExt;
 use std::path::Component;
 use std::path::{Path, PathBuf};
 use std::time::{SystemTime, UNIX_EPOCH};
@@ -648,6 +652,12 @@ fn copy_directory(source_directory: &Path, destination_directory: &Path) -> Resu
         if file_type.is_dir() {
             copy_directory(&source_path, &destination_path)?;
         } else {
+            ensure_not_hard_link(
+                &source_path,
+                &directory_entry.metadata().with_context(|| {
+                    format!("failed to inspect metadata for {}", source_path.display())
+                })?,
+            )?;
             if let Some(parent_directory) = destination_path.parent() {
                 ensure_directory(parent_directory)?;
             }
@@ -662,6 +672,32 @@ fn copy_directory(source_directory: &Path, destination_directory: &Path) -> Resu
     }
 
     Ok(())
+}
+
+fn ensure_not_hard_link(path: &Path, metadata: &fs::Metadata) -> Result<()> {
+    if hard_link_count(metadata) > 1 {
+        bail!(
+            "plugin directory contains hard linked file {}",
+            path.display()
+        );
+    }
+
+    Ok(())
+}
+
+#[cfg(unix)]
+fn hard_link_count(metadata: &fs::Metadata) -> u64 {
+    metadata.nlink()
+}
+
+#[cfg(windows)]
+fn hard_link_count(metadata: &fs::Metadata) -> u64 {
+    metadata.number_of_links().into()
+}
+
+#[cfg(not(any(unix, windows)))]
+fn hard_link_count(_metadata: &fs::Metadata) -> u64 {
+    1
 }
 
 fn remove_directory_if_exists(path: &Path) -> Result<()> {
