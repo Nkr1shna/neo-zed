@@ -6121,6 +6121,8 @@ name = "feedback"
 version = "0.1.0"
 dependencies = [
  "gpui",
+ "release_channel",
+ "semver",
  "system_specs",
  "urlencoding",
  "util",

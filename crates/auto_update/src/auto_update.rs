@@ -314,12 +314,19 @@ pub fn release_notes_url(cx: &mut App) -> Option<String> {
             let path = format!("/releases/{release_channel}/{current_version}");
             auto_updater.client.http_client().build_url(&path)
         }
-        ReleaseChannel::Nightly => {
-            "https://github.com/zed-industries/zed/commits/nightly/".to_string()
-        }
-        ReleaseChannel::Dev => "https://github.com/zed-industries/zed/commits/main/".to_string(),
+        _ => release_notes_commit_history_url(release_channel)?,
     };
     Some(url)
+}
+
+fn release_notes_commit_history_url(release_channel: ReleaseChannel) -> Option<String> {
+    const NEO_ZED_REPOSITORY_URL: &str = "https://github.com/Nkr1shna/neo-zed";
+
+    match release_channel {
+        ReleaseChannel::Nightly => Some(format!("{NEO_ZED_REPOSITORY_URL}/commits/nightly/")),
+        ReleaseChannel::Dev => Some(format!("{NEO_ZED_REPOSITORY_URL}/commits/main/")),
+        _ => None,
+    }
 }
 
 pub fn view_release_notes(_: &ViewReleaseNotes, cx: &mut App) -> Option<()> {
@@ -1539,6 +1546,22 @@ mod tests {
         assert_eq!(
             newer_version.unwrap(),
             Some(VersionCheckType::Sha(AppCommitSha::new(fetched_sha)))
+        );
+    }
+
+    #[test]
+    fn nightly_release_notes_use_the_fork_commit_history() {
+        assert_eq!(
+            release_notes_commit_history_url(ReleaseChannel::Nightly),
+            Some("https://github.com/Nkr1shna/neo-zed/commits/nightly/".to_string())
+        );
+    }
+
+    #[test]
+    fn dev_release_notes_use_the_fork_main_branch_history() {
+        assert_eq!(
+            release_notes_commit_history_url(ReleaseChannel::Dev),
+            Some("https://github.com/Nkr1shna/neo-zed/commits/main/".to_string())
         );
     }
 }

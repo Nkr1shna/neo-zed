@@ -106,7 +106,7 @@ impl Display for SystemSpecs {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         let os_information = format!("OS: {} {}", self.os_name, self.os_version);
         let app_version_information = format!(
-            "Zed: v{} ({}) {}{}",
+            "Neo Zed: v{} ({}) {}{}",
             self.app_version,
             match &self.commit_sha {
                 Some(commit_sha) => format!("{} {}", self.release_channel, commit_sha),
@@ -180,6 +180,21 @@ pub struct GpuInfo {
     pub vendor_pci_id: u16,
     pub driver_version: Option<String>,
     pub driver_name: Option<String>,
+}
+
+#[cfg(test)]
+mod tests {
+    use release_channel::ReleaseChannel;
+    use semver::Version;
+
+    use super::*;
+
+    #[test]
+    fn system_specs_display_uses_neo_zed_branding() {
+        let specs = SystemSpecs::new_stateless(Version::new(1, 2, 3), None, ReleaseChannel::Stable);
+
+        assert!(specs.to_string().starts_with("Neo Zed: v1.2.3 (Neo Zed)"));
+    }
 }
 
 #[cfg(any(target_os = "linux", target_os = "freebsd"))]
