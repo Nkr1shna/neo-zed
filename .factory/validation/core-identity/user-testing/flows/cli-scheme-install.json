@@ -1,0 +1,98 @@
+{
+  "groupId": "cli-scheme-install",
+  "surface": "file/metadata inspection",
+  "toolsUsed": [
+    "rg",
+    "python3"
+  ],
+  "assertions": [
+    {
+      "id": "VAL-IDENT-002",
+      "status": "fail",
+      "reason": "Although the binary and CLI reference use neozed, touched release-facing docs/macOS and Linux install docs still instruct users to run zed.",
+      "evidence": [
+        {
+          "kind": "file",
+          "path": "crates/cli/src/main.rs",
+          "summary": "Main CLI definition uses name = \"neozed\" and describes the Neo Zed CLI binary."
+        },
+        {
+          "kind": "file",
+          "path": "docs/src/reference/cli.md",
+          "summary": "CLI reference teaches /usr/local/bin/neozed, neozed [OPTIONS] [PATHS]..., and neozed:// URLs."
+        },
+        {
+          "kind": "file",
+          "path": "docs/src/macos.md",
+          "summary": "Lines 51-56 and 103 still describe a zed command in /usr/local/bin and zed command usage."
+        },
+        {
+          "kind": "file",
+          "path": "docs/src/linux.md",
+          "summary": "Line 117 still refers to the zed shell command in release-facing uninstall guidance."
+        }
+      ]
+    },
+    {
+      "id": "VAL-IDENT-003",
+      "status": "pass",
+      "reason": "Public registration metadata and user-facing docs use neozed://, while remaining zed:// references are explicitly marked as legacy/internal compatibility paths.",
+      "evidence": [
+        {
+          "kind": "file",
+          "path": "crates/install_cli/src/register_zed_scheme.rs",
+          "summary": "Documents registration of the neozed:// URL scheme handler."
+        },
+        {
+          "kind": "file",
+          "path": "crates/zed/resources/zed.desktop.in",
+          "summary": "Desktop metadata registers x-scheme-handler/neozed."
+        },
+        {
+          "kind": "file",
+          "path": "docs/src/reference/cli.md",
+          "summary": "User-facing CLI docs show neozed:// examples only."
+        },
+        {
+          "kind": "file",
+          "path": "crates/client/src/client.rs",
+          "summary": "Lines 1736-1739 distinguish legacy internal zed:// handling from the public neozed:// scheme."
+        }
+      ]
+    },
+    {
+      "id": "VAL-IDENT-005",
+      "status": "fail",
+      "reason": "Install/uninstall scripts themselves use Neo Zed identities, but touched release-facing install/uninstall docs and script comments/download URLs still mix in Zed / zed.dev identities.",
+      "evidence": [
+        {
+          "kind": "file",
+          "path": "script/install.sh",
+          "summary": "Install script uses Neo Zed prompts, dev.neozed IDs, and neozed symlink targets, but still has zed.dev comments and cloud.zed.dev asset=zed download URLs."
+        },
+        {
+          "kind": "file",
+          "path": "script/uninstall.sh",
+          "summary": "Uninstall script prints Neo Zed messages, removes dev.neozed desktop IDs, and deletes the neozed binary path."
+        },
+        {
+          "kind": "file",
+          "path": "docs/src/macos.md",
+          "summary": "Install instructions still tell users to download/install Zed and use brew install --cask zed."
+        },
+        {
+          "kind": "file",
+          "path": "docs/src/uninstall.md",
+          "summary": "Linux/macOS uninstall docs still describe Zed package-manager installs and say Zed was successfully uninstalled."
+        }
+      ]
+    }
+  ],
+  "frictions": [
+    "Task-based user-testing-flow-validator subagents failed to launch with \"Invalid model: custom:droidproxy:gpt-5.4\"; this flow report was produced manually in the validator session using the same assigned assertion scope."
+  ],
+  "blockers": [],
+  "notes": [
+    "No services or seed data were required for this milestone."
+  ]
+}
