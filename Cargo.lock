@@ -12842,6 +12842,7 @@ dependencies = [
  "gpui",
  "gpui_api",
  "gpui_plugin",
+ "libc",
  "node_runtime",
  "paths",
  "plugin",
@@ -12861,6 +12862,7 @@ dependencies = [
  "ui",
  "ui_plugin",
  "uuid",
+ "windows 0.61.3",
  "workspace",
 ]
 
