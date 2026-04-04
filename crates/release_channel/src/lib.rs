@@ -141,6 +141,12 @@ struct GlobalReleaseChannel(ReleaseChannel);
 
 impl Global for GlobalReleaseChannel {}
 
+#[derive(Copy, Clone)]
+struct ReleaseIdentity {
+    display_name: &'static str,
+    app_id: &'static str,
+}
+
 /// Initializes the release channel.
 pub fn init(app_version: Version, cx: &mut App) {
     cx.set_global(GlobalAppVersion(app_version));
@@ -154,6 +160,27 @@ pub fn init_test(app_version: Version, release_channel: ReleaseChannel, cx: &mut
 }
 
 impl ReleaseChannel {
+    fn release_identity(&self) -> ReleaseIdentity {
+        match self {
+            ReleaseChannel::Dev => ReleaseIdentity {
+                display_name: "Neo Zed Dev",
+                app_id: "dev.neozed.Dev",
+            },
+            ReleaseChannel::Nightly => ReleaseIdentity {
+                display_name: "Neo Zed Nightly",
+                app_id: "dev.neozed.Nightly",
+            },
+            ReleaseChannel::Preview => ReleaseIdentity {
+                display_name: "Neo Zed Preview",
+                app_id: "dev.neozed.Preview",
+            },
+            ReleaseChannel::Stable => ReleaseIdentity {
+                display_name: "Neo Zed",
+                app_id: "dev.neozed",
+            },
+        }
+    }
+
     /// Returns the global [`ReleaseChannel`].
     pub fn global(cx: &App) -> Self {
         cx.global::<GlobalReleaseChannel>().0
@@ -172,12 +199,7 @@ impl ReleaseChannel {
 
     /// Returns the display name for this [`ReleaseChannel`].
     pub fn display_name(&self) -> &'static str {
-        match self {
-            ReleaseChannel::Dev => "Zed Dev",
-            ReleaseChannel::Nightly => "Zed Nightly",
-            ReleaseChannel::Preview => "Zed Preview",
-            ReleaseChannel::Stable => "Zed",
-        }
+        self.release_identity().display_name
     }
 
     /// Returns the programmatic name for this [`ReleaseChannel`].
@@ -192,14 +214,9 @@ impl ReleaseChannel {
 
     /// Returns the application ID that's used by Wayland as application ID
     /// and WM_CLASS on X11.
-    /// This also has to match the bundle identifier for Zed on macOS.
+    /// This also has to match the bundle identifier for Neo Zed on macOS.
     pub fn app_id(&self) -> &'static str {
-        match self {
-            ReleaseChannel::Dev => "dev.zed.Zed-Dev",
-            ReleaseChannel::Nightly => "dev.zed.Zed-Nightly",
-            ReleaseChannel::Preview => "dev.zed.Zed-Preview",
-            ReleaseChannel::Stable => "dev.zed.Zed",
-        }
+        self.release_identity().app_id
     }
 
     /// Returns the query parameter for this [`ReleaseChannel`].
@@ -228,5 +245,38 @@ impl FromStr for ReleaseChannel {
             "stable" => ReleaseChannel::Stable,
             _ => return Err(InvalidReleaseChannel),
         })
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::ReleaseChannel;
+
+    #[test]
+    fn channel_display_names_use_neo_zed_branding() {
+        let cases = [
+            (ReleaseChannel::Stable, "Neo Zed"),
+            (ReleaseChannel::Preview, "Neo Zed Preview"),
+            (ReleaseChannel::Nightly, "Neo Zed Nightly"),
+            (ReleaseChannel::Dev, "Neo Zed Dev"),
+        ];
+
+        for (channel, expected_display_name) in cases {
+            assert_eq!(channel.display_name(), expected_display_name);
+        }
+    }
+
+    #[test]
+    fn channel_app_ids_use_dev_neozed_identity() {
+        let cases = [
+            (ReleaseChannel::Stable, "dev.neozed"),
+            (ReleaseChannel::Preview, "dev.neozed.Preview"),
+            (ReleaseChannel::Nightly, "dev.neozed.Nightly"),
+            (ReleaseChannel::Dev, "dev.neozed.Dev"),
+        ];
+
+        for (channel, expected_app_id) in cases {
+            assert_eq!(channel.app_id(), expected_app_id);
+        }
     }
 }
