@@ -214,6 +214,7 @@ impl HttpClientWithUrl {
     pub fn build_zed_api_url(&self, path: &str, query: &[(&str, &str)]) -> Result<Url> {
         let base_url = self.base_url();
         let base_api_url = match base_url.as_ref() {
+            "https://neozed.dev" => "https://api.neozed.dev",
             "https://zed.dev" => "https://api.zed.dev",
             "https://staging.zed.dev" => "https://api-staging.zed.dev",
             "http://localhost:3000" => "http://localhost:8080",
@@ -230,6 +231,7 @@ impl HttpClientWithUrl {
     pub fn build_zed_cloud_url(&self, path: &str) -> Result<Url> {
         let base_url = self.base_url();
         let base_api_url = match base_url.as_ref() {
+            "https://neozed.dev" => "https://cloud.neozed.dev",
             "https://zed.dev" => "https://cloud.zed.dev",
             "https://staging.zed.dev" => "https://cloud.zed.dev",
             "http://localhost:3000" => "http://localhost:8787",
@@ -243,6 +245,7 @@ impl HttpClientWithUrl {
     pub fn build_zed_cloud_url_with_query(&self, path: &str, query: impl Serialize) -> Result<Url> {
         let base_url = self.base_url();
         let base_api_url = match base_url.as_ref() {
+            "https://neozed.dev" => "https://cloud.neozed.dev",
             "https://zed.dev" => "https://cloud.zed.dev",
             "https://staging.zed.dev" => "https://cloud.zed.dev",
             "http://localhost:3000" => "http://localhost:8787",
@@ -256,6 +259,7 @@ impl HttpClientWithUrl {
     pub fn build_zed_llm_url(&self, path: &str, query: &[(&str, &str)]) -> Result<Url> {
         let base_url = self.base_url();
         let base_api_url = match base_url.as_ref() {
+            "https://neozed.dev" => "https://cloud.neozed.dev",
             "https://zed.dev" => "https://cloud.zed.dev",
             "https://staging.zed.dev" => "https://llm-staging.zed.dev",
             "http://localhost:3000" => "http://localhost:8787",
@@ -441,5 +445,99 @@ impl HttpClient for FakeHttpClient {
 
     fn as_fake(&self) -> &FakeHttpClient {
         self
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn http_client_with_url(base_url: &str) -> HttpClientWithUrl {
+        HttpClientWithUrl::new(Arc::new(BlockedHttpClient::new()), base_url, None)
+    }
+
+    #[test]
+    fn release_topology_uses_neozed_domains() {
+        let http_client = http_client_with_url("https://neozed.dev");
+
+        assert_eq!(
+            http_client
+                .build_zed_api_url("/v1/status", &[("feature", "topology")])
+                .unwrap()
+                .as_str(),
+            "https://api.neozed.dev/v1/status?feature=topology"
+        );
+        assert_eq!(
+            http_client
+                .build_zed_cloud_url("/client/users/me")
+                .unwrap()
+                .as_str(),
+            "https://cloud.neozed.dev/client/users/me"
+        );
+        assert_eq!(
+            http_client
+                .build_zed_cloud_url_with_query("/rpc", [("environment", "stable")])
+                .unwrap()
+                .as_str(),
+            "https://cloud.neozed.dev/rpc?environment=stable"
+        );
+        assert_eq!(
+            http_client
+                .build_zed_llm_url("/predict_edits/v3", &[("model", "default")])
+                .unwrap()
+                .as_str(),
+            "https://cloud.neozed.dev/predict_edits/v3?model=default"
+        );
+    }
+
+    #[test]
+    fn staging_and_local_development_topology_stay_compatible() {
+        let staging_http_client = http_client_with_url("https://staging.zed.dev");
+
+        assert_eq!(
+            staging_http_client
+                .build_zed_api_url("/v1/status", &[("feature", "topology")])
+                .unwrap()
+                .as_str(),
+            "https://api-staging.zed.dev/v1/status?feature=topology"
+        );
+        assert_eq!(
+            staging_http_client
+                .build_zed_cloud_url("/client/users/me")
+                .unwrap()
+                .as_str(),
+            "https://cloud.zed.dev/client/users/me"
+        );
+        assert_eq!(
+            staging_http_client
+                .build_zed_llm_url("/predict_edits/v3", &[("model", "default")])
+                .unwrap()
+                .as_str(),
+            "https://llm-staging.zed.dev/predict_edits/v3?model=default"
+        );
+
+        let localhost_http_client = http_client_with_url("http://localhost:3000");
+
+        assert_eq!(
+            localhost_http_client
+                .build_zed_api_url("/v1/status", &[("feature", "topology")])
+                .unwrap()
+                .as_str(),
+            "http://localhost:8080/v1/status?feature=topology"
+        );
+        assert_eq!(
+            localhost_http_client
+                .build_zed_cloud_url("/client/users/me")
+                .unwrap()
+                .as_str(),
+            "http://localhost:8787/client/users/me"
+        );
+        assert_eq!(
+            localhost_http_client
+                .build_zed_llm_url("/predict_edits/v3", &[("model", "default")])
+                .unwrap()
+                .as_str(),
+            "http://localhost:8787/predict_edits/v3?model=default"
+        );
     }
 }
