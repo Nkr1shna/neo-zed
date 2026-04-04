@@ -1,0 +1,40 @@
+{
+  "milestone": "core-identity",
+  "round": 1,
+  "status": "fail",
+  "assertionsSummary": {
+    "total": 5,
+    "passed": 3,
+    "failed": 2,
+    "blocked": 0
+  },
+  "passedAssertions": [
+    "VAL-IDENT-001",
+    "VAL-IDENT-003",
+    "VAL-IDENT-004"
+  ],
+  "failedAssertions": [
+    {
+      "id": "VAL-IDENT-002",
+      "reason": "Release-facing CLI/install docs still contain zed command guidance in docs/src/macos.md and docs/src/linux.md."
+    },
+    {
+      "id": "VAL-IDENT-005",
+      "reason": "Install/uninstall flows still mix Zed identities via script/install.sh comments/download URLs and docs/src/macos.md/docs/src/uninstall.md."
+    }
+  ],
+  "blockedAssertions": [],
+  "appliedUpdates": [
+    {
+      "target": "user-testing.md",
+      "description": "Added setup notes and file/metadata inspection flow guidance for core-identity validation boundaries.",
+      "source": "setup"
+    },
+    {
+      "target": "user-testing.md",
+      "description": "Documented the manual fallback for Task-based validator droids failing with Invalid model: custom:droidproxy:gpt-5.4.",
+      "source": "flow-report"
+    }
+  ],
+  "previousRound": null
+}

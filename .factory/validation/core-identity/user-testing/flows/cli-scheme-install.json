@@ -8,91 +8,85 @@
   "assertions": [
     {
       "id": "VAL-IDENT-002",
-      "status": "fail",
-      "reason": "Although the binary and CLI reference use neozed, touched release-facing docs/macOS and Linux install docs still instruct users to run zed.",
+      "status": "pass",
+      "reason": "Public CLI/install surfaces in the audited core-identity files now use the neozed binary name and neozed install/uninstall commands. Remaining legacy `zed` matches are limited to command-palette action labels or third-party/upstream identifiers outside the shell CLI scope.",
       "evidence": [
         {
           "kind": "file",
           "path": "crates/cli/src/main.rs",
-          "summary": "Main CLI definition uses name = \"neozed\" and describes the Neo Zed CLI binary."
+          "summary": "The public CLI metadata declares `name = \"neozed\"` and advertises `neozed://` handling."
         },
         {
           "kind": "file",
           "path": "docs/src/reference/cli.md",
-          "summary": "CLI reference teaches /usr/local/bin/neozed, neozed [OPTIONS] [PATHS]..., and neozed:// URLs."
+          "summary": "CLI reference installs `/usr/local/bin/neozed`, documents `neozed [OPTIONS] [PATHS]...`, and shows `neozed://` examples."
         },
         {
           "kind": "file",
           "path": "docs/src/macos.md",
-          "summary": "Lines 51-56 and 103 still describe a zed command in /usr/local/bin and zed command usage."
+          "summary": "macOS install docs now say the command palette creates a `neozed` command in `/usr/local/bin` and show only `neozed` shell examples."
         },
         {
           "kind": "file",
           "path": "docs/src/linux.md",
-          "summary": "Line 117 still refers to the zed shell command in release-facing uninstall guidance."
-        }
-      ]
-    },
-    {
-      "id": "VAL-IDENT-003",
-      "status": "pass",
-      "reason": "Public registration metadata and user-facing docs use neozed://, while remaining zed:// references are explicitly marked as legacy/internal compatibility paths.",
-      "evidence": [
-        {
-          "kind": "file",
-          "path": "crates/install_cli/src/register_zed_scheme.rs",
-          "summary": "Documents registration of the neozed:// URL scheme handler."
+          "summary": "Linux uninstall guidance now uses `neozed --uninstall` and the corresponding `~/.local/.../neozed` fallback paths."
         },
         {
           "kind": "file",
-          "path": "crates/zed/resources/zed.desktop.in",
-          "summary": "Desktop metadata registers x-scheme-handler/neozed."
+          "path": "docs/src/uninstall.md",
+          "summary": "The uninstall guide uses `brew uninstall --cask neozed` and `neozed --uninstall` commands only in the audited release-facing instructions."
         },
         {
-          "kind": "file",
-          "path": "docs/src/reference/cli.md",
-          "summary": "User-facing CLI docs show neozed:// examples only."
-        },
-        {
-          "kind": "file",
-          "path": "crates/client/src/client.rs",
-          "summary": "Lines 1736-1739 distinguish legacy internal zed:// handling from the public neozed:// scheme."
+          "kind": "command",
+          "command": "python3 evidence generation for round-2-cli-surfaces.json",
+          "summary": "Saved exact matched lines to evidence/core-identity/cli-scheme-install/round-2-cli-surfaces.json."
         }
       ]
     },
     {
       "id": "VAL-IDENT-005",
-      "status": "fail",
-      "reason": "Install/uninstall scripts themselves use Neo Zed identities, but touched release-facing install/uninstall docs and script comments/download URLs still mix in Zed / zed.dev identities.",
+      "status": "pass",
+      "reason": "The audited install and uninstall flows now use Neo Zed branding, neozed commands, dev.neozed identifiers, and neozed.dev/cloud.neozed.dev URLs. The remaining legacy `zed` socket cleanup path is an intentionally internal compatibility detail, not a user-facing install identity.",
       "evidence": [
         {
           "kind": "file",
           "path": "script/install.sh",
-          "summary": "Install script uses Neo Zed prompts, dev.neozed IDs, and neozed symlink targets, but still has zed.dev comments and cloud.zed.dev asset=zed download URLs."
+          "summary": "Install script comments and download URLs now point at `neozed.dev` and `cloud.neozed.dev` with `asset=neozed`, while install paths and symlinks use `neozed` and `dev.neozed`."
         },
         {
           "kind": "file",
           "path": "script/uninstall.sh",
-          "summary": "Uninstall script prints Neo Zed messages, removes dev.neozed desktop IDs, and deletes the neozed binary path."
+          "summary": "Uninstall script messages, bundle IDs, app paths, and symlink removal all use Neo Zed/dev.neozed identities; only the internal socket cleanup keeps the compatibility-sensitive `zed-<channel>.sock` filename."
         },
         {
           "kind": "file",
           "path": "docs/src/macos.md",
-          "summary": "Install instructions still tell users to download/install Zed and use brew install --cask zed."
+          "summary": "macOS install guidance now points users to `https://neozed.dev/download` and Homebrew casks `neozed` / `neozed@preview`."
+        },
+        {
+          "kind": "file",
+          "path": "docs/src/linux.md",
+          "summary": "Linux install docs now use the `https://neozed.dev/install.sh` installer and `cloud.neozed.dev` tarball URLs with `asset=neozed`, and uninstall instructions point to `neozed --uninstall`."
         },
         {
           "kind": "file",
           "path": "docs/src/uninstall.md",
-          "summary": "Linux/macOS uninstall docs still describe Zed package-manager installs and say Zed was successfully uninstalled."
+          "summary": "The uninstall guide removes Neo Zed using `neozed` commands and Neo Zed file-system paths only."
+        },
+        {
+          "kind": "command",
+          "command": "python3 evidence generation for round-2-install-surfaces.json and round-2-scoped-legacy-audit.json",
+          "summary": "Saved exact matched lines and scoped legacy-match audit to evidence/core-identity/cli-scheme-install/round-2-install-surfaces.json and round-2-scoped-legacy-audit.json."
         }
       ]
     }
   ],
   "frictions": [
-    "Task-based user-testing-flow-validator subagents failed to launch with \"Invalid model: custom:droidproxy:gpt-5.4\"; this flow report was produced manually in the validator session using the same assigned assertion scope."
+    "Task-based user-testing-flow-validator subagents still failed to launch with \"Invalid model: custom:droidproxy:gpt-5.4\"; this rerun was completed manually in the validator session using the same assigned assertion scope and evidence outputs."
   ],
   "blockers": [],
   "notes": [
-    "No services or seed data were required for this milestone."
+    "No services or seed data were required for this milestone.",
+    "Remaining `zed` matches in the audited files are outside the release-facing CLI/install identity scope (command-palette action labels, third-party/upstream package identifiers, or the internal compatibility socket path)."
   ]
 }
