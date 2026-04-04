@@ -160,7 +160,11 @@ fn install_rejects_entrypoint_path_traversal() {
         .install_from_directory(fixture.plugin_dir("source-plugin"))
         .unwrap_err();
 
-    assert!(error.to_string().contains("must not contain path traversal"));
+    assert!(
+        error
+            .to_string()
+            .contains("must not contain path traversal")
+    );
 }
 
 #[cfg(unix)]
@@ -183,7 +187,11 @@ fn install_rejects_entrypoint_symlink_escape() {
         .install_from_directory(fixture.plugin_dir("source-plugin"))
         .unwrap_err();
 
-    assert!(error.to_string().contains("resolves outside plugin directory"));
+    assert!(
+        error
+            .to_string()
+            .contains("resolves outside plugin directory")
+    );
 }
 
 #[cfg(unix)]

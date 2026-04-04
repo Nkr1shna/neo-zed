@@ -126,16 +126,30 @@ mod host {
         UiEvent, UiEventKind, UiEventPhase, UiNode, UiNodeKind, apply_ui_patches,
     };
     use serde::Deserialize;
-    use smol::{channel, process::Command};
+    #[cfg(target_os = "windows")]
+    use smol::Unblock;
+    use smol::channel;
+    #[cfg(not(target_os = "windows"))]
+    use smol::process::Command;
+    #[cfg(target_os = "linux")]
+    use std::ffi::CString;
+    #[cfg(target_os = "linux")]
+    use std::os::fd::{AsRawFd as _, FromRawFd as _, OwnedFd};
+    #[cfg(target_os = "linux")]
+    use std::os::unix::ffi::OsStrExt as _;
     #[cfg(target_os = "linux")]
     use std::os::unix::process::CommandExt as _;
     #[cfg(target_os = "windows")]
-    use std::os::windows::io::AsRawHandle as _;
+    use std::os::windows::{
+        ffi::OsStrExt as _,
+        io::{FromRawHandle as _, OwnedHandle, RawHandle},
+        process::ExitStatusExt as _,
+    };
     use std::{
         any::TypeId,
         collections::{BTreeMap, BTreeSet},
         env,
-        ffi::OsString,
+        ffi::{OsStr, OsString},
         io,
         path::{Path, PathBuf},
         process::Stdio,
@@ -3251,55 +3265,145 @@ mod host {
             .context("failed to queue plugin host message")
     }
 
-    struct PluginChild {
-        inner: smol::process::Child,
+    type PluginProcessReader = Box<dyn futures::AsyncRead + Unpin + Send>;
+    type PluginProcessWriter = Box<dyn futures::AsyncWrite + Unpin + Send>;
+
+    enum PluginChild {
+        Async(smol::process::Child),
         #[cfg(target_os = "windows")]
-        job: WindowsJobObject,
+        Windows(WindowsPluginChild),
     }
 
     impl PluginChild {
-        fn new(inner: smol::process::Child) -> Self {
-            Self {
-                inner,
+        fn from_async(inner: smol::process::Child) -> Self {
+            Self::Async(inner)
+        }
+
+        fn take_stdin(&mut self) -> Option<PluginProcessWriter> {
+            match self {
+                Self::Async(child) => child
+                    .stdin
+                    .take()
+                    .map(|stdin| Box::new(stdin) as PluginProcessWriter),
                 #[cfg(target_os = "windows")]
-                job: WindowsJobObject::none(),
+                Self::Windows(child) => child
+                    .stdin
+                    .take()
+                    .map(|stdin| Box::new(stdin) as PluginProcessWriter),
             }
         }
 
-        #[cfg(target_os = "windows")]
-        fn with_job(inner: smol::process::Child, job: WindowsJobObject) -> Self {
-            Self { inner, job }
+        fn take_stdout(&mut self) -> Option<PluginProcessReader> {
+            match self {
+                Self::Async(child) => child
+                    .stdout
+                    .take()
+                    .map(|stdout| Box::new(stdout) as PluginProcessReader),
+                #[cfg(target_os = "windows")]
+                Self::Windows(child) => child
+                    .stdout
+                    .take()
+                    .map(|stdout| Box::new(stdout) as PluginProcessReader),
+            }
         }
 
-        fn take_stdin(&mut self) -> Option<smol::process::ChildStdin> {
-            self.inner.stdin.take()
-        }
-
-        fn take_stdout(&mut self) -> Option<smol::process::ChildStdout> {
-            self.inner.stdout.take()
-        }
-
-        fn take_stderr(&mut self) -> Option<smol::process::ChildStderr> {
-            self.inner.stderr.take()
-        }
-
-        async fn status(&mut self) -> io::Result<std::process::ExitStatus> {
-            self.inner.status().await
+        fn take_stderr(&mut self) -> Option<PluginProcessReader> {
+            match self {
+                Self::Async(child) => child
+                    .stderr
+                    .take()
+                    .map(|stderr| Box::new(stderr) as PluginProcessReader),
+                #[cfg(target_os = "windows")]
+                Self::Windows(child) => child
+                    .stderr
+                    .take()
+                    .map(|stderr| Box::new(stderr) as PluginProcessReader),
+            }
         }
 
         fn try_status(&mut self) -> io::Result<Option<std::process::ExitStatus>> {
-            self.inner.try_status()
+            match self {
+                Self::Async(child) => child.try_status(),
+                #[cfg(target_os = "windows")]
+                Self::Windows(child) => child.try_status(),
+            }
         }
 
         fn kill(&mut self) -> io::Result<()> {
-            #[cfg(target_os = "windows")]
-            self.job.terminate()?;
-            self.inner.kill()
+            match self {
+                Self::Async(child) => child.kill(),
+                #[cfg(target_os = "windows")]
+                Self::Windows(child) => child.kill(),
+            }
         }
     }
 
     #[cfg(target_os = "windows")]
-    struct WindowsJobObject(Option<windows::Win32::Foundation::HANDLE>);
+    struct WindowsOwnedHandle(windows::Win32::Foundation::HANDLE);
+
+    #[cfg(target_os = "windows")]
+    impl WindowsOwnedHandle {
+        fn new(handle: windows::Win32::Foundation::HANDLE) -> Self {
+            Self(handle)
+        }
+
+        fn raw(&self) -> windows::Win32::Foundation::HANDLE {
+            self.0
+        }
+
+        fn into_file(self) -> std::fs::File {
+            let raw_handle = self.0.0 as RawHandle;
+            std::mem::forget(self);
+            let owned_handle = unsafe { OwnedHandle::from_raw_handle(raw_handle) };
+            std::fs::File::from(owned_handle)
+        }
+    }
+
+    #[cfg(target_os = "windows")]
+    impl Drop for WindowsOwnedHandle {
+        fn drop(&mut self) {
+            if !self.0.is_invalid() {
+                let _ = unsafe { windows::Win32::Foundation::CloseHandle(self.0) };
+            }
+        }
+    }
+
+    #[cfg(target_os = "windows")]
+    struct WindowsPluginChild {
+        process: WindowsOwnedHandle,
+        thread: WindowsOwnedHandle,
+        stdin: Option<Unblock<std::fs::File>>,
+        stdout: Option<Unblock<std::fs::File>>,
+        stderr: Option<Unblock<std::fs::File>>,
+        job: WindowsJobObject,
+    }
+
+    #[cfg(target_os = "windows")]
+    impl WindowsPluginChild {
+        fn try_status(&mut self) -> io::Result<Option<std::process::ExitStatus>> {
+            use windows::Win32::Foundation::STILL_ACTIVE;
+            use windows::Win32::System::Threading::GetExitCodeProcess;
+
+            let mut exit_code = 0_u32;
+            unsafe {
+                GetExitCodeProcess(self.process.raw(), &mut exit_code)
+                    .map_err(|error| io::Error::other(error.to_string()))?;
+            }
+
+            if exit_code == STILL_ACTIVE.0 {
+                Ok(None)
+            } else {
+                Ok(Some(std::process::ExitStatus::from_raw(exit_code)))
+            }
+        }
+
+        fn kill(&mut self) -> io::Result<()> {
+            self.job.terminate()
+        }
+    }
+
+    #[cfg(target_os = "windows")]
+    struct WindowsJobObject(Option<WindowsOwnedHandle>);
 
     #[cfg(target_os = "windows")]
     impl WindowsJobObject {
@@ -3307,10 +3411,9 @@ mod host {
             Self(None)
         }
 
-        fn create_for_child(child: &smol::process::Child) -> Result<Self> {
-            use windows::Win32::Foundation::HANDLE;
+        fn new_kill_on_close() -> Result<Self> {
             use windows::Win32::System::JobObjects::{
-                AssignProcessToJobObject, CreateJobObjectW, JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE,
+                CreateJobObjectW, JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE,
                 JOBOBJECT_EXTENDED_LIMIT_INFORMATION, JobObjectExtendedLimitInformation,
                 SetInformationJobObject,
             };
@@ -3325,15 +3428,18 @@ mod host {
                     &limits as *const _ as *const core::ffi::c_void,
                     std::mem::size_of::<JOBOBJECT_EXTENDED_LIMIT_INFORMATION>() as u32,
                 )?;
-                AssignProcessToJobObject(job, HANDLE(child.as_raw_handle() as isize))?;
-                Ok(Self(Some(job)))
+                Ok(Self(Some(WindowsOwnedHandle::new(job))))
             }
+        }
+
+        fn raw(&self) -> Option<windows::Win32::Foundation::HANDLE> {
+            self.0.as_ref().map(WindowsOwnedHandle::raw)
         }
 
         fn terminate(&self) -> io::Result<()> {
             use windows::Win32::System::JobObjects::TerminateJobObject;
 
-            if let Some(job) = self.0 {
+            if let Some(job) = self.raw() {
                 unsafe {
                     TerminateJobObject(job, 1)
                         .map_err(|error| io::Error::other(error.to_string()))?;
@@ -3344,37 +3450,815 @@ mod host {
     }
 
     #[cfg(target_os = "windows")]
-    impl Drop for WindowsJobObject {
+    struct WindowsOwnedSid(windows::Win32::Security::PSID);
+
+    #[cfg(target_os = "windows")]
+    impl WindowsOwnedSid {
+        fn raw(&self) -> windows::Win32::Security::PSID {
+            self.0
+        }
+    }
+
+    #[cfg(target_os = "windows")]
+    impl Drop for WindowsOwnedSid {
         fn drop(&mut self) {
-            if let Some(job) = self.0.take() {
-                let _ = unsafe { windows::Win32::Foundation::CloseHandle(job) };
+            if !self.0.is_null() {
+                let _ = unsafe {
+                    windows::Win32::Foundation::LocalFree(Some(windows::Win32::Foundation::HLOCAL(
+                        self.0.0,
+                    )))
+                };
             }
         }
     }
 
-    fn spawn_plugin_child(plugin: &InstalledPlugin) -> Result<PluginChild> {
-        let mut command = build_command(plugin)?;
-        let child = command
-            .spawn()
-            .with_context(|| format!("failed to spawn plugin process {command:?}"))?;
+    #[cfg(target_os = "windows")]
+    struct WindowsLocalAllocation(*mut core::ffi::c_void);
 
+    #[cfg(target_os = "windows")]
+    impl WindowsLocalAllocation {
+        fn new(pointer: *mut core::ffi::c_void) -> Option<Self> {
+            (!pointer.is_null()).then_some(Self(pointer))
+        }
+    }
+
+    #[cfg(target_os = "windows")]
+    impl Drop for WindowsLocalAllocation {
+        fn drop(&mut self) {
+            let _ = unsafe {
+                windows::Win32::Foundation::LocalFree(Some(windows::Win32::Foundation::HLOCAL(
+                    self.0 as isize,
+                )))
+            };
+        }
+    }
+
+    #[cfg(target_os = "windows")]
+    struct WindowsProcThreadAttributeList {
+        buffer: Vec<u8>,
+        raw: windows::Win32::System::Threading::LPPROC_THREAD_ATTRIBUTE_LIST,
+    }
+
+    #[cfg(target_os = "windows")]
+    impl WindowsProcThreadAttributeList {
+        fn new(attribute_count: u32) -> Result<Self> {
+            use windows::Win32::System::Threading::InitializeProcThreadAttributeList;
+
+            let mut size = 0_usize;
+            unsafe {
+                let _ = InitializeProcThreadAttributeList(None, attribute_count, None, &mut size);
+            }
+
+            let mut buffer = vec![0_u8; size];
+            let raw = buffer.as_mut_ptr()
+                as windows::Win32::System::Threading::LPPROC_THREAD_ATTRIBUTE_LIST;
+            unsafe {
+                InitializeProcThreadAttributeList(Some(raw), attribute_count, None, &mut size)?;
+            }
+
+            Ok(Self { buffer, raw })
+        }
+
+        fn update(
+            &mut self,
+            attribute: usize,
+            value: *const core::ffi::c_void,
+            size: usize,
+        ) -> Result<()> {
+            use windows::Win32::System::Threading::UpdateProcThreadAttribute;
+
+            unsafe {
+                UpdateProcThreadAttribute(self.raw, 0, attribute, Some(value), size, None, None)?;
+            }
+            Ok(())
+        }
+    }
+
+    #[cfg(target_os = "windows")]
+    impl Drop for WindowsProcThreadAttributeList {
+        fn drop(&mut self) {
+            use windows::Win32::System::Threading::DeleteProcThreadAttributeList;
+
+            unsafe {
+                DeleteProcThreadAttributeList(self.raw);
+            }
+        }
+    }
+
+    #[cfg(target_os = "windows")]
+    #[derive(Clone, Debug)]
+    struct WindowsPathAccess {
+        path: PathBuf,
+        access_mask: u32,
+        recursive: bool,
+    }
+
+    #[cfg(target_os = "windows")]
+    struct WindowsSecurityCapabilities {
+        app_container_sid: WindowsOwnedSid,
+        capability_sids: Vec<WindowsOwnedSid>,
+        sid_and_attributes: Vec<windows::Win32::Security::SID_AND_ATTRIBUTES>,
+    }
+
+    #[cfg(target_os = "windows")]
+    impl WindowsSecurityCapabilities {
+        fn as_raw(&mut self) -> windows::Win32::Security::SECURITY_CAPABILITIES {
+            windows::Win32::Security::SECURITY_CAPABILITIES {
+                AppContainerSid: self.app_container_sid.raw(),
+                Capabilities: self.sid_and_attributes.as_mut_ptr(),
+                CapabilityCount: self.sid_and_attributes.len() as u32,
+                Reserved: 0,
+            }
+        }
+    }
+
+    #[cfg(target_os = "windows")]
+    fn ensure_windows_os_string_has_no_nuls(value: &OsStr) -> Result<()> {
+        if value.encode_wide().any(|unit| unit == 0) {
+            anyhow::bail!(
+                "windows plugin launch values may not contain interior NUL bytes: {}",
+                value.to_string_lossy()
+            );
+        }
+        Ok(())
+    }
+
+    #[cfg(target_os = "windows")]
+    fn windows_wide_null(value: &OsStr) -> Vec<u16> {
+        value.encode_wide().chain(std::iter::once(0)).collect()
+    }
+
+    #[cfg(target_os = "windows")]
+    fn append_windows_command_line_arg(
+        command_line: &mut Vec<u16>,
+        argument: &OsStr,
+    ) -> Result<()> {
+        ensure_windows_os_string_has_no_nuls(argument)?;
+        let mut encoded = argument.encode_wide().peekable();
+        let should_quote = encoded.peek().is_none()
+            || argument
+                .to_string_lossy()
+                .chars()
+                .any(|character| character == ' ' || character == '\t');
+
+        if should_quote {
+            command_line.push('"' as u16);
+        }
+
+        let mut trailing_backslashes = 0_usize;
+        for unit in argument.encode_wide() {
+            if unit == '\\' as u16 {
+                trailing_backslashes += 1;
+            } else {
+                if unit == '"' as u16 {
+                    command_line.extend((0..=trailing_backslashes).map(|_| '\\' as u16));
+                }
+                trailing_backslashes = 0;
+            }
+            command_line.push(unit);
+        }
+
+        if should_quote {
+            command_line.extend((0..trailing_backslashes).map(|_| '\\' as u16));
+            command_line.push('"' as u16);
+        }
+
+        Ok(())
+    }
+
+    #[cfg(target_os = "windows")]
+    fn build_windows_command_line(program: &OsStr, args: &[OsString]) -> Result<Vec<u16>> {
+        ensure_windows_os_string_has_no_nuls(program)?;
+        let mut command_line = Vec::new();
+        command_line.push('"' as u16);
+        command_line.extend(program.encode_wide());
+        command_line.push('"' as u16);
+
+        for argument in args {
+            command_line.push(' ' as u16);
+            append_windows_command_line_arg(&mut command_line, argument)?;
+        }
+
+        command_line.push(0);
+        Ok(command_line)
+    }
+
+    #[cfg(target_os = "windows")]
+    fn windows_appcontainer_name(plugin: &InstalledPlugin) -> String {
+        let suffix = plugin
+            .manifest
+            .id
+            .as_str()
+            .chars()
+            .map(|character| {
+                if character.is_ascii_alphanumeric() {
+                    character
+                } else {
+                    '_'
+                }
+            })
+            .collect::<String>();
+        format!("ZedPlugin_{suffix}")
+    }
+
+    #[cfg(target_os = "windows")]
+    fn derive_windows_capability_sids(name: &str) -> Result<Vec<WindowsOwnedSid>> {
+        use windows::Win32::Security::DeriveCapabilitySidsFromName;
+
+        let mut capability_group_sids = std::ptr::null_mut();
+        let mut capability_group_sid_count = 0_u32;
+        let mut capability_sids = std::ptr::null_mut();
+        let mut capability_sid_count = 0_u32;
+        let capability_name = windows_wide_null(OsStr::new(name));
+
+        unsafe {
+            DeriveCapabilitySidsFromName(
+                windows::core::PCWSTR(capability_name.as_ptr()),
+                &mut capability_group_sids,
+                &mut capability_group_sid_count,
+                &mut capability_sids,
+                &mut capability_sid_count,
+            )?;
+        }
+
+        let mut sids = Vec::new();
+        unsafe {
+            for index in 0..capability_group_sid_count as usize {
+                sids.push(WindowsOwnedSid(*capability_group_sids.add(index)));
+            }
+            for index in 0..capability_sid_count as usize {
+                sids.push(WindowsOwnedSid(*capability_sids.add(index)));
+            }
+        }
+
+        if !capability_group_sids.is_null() {
+            let _ = unsafe {
+                windows::Win32::Foundation::LocalFree(Some(windows::Win32::Foundation::HLOCAL(
+                    capability_group_sids as isize,
+                )))
+            };
+        }
+        if !capability_sids.is_null() {
+            let _ = unsafe {
+                windows::Win32::Foundation::LocalFree(Some(windows::Win32::Foundation::HLOCAL(
+                    capability_sids as isize,
+                )))
+            };
+        }
+
+        Ok(sids)
+    }
+
+    #[cfg(target_os = "windows")]
+    fn windows_security_capabilities(
+        plugin: &InstalledPlugin,
+    ) -> Result<WindowsSecurityCapabilities> {
+        use windows::Win32::Security::Isolation::{
+            CreateAppContainerProfile, DeriveAppContainerSidFromAppContainerName,
+        };
+
+        let appcontainer_name = windows_appcontainer_name(plugin);
+        let appcontainer_name_wide = windows_wide_null(OsStr::new(&appcontainer_name));
+        let plugin_name = windows_wide_null(OsStr::new(plugin.manifest.name.as_ref()));
+        let app_container_sid = unsafe {
+            DeriveAppContainerSidFromAppContainerName(windows::core::PCWSTR(
+                appcontainer_name_wide.as_ptr(),
+            ))
+            .or_else(|_| {
+                CreateAppContainerProfile(
+                    windows::core::PCWSTR(appcontainer_name_wide.as_ptr()),
+                    windows::core::PCWSTR(plugin_name.as_ptr()),
+                    windows::core::PCWSTR(plugin_name.as_ptr()),
+                    None,
+                )
+            })
+        }?;
+
+        let mut capability_sids = Vec::new();
+        for capability in ["internetClient", "privateNetworkClientServer"] {
+            capability_sids.extend(derive_windows_capability_sids(capability)?);
+        }
+
+        let sid_and_attributes = capability_sids
+            .iter()
+            .map(|sid| windows::Win32::Security::SID_AND_ATTRIBUTES {
+                Sid: sid.raw(),
+                Attributes: 0,
+            })
+            .collect();
+
+        Ok(WindowsSecurityCapabilities {
+            app_container_sid: WindowsOwnedSid(app_container_sid),
+            capability_sids,
+            sid_and_attributes,
+        })
+    }
+
+    #[cfg(target_os = "windows")]
+    fn windows_read_execute_mask() -> u32 {
+        use windows::Win32::Storage::FileSystem::{FILE_GENERIC_EXECUTE, FILE_GENERIC_READ};
+
+        FILE_GENERIC_READ.0 | FILE_GENERIC_EXECUTE.0
+    }
+
+    #[cfg(target_os = "windows")]
+    fn windows_read_write_execute_mask() -> u32 {
+        use windows::Win32::Storage::FileSystem::{DELETE, FILE_GENERIC_WRITE};
+
+        windows_read_execute_mask() | FILE_GENERIC_WRITE.0 | DELETE.0
+    }
+
+    #[cfg(target_os = "windows")]
+    fn windows_record_path_access(
+        entries: &mut BTreeMap<PathBuf, WindowsPathAccess>,
+        path: &Path,
+        access_mask: u32,
+        recursive: bool,
+    ) {
+        let entry = entries
+            .entry(path.to_path_buf())
+            .or_insert_with(|| WindowsPathAccess {
+                path: path.to_path_buf(),
+                access_mask: 0,
+                recursive: false,
+            });
+        entry.access_mask |= access_mask;
+        entry.recursive |= recursive;
+    }
+
+    #[cfg(target_os = "windows")]
+    fn windows_record_recursive_path_access(
+        entries: &mut BTreeMap<PathBuf, WindowsPathAccess>,
+        path: &Path,
+        access_mask: u32,
+    ) {
+        windows_record_path_access(entries, path, access_mask, true);
+        for ancestor in path.ancestors().skip(1) {
+            if ancestor.as_os_str().is_empty() {
+                continue;
+            }
+            windows_record_path_access(entries, ancestor, windows_read_execute_mask(), false);
+        }
+    }
+
+    #[cfg(target_os = "windows")]
+    fn windows_cargo_workspace_paths(plugin_root: &Path) -> Vec<PathBuf> {
+        plugin_root
+            .ancestors()
+            .filter(|ancestor| {
+                ancestor.join("Cargo.toml").exists()
+                    || ancestor.join("Cargo.lock").exists()
+                    || ancestor.join(".cargo").exists()
+            })
+            .map(Path::to_path_buf)
+            .collect()
+    }
+
+    #[cfg(target_os = "windows")]
+    fn windows_plugin_data_dir(plugin: &InstalledPlugin) -> PathBuf {
+        paths::data_dir()
+            .join("plugins")
+            .join(plugin.manifest.id.as_str())
+    }
+
+    #[cfg(target_os = "windows")]
+    fn windows_plugin_temp_dir(plugin: &InstalledPlugin) -> PathBuf {
+        paths::temp_dir()
+            .join("plugins")
+            .join(plugin.manifest.id.as_str())
+    }
+
+    #[cfg(target_os = "windows")]
+    fn windows_access_plan(
+        plugin: &InstalledPlugin,
+        launch_spec: &PluginLaunchSpec,
+    ) -> BTreeMap<PathBuf, WindowsPathAccess> {
+        let mut entries = BTreeMap::new();
+        windows_record_recursive_path_access(
+            &mut entries,
+            &plugin.installation.root,
+            windows_read_execute_mask(),
+        );
+        windows_record_recursive_path_access(
+            &mut entries,
+            &windows_plugin_data_dir(plugin),
+            windows_read_write_execute_mask(),
+        );
+        windows_record_recursive_path_access(
+            &mut entries,
+            &windows_plugin_temp_dir(plugin),
+            windows_read_write_execute_mask(),
+        );
+
+        if let Some(cargo_target_dir) = &launch_spec.cargo_target_dir {
+            windows_record_recursive_path_access(
+                &mut entries,
+                cargo_target_dir,
+                windows_read_write_execute_mask(),
+            );
+            for ancestor in windows_cargo_workspace_paths(&plugin.installation.root) {
+                windows_record_recursive_path_access(
+                    &mut entries,
+                    &ancestor,
+                    windows_read_execute_mask(),
+                );
+            }
+            windows_record_recursive_path_access(
+                &mut entries,
+                &env::var_os("CARGO_HOME")
+                    .map(PathBuf::from)
+                    .unwrap_or_else(|| paths::home_dir().join(".cargo")),
+                windows_read_write_execute_mask(),
+            );
+            windows_record_recursive_path_access(
+                &mut entries,
+                &env::var_os("RUSTUP_HOME")
+                    .map(PathBuf::from)
+                    .unwrap_or_else(|| paths::home_dir().join(".rustup")),
+                windows_read_write_execute_mask(),
+            );
+            if let Some(program_parent) = Path::new(&launch_spec.program).parent() {
+                windows_record_recursive_path_access(
+                    &mut entries,
+                    program_parent,
+                    windows_read_execute_mask(),
+                );
+            }
+        }
+
+        entries
+    }
+
+    #[cfg(target_os = "windows")]
+    fn windows_acl_error(
+        context: &str,
+        error: windows::Win32::Foundation::WIN32_ERROR,
+    ) -> anyhow::Error {
+        anyhow::anyhow!(
+            "{context}: {}",
+            io::Error::from_raw_os_error(error.0 as i32)
+        )
+    }
+
+    #[cfg(target_os = "windows")]
+    fn windows_path_has_access(
+        path: &Path,
+        sid: windows::Win32::Security::PSID,
+        access_mask: u32,
+    ) -> Result<bool> {
+        use windows::Win32::Foundation::ERROR_SUCCESS;
+        use windows::Win32::Security::Authorization::{
+            BuildTrusteeWithSidW, GetEffectiveRightsFromAclW, GetNamedSecurityInfoW,
+            SE_FILE_OBJECT, TRUSTEE_W,
+        };
+        use windows::Win32::Security::DACL_SECURITY_INFORMATION;
+
+        let wide_path = windows_wide_null(path.as_os_str());
+        let mut security_descriptor = std::ptr::null_mut();
+        let mut dacl = std::ptr::null_mut();
+        let error = unsafe {
+            GetNamedSecurityInfoW(
+                windows::core::PCWSTR(wide_path.as_ptr()),
+                SE_FILE_OBJECT,
+                DACL_SECURITY_INFORMATION,
+                None,
+                None,
+                Some(&mut dacl),
+                None,
+                &mut security_descriptor,
+            )
+        };
+        if error != ERROR_SUCCESS {
+            return Err(windows_acl_error(
+                &format!("failed to read security descriptor for {}", path.display()),
+                error,
+            ));
+        }
+        let _security_descriptor = WindowsLocalAllocation::new(security_descriptor.cast());
+
+        if dacl.is_null() {
+            return Ok(false);
+        }
+
+        let mut trustee = TRUSTEE_W::default();
+        unsafe {
+            BuildTrusteeWithSidW(&mut trustee, Some(sid));
+        }
+
+        let mut effective_rights = 0_u32;
+        let error = unsafe { GetEffectiveRightsFromAclW(dacl, &trustee, &mut effective_rights) };
+        if error != ERROR_SUCCESS {
+            return Err(windows_acl_error(
+                &format!("failed to inspect effective rights for {}", path.display()),
+                error,
+            ));
+        }
+
+        Ok((effective_rights & access_mask) == access_mask)
+    }
+
+    #[cfg(target_os = "windows")]
+    fn ensure_windows_path_access(
+        path: &Path,
+        sid: windows::Win32::Security::PSID,
+        access_mask: u32,
+        recursive: bool,
+    ) -> Result<()> {
+        use windows::Win32::Foundation::ERROR_SUCCESS;
+        use windows::Win32::Security::Authorization::{
+            BuildTrusteeWithSidW, EXPLICIT_ACCESS_W, GRANT_ACCESS, GetNamedSecurityInfoW,
+            ProgressInvokeNever, SE_FILE_OBJECT, SET_ACCESS, SetEntriesInAclW,
+            SetNamedSecurityInfoW, TREE_SEC_INFO_SET, TRUSTEE_W, TreeSetNamedSecurityInfoW,
+        };
+        use windows::Win32::Security::{
+            ACL, DACL_SECURITY_INFORMATION, SUB_CONTAINERS_AND_OBJECTS_INHERIT,
+        };
+
+        if !path.exists() || windows_path_has_access(path, sid, access_mask)? {
+            return Ok(());
+        }
+
+        let wide_path = windows_wide_null(path.as_os_str());
+        let mut security_descriptor = std::ptr::null_mut();
+        let mut current_dacl = std::ptr::null_mut();
+        let error = unsafe {
+            GetNamedSecurityInfoW(
+                windows::core::PCWSTR(wide_path.as_ptr()),
+                SE_FILE_OBJECT,
+                DACL_SECURITY_INFORMATION,
+                None,
+                None,
+                Some(&mut current_dacl),
+                None,
+                &mut security_descriptor,
+            )
+        };
+        if error != ERROR_SUCCESS {
+            return Err(windows_acl_error(
+                &format!("failed to load ACL for {}", path.display()),
+                error,
+            ));
+        }
+        let _security_descriptor = WindowsLocalAllocation::new(security_descriptor.cast());
+
+        let mut trustee = TRUSTEE_W::default();
+        unsafe {
+            BuildTrusteeWithSidW(&mut trustee, Some(sid));
+        }
+
+        let explicit_access = EXPLICIT_ACCESS_W {
+            grfAccessPermissions: access_mask,
+            grfAccessMode: GRANT_ACCESS,
+            grfInheritance: if recursive && path.is_dir() {
+                SUB_CONTAINERS_AND_OBJECTS_INHERIT.0
+            } else {
+                0
+            },
+            Trustee: trustee,
+        };
+
+        let mut updated_dacl = std::ptr::null_mut();
+        let error = unsafe {
+            SetEntriesInAclW(
+                Some(&[explicit_access]),
+                if current_dacl.is_null() {
+                    None
+                } else {
+                    Some(current_dacl as *const ACL)
+                },
+                &mut updated_dacl,
+            )
+        };
+        if error != ERROR_SUCCESS {
+            return Err(windows_acl_error(
+                &format!("failed to build ACL for {}", path.display()),
+                error,
+            ));
+        }
+        let _updated_dacl = WindowsLocalAllocation::new(updated_dacl.cast());
+
+        let error = if recursive && path.is_dir() {
+            unsafe {
+                TreeSetNamedSecurityInfoW(
+                    windows::core::PCWSTR(wide_path.as_ptr()),
+                    SE_FILE_OBJECT,
+                    DACL_SECURITY_INFORMATION,
+                    None,
+                    None,
+                    Some(updated_dacl as *const ACL),
+                    None,
+                    TREE_SEC_INFO_SET,
+                    None,
+                    ProgressInvokeNever,
+                    None,
+                )
+            }
+        } else {
+            unsafe {
+                SetNamedSecurityInfoW(
+                    windows::core::PCWSTR(wide_path.as_ptr()),
+                    SE_FILE_OBJECT,
+                    DACL_SECURITY_INFORMATION,
+                    None,
+                    None,
+                    Some(updated_dacl as *const ACL),
+                    None,
+                )
+            }
+        };
+        if error != ERROR_SUCCESS {
+            return Err(windows_acl_error(
+                &format!("failed to apply ACL for {}", path.display()),
+                error,
+            ));
+        }
+
+        Ok(())
+    }
+
+    #[cfg(target_os = "windows")]
+    fn ensure_windows_sandbox_paths(
+        plugin: &InstalledPlugin,
+        launch_spec: &PluginLaunchSpec,
+        sid: windows::Win32::Security::PSID,
+    ) -> Result<()> {
+        std::fs::create_dir_all(windows_plugin_data_dir(plugin)).with_context(|| {
+            format!(
+                "failed to create plugin data directory for {}",
+                plugin.manifest.id.as_str()
+            )
+        })?;
+        std::fs::create_dir_all(windows_plugin_temp_dir(plugin)).with_context(|| {
+            format!(
+                "failed to create plugin temp directory for {}",
+                plugin.manifest.id.as_str()
+            )
+        })?;
+        if let Some(cargo_target_dir) = &launch_spec.cargo_target_dir {
+            std::fs::create_dir_all(cargo_target_dir).with_context(|| {
+                format!(
+                    "failed to create cargo target directory {}",
+                    cargo_target_dir.display()
+                )
+            })?;
+        }
+
+        for access in windows_access_plan(plugin, launch_spec).into_values() {
+            ensure_windows_path_access(&access.path, sid, access.access_mask, access.recursive)?;
+        }
+
+        Ok(())
+    }
+
+    #[cfg(target_os = "windows")]
+    fn create_windows_pipe_pair() -> Result<(WindowsOwnedHandle, WindowsOwnedHandle)> {
+        use windows::Win32::Security::SECURITY_ATTRIBUTES;
+        use windows::Win32::System::Pipes::CreatePipe;
+
+        let mut read_handle = windows::Win32::Foundation::HANDLE::default();
+        let mut write_handle = windows::Win32::Foundation::HANDLE::default();
+        let security_attributes = SECURITY_ATTRIBUTES {
+            nLength: std::mem::size_of::<SECURITY_ATTRIBUTES>() as u32,
+            lpSecurityDescriptor: std::ptr::null_mut(),
+            bInheritHandle: true.into(),
+        };
+        unsafe {
+            CreatePipe(
+                &mut read_handle,
+                &mut write_handle,
+                Some(&security_attributes),
+                0,
+            )?;
+        }
+        Ok((
+            WindowsOwnedHandle::new(read_handle),
+            WindowsOwnedHandle::new(write_handle),
+        ))
+    }
+
+    fn spawn_plugin_child(plugin: &InstalledPlugin) -> Result<PluginChild> {
         #[cfg(target_os = "windows")]
         {
-            let job = match WindowsJobObject::create_for_child(&child) {
-                Ok(job) => job,
-                Err(error) => {
-                    let mut child = child;
-                    child.kill().ok();
-                    return Err(error);
-                }
-            };
-            return Ok(PluginChild::with_job(child, job));
+            return spawn_plugin_child_windows(plugin);
         }
 
         #[cfg(not(target_os = "windows"))]
         {
-            Ok(PluginChild::new(child))
+            let mut command = build_command(plugin)?;
+            let child = command
+                .spawn()
+                .with_context(|| format!("failed to spawn plugin process {command:?}"))?;
+            Ok(PluginChild::from_async(child))
         }
+    }
+
+    #[cfg(target_os = "windows")]
+    fn spawn_plugin_child_windows(plugin: &InstalledPlugin) -> Result<PluginChild> {
+        use windows::Win32::Foundation::{HANDLE_FLAGS, SetHandleInformation};
+        use windows::Win32::System::Threading::{
+            CREATE_BREAKAWAY_FROM_JOB, CREATE_NO_WINDOW, CreateProcessW,
+            EXTENDED_STARTUPINFO_PRESENT, PROC_THREAD_ATTRIBUTE_HANDLE_LIST,
+            PROC_THREAD_ATTRIBUTE_JOB_LIST, PROC_THREAD_ATTRIBUTE_SECURITY_CAPABILITIES,
+            PROCESS_INFORMATION, STARTF_USESTDHANDLES, STARTUPINFOEXW,
+        };
+
+        let launch_spec = sandbox_launch_spec(plugin, build_launch_spec(plugin)?)?;
+        let mut security_capabilities = windows_security_capabilities(plugin)?;
+        ensure_windows_sandbox_paths(
+            plugin,
+            &launch_spec,
+            security_capabilities.app_container_sid.raw(),
+        )?;
+
+        let job = WindowsJobObject::new_kill_on_close()?;
+        let (child_stdin, parent_stdin) = create_windows_pipe_pair()?;
+        let (parent_stdout, child_stdout) = create_windows_pipe_pair()?;
+        let (parent_stderr, child_stderr) = create_windows_pipe_pair()?;
+
+        unsafe {
+            SetHandleInformation(
+                parent_stdin.raw(),
+                windows::Win32::Foundation::HANDLE_FLAG_INHERIT.0,
+                HANDLE_FLAGS(0),
+            )?;
+            SetHandleInformation(
+                parent_stdout.raw(),
+                windows::Win32::Foundation::HANDLE_FLAG_INHERIT.0,
+                HANDLE_FLAGS(0),
+            )?;
+            SetHandleInformation(
+                parent_stderr.raw(),
+                windows::Win32::Foundation::HANDLE_FLAG_INHERIT.0,
+                HANDLE_FLAGS(0),
+            )?;
+        }
+
+        let inherited_handles = [child_stdin.raw(), child_stdout.raw(), child_stderr.raw()];
+        let job_handle = job.raw().ok_or_else(|| {
+            anyhow::anyhow!("windows plugin sandbox failed to create a job object")
+        })?;
+        let mut raw_security_capabilities = security_capabilities.as_raw();
+        let mut attribute_list = WindowsProcThreadAttributeList::new(3)?;
+        attribute_list.update(
+            PROC_THREAD_ATTRIBUTE_SECURITY_CAPABILITIES as usize,
+            (&mut raw_security_capabilities
+                as *mut windows::Win32::Security::SECURITY_CAPABILITIES)
+                .cast(),
+            std::mem::size_of::<windows::Win32::Security::SECURITY_CAPABILITIES>(),
+        )?;
+        attribute_list.update(
+            PROC_THREAD_ATTRIBUTE_HANDLE_LIST as usize,
+            inherited_handles.as_ptr().cast(),
+            std::mem::size_of_val(&inherited_handles),
+        )?;
+        attribute_list.update(
+            PROC_THREAD_ATTRIBUTE_JOB_LIST as usize,
+            (&job_handle as *const windows::Win32::Foundation::HANDLE).cast(),
+            std::mem::size_of::<windows::Win32::Foundation::HANDLE>(),
+        )?;
+
+        let mut startup_info = STARTUPINFOEXW {
+            StartupInfo: windows::Win32::System::Threading::STARTUPINFOW::default(),
+            lpAttributeList: attribute_list.raw,
+        };
+        startup_info.StartupInfo.cb = std::mem::size_of::<STARTUPINFOEXW>() as u32;
+        startup_info.StartupInfo.dwFlags = STARTF_USESTDHANDLES;
+        startup_info.StartupInfo.hStdInput = child_stdin.raw();
+        startup_info.StartupInfo.hStdOutput = child_stdout.raw();
+        startup_info.StartupInfo.hStdError = child_stderr.raw();
+
+        let application_name = windows_wide_null(launch_spec.program.as_os_str());
+        let current_dir = windows_wide_null(launch_spec.current_dir.as_os_str());
+        let mut command_line =
+            build_windows_command_line(launch_spec.program.as_os_str(), &launch_spec.args)?;
+        let mut process_information = PROCESS_INFORMATION::default();
+        unsafe {
+            CreateProcessW(
+                windows::core::PCWSTR(application_name.as_ptr()),
+                Some(windows::core::PWSTR(command_line.as_mut_ptr())),
+                None,
+                None,
+                true,
+                CREATE_NO_WINDOW | CREATE_BREAKAWAY_FROM_JOB | EXTENDED_STARTUPINFO_PRESENT,
+                None,
+                windows::core::PCWSTR(current_dir.as_ptr()),
+                (&startup_info as *const STARTUPINFOEXW).cast(),
+                &mut process_information,
+            )?;
+        }
+
+        drop(child_stdin);
+        drop(child_stdout);
+        drop(child_stderr);
+
+        Ok(PluginChild::Windows(WindowsPluginChild {
+            process: WindowsOwnedHandle::new(process_information.hProcess),
+            thread: WindowsOwnedHandle::new(process_information.hThread),
+            stdin: Some(Unblock::new(parent_stdin.into_file())),
+            stdout: Some(Unblock::new(parent_stdout.into_file())),
+            stderr: Some(Unblock::new(parent_stderr.into_file())),
+            job,
+        }))
     }
 
     fn spawn_process(
@@ -3463,21 +4347,31 @@ mod host {
         async_cx
             .background_spawn(async move {
                 let mut termination_reason = None;
+                let mut kill_requested = false;
+                let mut post_kill_polls = 0_u32;
                 let exit_status = loop {
                     if let Some(status) = child.try_status().ok().flatten() {
                         break status.code();
                     }
 
-                    match terminate_receiver.try_recv() {
-                        Ok(termination) => {
-                            termination_reason = Some(termination);
-                            child.kill().ok();
-                            break child.status().await.ok().and_then(|status| status.code());
+                    if !kill_requested {
+                        match terminate_receiver.try_recv() {
+                            Ok(termination) => {
+                                termination_reason = Some(termination);
+                                child.kill().ok();
+                                kill_requested = true;
+                            }
+                            Err(channel::TryRecvError::Closed) => {
+                                child.kill().ok();
+                                kill_requested = true;
+                            }
+                            Err(channel::TryRecvError::Empty) => {}
                         }
-                        Err(channel::TryRecvError::Closed) => {
-                            break child.status().await.ok().and_then(|status| status.code());
+                    } else {
+                        post_kill_polls += 1;
+                        if post_kill_polls >= 100 {
+                            break None;
                         }
-                        Err(channel::TryRecvError::Empty) => {}
                     }
 
                     background_executor.timer(Duration::from_millis(50)).await;
@@ -3527,13 +4421,64 @@ mod host {
         plugin_root.join(".zed-plugin-target")
     }
 
+    fn resolve_program_on_path(program: &OsStr) -> Result<PathBuf> {
+        let path = env::var_os("PATH").ok_or_else(|| {
+            anyhow::anyhow!(
+                "failed to resolve `{}` because PATH is not set",
+                program.to_string_lossy()
+            )
+        })?;
+        let candidate_paths = env::split_paths(&path);
+
+        #[cfg(target_os = "windows")]
+        let suffixes = {
+            let pathext = env::var_os("PATHEXT")
+                .map(|value| {
+                    env::split_paths(&value)
+                        .map(|path| path.into_os_string())
+                        .collect::<Vec<_>>()
+                })
+                .unwrap_or_default();
+            if pathext.is_empty() {
+                vec![
+                    OsString::from(".exe"),
+                    OsString::from(".cmd"),
+                    OsString::from(".bat"),
+                ]
+            } else {
+                pathext
+            }
+        };
+
+        for directory in candidate_paths {
+            let candidate = directory.join(program);
+            if candidate.is_file() {
+                return Ok(candidate);
+            }
+
+            #[cfg(target_os = "windows")]
+            if candidate.extension().is_none() {
+                for suffix in &suffixes {
+                    let mut extended_program = OsString::from(program);
+                    extended_program.push(suffix);
+                    let extended = directory.join(extended_program);
+                    if extended.is_file() {
+                        return Ok(extended);
+                    }
+                }
+            }
+        }
+
+        anyhow::bail!("failed to resolve `{}` on PATH", program.to_string_lossy())
+    }
+
     fn build_launch_spec(plugin: &InstalledPlugin) -> Result<PluginLaunchSpec> {
         let plugin_root = plugin.installation.root.clone();
         let cargo_manifest = plugin_root.join("Cargo.toml");
 
         if cargo_manifest.exists() {
             return Ok(PluginLaunchSpec {
-                program: OsString::from("cargo"),
+                program: resolve_program_on_path(OsStr::new("cargo"))?.into_os_string(),
                 args: vec![
                     OsString::from("run"),
                     OsString::from("--quiet"),
@@ -3783,6 +4728,365 @@ mod host {
     }
 
     #[cfg(target_os = "linux")]
+    #[derive(Clone, Copy, Debug, PartialEq, Eq)]
+    enum LinuxLandlockAccess {
+        ReadOnly,
+        ReadWrite,
+    }
+
+    #[cfg(target_os = "linux")]
+    #[derive(Debug)]
+    struct LinuxLandlockRule {
+        fd: OwnedFd,
+        access: LinuxLandlockAccess,
+    }
+
+    #[cfg(target_os = "linux")]
+    #[repr(C)]
+    struct LinuxLandlockRulesetAttr {
+        handled_access_fs: u64,
+    }
+
+    #[cfg(target_os = "linux")]
+    #[repr(C)]
+    struct LinuxLandlockPathBeneathAttr {
+        allowed_access: u64,
+        parent_fd: i32,
+    }
+
+    #[cfg(target_os = "linux")]
+    const LINUX_LANDLOCK_CREATE_RULESET_VERSION: usize = 1;
+    #[cfg(target_os = "linux")]
+    const LINUX_LANDLOCK_RULE_PATH_BENEATH: u32 = 1;
+    #[cfg(target_os = "linux")]
+    const LINUX_LANDLOCK_ACCESS_FS_EXECUTE: u64 = 1 << 0;
+    #[cfg(target_os = "linux")]
+    const LINUX_LANDLOCK_ACCESS_FS_WRITE_FILE: u64 = 1 << 1;
+    #[cfg(target_os = "linux")]
+    const LINUX_LANDLOCK_ACCESS_FS_READ_FILE: u64 = 1 << 2;
+    #[cfg(target_os = "linux")]
+    const LINUX_LANDLOCK_ACCESS_FS_READ_DIR: u64 = 1 << 3;
+    #[cfg(target_os = "linux")]
+    const LINUX_LANDLOCK_ACCESS_FS_REMOVE_DIR: u64 = 1 << 4;
+    #[cfg(target_os = "linux")]
+    const LINUX_LANDLOCK_ACCESS_FS_REMOVE_FILE: u64 = 1 << 5;
+    #[cfg(target_os = "linux")]
+    const LINUX_LANDLOCK_ACCESS_FS_MAKE_CHAR: u64 = 1 << 6;
+    #[cfg(target_os = "linux")]
+    const LINUX_LANDLOCK_ACCESS_FS_MAKE_DIR: u64 = 1 << 7;
+    #[cfg(target_os = "linux")]
+    const LINUX_LANDLOCK_ACCESS_FS_MAKE_REG: u64 = 1 << 8;
+    #[cfg(target_os = "linux")]
+    const LINUX_LANDLOCK_ACCESS_FS_MAKE_SOCK: u64 = 1 << 9;
+    #[cfg(target_os = "linux")]
+    const LINUX_LANDLOCK_ACCESS_FS_MAKE_FIFO: u64 = 1 << 10;
+    #[cfg(target_os = "linux")]
+    const LINUX_LANDLOCK_ACCESS_FS_MAKE_BLOCK: u64 = 1 << 11;
+    #[cfg(target_os = "linux")]
+    const LINUX_LANDLOCK_ACCESS_FS_MAKE_SYM: u64 = 1 << 12;
+    #[cfg(target_os = "linux")]
+    const LINUX_LANDLOCK_ACCESS_FS_REFER: u64 = 1 << 13;
+    #[cfg(target_os = "linux")]
+    const LINUX_LANDLOCK_ACCESS_FS_TRUNCATE: u64 = 1 << 14;
+
+    #[cfg(target_os = "linux")]
+    fn insert_linux_runtime_paths(paths: &mut BTreeSet<PathBuf>) {
+        paths.insert(env::temp_dir());
+
+        if let Some(tmpdir) = env::var_os("TMPDIR").map(PathBuf::from) {
+            paths.insert(tmpdir);
+        }
+
+        if let Some(runtime_dir) = env::var_os("XDG_RUNTIME_DIR").map(PathBuf::from) {
+            paths.insert(runtime_dir);
+        }
+    }
+
+    #[cfg(target_os = "linux")]
+    fn linux_cargo_workspace_read_paths(plugin_root: &Path) -> Vec<PathBuf> {
+        plugin_root
+            .ancestors()
+            .filter(|ancestor| {
+                ancestor.join("Cargo.toml").exists()
+                    || ancestor.join("Cargo.lock").exists()
+                    || ancestor.join(".cargo").exists()
+            })
+            .map(Path::to_path_buf)
+            .collect()
+    }
+
+    #[cfg(target_os = "linux")]
+    fn linux_landlock_read_paths(
+        plugin: &InstalledPlugin,
+        launch_spec: &PluginLaunchSpec,
+    ) -> Vec<PathBuf> {
+        let mut paths = BTreeSet::from([
+            PathBuf::from("/usr"),
+            PathBuf::from("/bin"),
+            PathBuf::from("/sbin"),
+            PathBuf::from("/lib"),
+            PathBuf::from("/lib64"),
+            PathBuf::from("/etc"),
+            PathBuf::from("/dev"),
+            PathBuf::from("/proc"),
+            PathBuf::from("/run"),
+            plugin.installation.root.clone(),
+        ]);
+        if Path::new("/nix/store").exists() {
+            paths.insert(PathBuf::from("/nix/store"));
+        }
+        insert_linux_runtime_paths(&mut paths);
+
+        if let Some(cargo_target_dir) = &launch_spec.cargo_target_dir {
+            paths.insert(cargo_target_dir.clone());
+            paths.extend(linux_cargo_workspace_read_paths(&plugin.installation.root));
+            paths.insert(
+                env::var_os("CARGO_HOME")
+                    .map(PathBuf::from)
+                    .unwrap_or_else(|| paths::home_dir().join(".cargo")),
+            );
+            paths.insert(
+                env::var_os("RUSTUP_HOME")
+                    .map(PathBuf::from)
+                    .unwrap_or_else(|| paths::home_dir().join(".rustup")),
+            );
+        }
+
+        paths.into_iter().collect()
+    }
+
+    #[cfg(target_os = "linux")]
+    fn linux_landlock_write_paths(
+        plugin: &InstalledPlugin,
+        launch_spec: &PluginLaunchSpec,
+    ) -> Vec<PathBuf> {
+        let mut paths = BTreeSet::new();
+        paths.insert(plugin.installation.root.clone());
+        paths.insert(
+            paths::data_dir()
+                .join("plugins")
+                .join(plugin.manifest.id.as_str()),
+        );
+        paths.insert(
+            paths::temp_dir()
+                .join("plugins")
+                .join(plugin.manifest.id.as_str()),
+        );
+        insert_linux_runtime_paths(&mut paths);
+
+        if let Some(cargo_target_dir) = &launch_spec.cargo_target_dir {
+            paths.insert(cargo_target_dir.clone());
+            paths.insert(
+                env::var_os("CARGO_HOME")
+                    .map(PathBuf::from)
+                    .unwrap_or_else(|| paths::home_dir().join(".cargo")),
+            );
+            paths.insert(
+                env::var_os("RUSTUP_HOME")
+                    .map(PathBuf::from)
+                    .unwrap_or_else(|| paths::home_dir().join(".rustup")),
+            );
+        }
+
+        paths.into_iter().collect()
+    }
+
+    #[cfg(target_os = "linux")]
+    fn open_linux_landlock_path(path: &Path) -> io::Result<OwnedFd> {
+        let bytes = path.as_os_str().as_bytes();
+        let path = CString::new(bytes).map_err(|_| {
+            io::Error::new(
+                io::ErrorKind::InvalidInput,
+                format!(
+                    "linux sandbox path contains interior NUL: {}",
+                    path.display()
+                ),
+            )
+        })?;
+
+        let fd = unsafe { libc::open(path.as_ptr(), libc::O_PATH | libc::O_CLOEXEC) };
+        if fd < 0 {
+            Err(io::Error::last_os_error())
+        } else {
+            Ok(unsafe { OwnedFd::from_raw_fd(fd) })
+        }
+    }
+
+    #[cfg(target_os = "linux")]
+    fn push_linux_landlock_rules(
+        rules: &mut Vec<LinuxLandlockRule>,
+        paths: Vec<PathBuf>,
+        access: LinuxLandlockAccess,
+    ) -> Result<()> {
+        for path in paths {
+            if !path.exists() {
+                continue;
+            }
+
+            let fd = open_linux_landlock_path(&path)
+                .with_context(|| format!("failed to open linux sandbox path {}", path.display()))?;
+            rules.push(LinuxLandlockRule { fd, access });
+        }
+
+        Ok(())
+    }
+
+    #[cfg(target_os = "linux")]
+    fn prepare_linux_landlock_rules(
+        plugin: &InstalledPlugin,
+        launch_spec: &PluginLaunchSpec,
+    ) -> Result<Vec<LinuxLandlockRule>> {
+        let mut rules = Vec::new();
+        push_linux_landlock_rules(
+            &mut rules,
+            linux_landlock_read_paths(plugin, launch_spec),
+            LinuxLandlockAccess::ReadOnly,
+        )?;
+        push_linux_landlock_rules(
+            &mut rules,
+            linux_landlock_write_paths(plugin, launch_spec),
+            LinuxLandlockAccess::ReadWrite,
+        )?;
+        Ok(rules)
+    }
+
+    #[cfg(target_os = "linux")]
+    fn linux_landlock_supported_access_fs(abi_version: i32) -> u64 {
+        let mut access = LINUX_LANDLOCK_ACCESS_FS_EXECUTE
+            | LINUX_LANDLOCK_ACCESS_FS_WRITE_FILE
+            | LINUX_LANDLOCK_ACCESS_FS_READ_FILE
+            | LINUX_LANDLOCK_ACCESS_FS_READ_DIR
+            | LINUX_LANDLOCK_ACCESS_FS_REMOVE_DIR
+            | LINUX_LANDLOCK_ACCESS_FS_REMOVE_FILE
+            | LINUX_LANDLOCK_ACCESS_FS_MAKE_DIR
+            | LINUX_LANDLOCK_ACCESS_FS_MAKE_REG
+            | LINUX_LANDLOCK_ACCESS_FS_MAKE_SOCK
+            | LINUX_LANDLOCK_ACCESS_FS_MAKE_FIFO
+            | LINUX_LANDLOCK_ACCESS_FS_MAKE_SYM;
+
+        if abi_version >= 2 {
+            access |= LINUX_LANDLOCK_ACCESS_FS_REFER;
+        }
+
+        if abi_version >= 3 {
+            access |= LINUX_LANDLOCK_ACCESS_FS_TRUNCATE;
+        }
+
+        access
+    }
+
+    #[cfg(target_os = "linux")]
+    fn linux_landlock_allowed_access(abi_version: i32, access: LinuxLandlockAccess) -> u64 {
+        let mut allowed = LINUX_LANDLOCK_ACCESS_FS_EXECUTE
+            | LINUX_LANDLOCK_ACCESS_FS_READ_FILE
+            | LINUX_LANDLOCK_ACCESS_FS_READ_DIR;
+
+        if access == LinuxLandlockAccess::ReadWrite {
+            allowed |= LINUX_LANDLOCK_ACCESS_FS_WRITE_FILE
+                | LINUX_LANDLOCK_ACCESS_FS_REMOVE_DIR
+                | LINUX_LANDLOCK_ACCESS_FS_REMOVE_FILE
+                | LINUX_LANDLOCK_ACCESS_FS_MAKE_DIR
+                | LINUX_LANDLOCK_ACCESS_FS_MAKE_REG
+                | LINUX_LANDLOCK_ACCESS_FS_MAKE_SOCK
+                | LINUX_LANDLOCK_ACCESS_FS_MAKE_FIFO
+                | LINUX_LANDLOCK_ACCESS_FS_MAKE_SYM;
+
+            if abi_version >= 2 {
+                allowed |= LINUX_LANDLOCK_ACCESS_FS_REFER;
+            }
+
+            if abi_version >= 3 {
+                allowed |= LINUX_LANDLOCK_ACCESS_FS_TRUNCATE;
+            }
+        }
+
+        allowed
+    }
+
+    #[cfg(target_os = "linux")]
+    fn install_linux_no_new_privs() -> io::Result<()> {
+        unsafe {
+            if libc::prctl(libc::PR_SET_NO_NEW_PRIVS, 1, 0, 0, 0) != 0 {
+                return Err(io::Error::last_os_error());
+            }
+        }
+
+        Ok(())
+    }
+
+    #[cfg(target_os = "linux")]
+    fn install_linux_landlock(rules: &[LinuxLandlockRule]) -> io::Result<()> {
+        let abi_version = unsafe {
+            libc::syscall(
+                libc::SYS_landlock_create_ruleset,
+                std::ptr::null::<LinuxLandlockRulesetAttr>(),
+                0,
+                LINUX_LANDLOCK_CREATE_RULESET_VERSION,
+            )
+        };
+
+        if abi_version < 0 {
+            return Err(io::Error::last_os_error());
+        }
+
+        let abi_version = abi_version as i32;
+        let handled_access_fs = linux_landlock_supported_access_fs(abi_version);
+        let ruleset_attr = LinuxLandlockRulesetAttr { handled_access_fs };
+        let ruleset_fd = unsafe {
+            libc::syscall(
+                libc::SYS_landlock_create_ruleset,
+                &ruleset_attr,
+                std::mem::size_of::<LinuxLandlockRulesetAttr>(),
+                0,
+            )
+        };
+
+        if ruleset_fd < 0 {
+            return Err(io::Error::last_os_error());
+        }
+
+        for rule in rules {
+            let path_beneath_attr = LinuxLandlockPathBeneathAttr {
+                allowed_access: linux_landlock_allowed_access(abi_version, rule.access),
+                parent_fd: rule.fd.as_raw_fd(),
+            };
+            let result = unsafe {
+                libc::syscall(
+                    libc::SYS_landlock_add_rule,
+                    ruleset_fd,
+                    LINUX_LANDLOCK_RULE_PATH_BENEATH,
+                    &path_beneath_attr,
+                    0,
+                )
+            };
+            if result < 0 {
+                let error = io::Error::last_os_error();
+                unsafe {
+                    libc::close(ruleset_fd as i32);
+                }
+                return Err(error);
+            }
+        }
+
+        let restrict_result =
+            unsafe { libc::syscall(libc::SYS_landlock_restrict_self, ruleset_fd, 0) };
+        let restrict_error = if restrict_result < 0 {
+            Some(io::Error::last_os_error())
+        } else {
+            None
+        };
+        unsafe {
+            libc::close(ruleset_fd as i32);
+        }
+
+        if let Some(error) = restrict_error {
+            return Err(error);
+        }
+
+        Ok(())
+    }
+
+    #[cfg(target_os = "linux")]
     const LINUX_SECCOMP_AUDIT_ARCH: u32 = if cfg!(target_arch = "x86_64") {
         0xC000_003E
     } else if cfg!(target_arch = "aarch64") {
@@ -3913,10 +5217,6 @@ mod host {
         };
 
         unsafe {
-            if libc::prctl(libc::PR_SET_NO_NEW_PRIVS, 1, 0, 0, 0) != 0 {
-                return Err(io::Error::last_os_error());
-            }
-
             if libc::prctl(
                 libc::PR_SET_SECCOMP,
                 libc::SECCOMP_MODE_FILTER,
@@ -3933,6 +5233,7 @@ mod host {
     #[cfg(target_os = "linux")]
     fn build_command(plugin: &InstalledPlugin) -> Result<Command> {
         let launch_spec = sandbox_launch_spec(plugin, build_launch_spec(plugin)?)?;
+        let landlock_rules = prepare_linux_landlock_rules(plugin, &launch_spec)?;
         let mut std_command = std::process::Command::new(&launch_spec.program);
         std_command.args(&launch_spec.args);
 
@@ -3947,7 +5248,11 @@ mod host {
             .stderr(Stdio::piped());
 
         unsafe {
-            std_command.pre_exec(|| install_linux_seccomp());
+            std_command.pre_exec(move || {
+                install_linux_no_new_privs()?;
+                install_linux_landlock(&landlock_rules)?;
+                install_linux_seccomp()
+            });
         }
 
         let mut command = Command::from(std_command);
@@ -3955,7 +5260,7 @@ mod host {
         Ok(command)
     }
 
-    #[cfg(not(target_os = "linux"))]
+    #[cfg(all(not(target_os = "linux"), not(target_os = "windows")))]
     fn build_command(plugin: &InstalledPlugin) -> Result<Command> {
         let launch_spec = sandbox_launch_spec(plugin, build_launch_spec(plugin)?)?;
         let mut command = Command::new(&launch_spec.program);
@@ -3963,14 +5268,6 @@ mod host {
 
         if let Some(cargo_target_dir) = launch_spec.cargo_target_dir {
             command.env("CARGO_TARGET_DIR", cargo_target_dir);
-        }
-
-        #[cfg(target_os = "windows")]
-        {
-            use smol::process::windows::CommandExt as _;
-            use windows::Win32::System::Threading::{CREATE_BREAKAWAY_FROM_JOB, CREATE_NO_WINDOW};
-
-            command.creation_flags(CREATE_NO_WINDOW.0 | CREATE_BREAKAWAY_FROM_JOB.0);
         }
 
         command
@@ -4549,6 +5846,20 @@ edition = "2021"
             );
         }
 
+        #[cfg(target_os = "linux")]
+        #[test]
+        fn linux_landlock_write_access_includes_mutation_rights() {
+            let abi_v1 = linux_landlock_allowed_access(1, LinuxLandlockAccess::ReadWrite);
+            assert_ne!(abi_v1 & LINUX_LANDLOCK_ACCESS_FS_WRITE_FILE, 0);
+            assert_ne!(abi_v1 & LINUX_LANDLOCK_ACCESS_FS_MAKE_DIR, 0);
+            assert_eq!(abi_v1 & LINUX_LANDLOCK_ACCESS_FS_REFER, 0);
+            assert_eq!(abi_v1 & LINUX_LANDLOCK_ACCESS_FS_TRUNCATE, 0);
+
+            let abi_v3 = linux_landlock_allowed_access(3, LinuxLandlockAccess::ReadWrite);
+            assert_ne!(abi_v3 & LINUX_LANDLOCK_ACCESS_FS_REFER, 0);
+            assert_ne!(abi_v3 & LINUX_LANDLOCK_ACCESS_FS_TRUNCATE, 0);
+        }
+
         #[cfg(target_os = "macos")]
         #[test]
         fn build_command_wraps_plugins_in_sandbox_exec_on_macos() {
@@ -4664,7 +5975,12 @@ edition = "2021"
                 "/usr/bin/sandbox-exec"
             );
             assert_eq!(args[0], "-p");
-            assert_eq!(args[2], "cargo");
+            assert_eq!(
+                args[2],
+                resolve_program_on_path(OsStr::new("cargo"))
+                    .expect("cargo should resolve on PATH")
+                    .to_string_lossy()
+            );
             assert_eq!(args[3], "run");
             assert_eq!(target_dir, cargo_target_dir(&plugin_root).to_string_lossy());
         }
