@@ -1,0 +1,13 @@
+{
+  "featureId": "packaging-windows-identity",
+  "status": "fail",
+  "summary": "The feature rebrands the installer-visible Windows strings, AppUserModel IDs, and AppX manifests, but the packaged Windows install still exposes the CLI launchers as `zed` instead of `neozed`, so the desktop package does not fully match the public Neo Zed command identity.",
+  "issues": [
+    {
+      "severity": "blocking",
+      "description": "Windows installers still package the CLI as `zed` instead of `neozed`, so users who add the installed `bin` directory to PATH do not get the public Neo Zed command name required by the rebrand.",
+      "evidence": "`script/bundle-windows.ps1` still moves `cli.exe` to `$innoDir\\\\bin\\\\zed.exe` and `zed.sh` to `$innoDir\\\\bin\\\\zed`, while `crates/zed/resources/windows/zed.iss` installs `{app}\\\\bin` and offers the `addtopath` task for that directory."
+    }
+  ],
+  "sharedStateObservations": []
+}

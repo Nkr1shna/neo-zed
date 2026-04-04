@@ -1,0 +1,7 @@
+{
+  "featureId": "packaging-linux-identity",
+  "status": "pass",
+  "summary": "The Linux packaging change consistently rebrands the desktop template, Flatpak metadata, Snap metadata, bundle scripts, and the Linux CLI Flatpak handling to Neo Zed identities, and I did not find any high-confidence correctness or regression issue in the reviewed diff.",
+  "issues": [],
+  "sharedStateObservations": []
+}

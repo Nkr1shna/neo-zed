@@ -1,0 +1,7 @@
+{
+  "featureId": "packaging-macos-identity",
+  "status": "pass",
+  "summary": "The macOS packaging change correctly rebrands the user-visible document labels, permission prompts, and DMG volume naming to Neo Zed, and I did not find any high-confidence correctness or regression issue in the reviewed diff.",
+  "issues": [],
+  "sharedStateObservations": []
+}
