@@ -1065,6 +1065,7 @@ mod host {
                     process_instance_id,
                     exit_status,
                     error_message,
+                    suppress_ui_error,
                 } => {
                     if !self.has_current_process(&plugin_id, process_instance_id) {
                         return;
@@ -1082,17 +1083,21 @@ mod host {
                         });
                         for panel_instance_id in process.view_instances {
                             if let Some(binding) = self.panels.remove(&panel_instance_id) {
-                                binding
-                                    .panel
-                                    .update(cx, |panel, cx| {
-                                        panel.set_error(message.clone(), cx);
-                                    })
-                                    .ok();
+                                if !suppress_ui_error {
+                                    binding
+                                        .panel
+                                        .update(cx, |panel, cx| {
+                                            panel.set_error(message.clone(), cx);
+                                        })
+                                        .ok();
+                                }
                             }
                             if let Some(widget) = self.titlebar_widgets.remove(&panel_instance_id) {
-                                widget.widget.update(cx, |widget, cx| {
-                                    widget.set_error(message.clone(), cx);
-                                });
+                                if !suppress_ui_error {
+                                    widget.widget.update(cx, |widget, cx| {
+                                        widget.set_error(message.clone(), cx);
+                                    });
+                                }
                             }
                         }
                     }
@@ -1492,12 +1497,14 @@ mod host {
     }
 
     impl ProcessTermination {
+        fn suppresses_ui_error(&self) -> bool {
+            matches!(self, Self::StartupCancelled)
+        }
+
         fn error_message(self, plugin_id: &PluginId) -> Option<String> {
             match self {
                 Self::Idle => None,
-                Self::StartupCancelled => {
-                    Some(format!("plugin `{plugin_id}` startup was cancelled"))
-                }
+                Self::StartupCancelled => None,
                 Self::RegistrationTimedOut => Some(format!(
                     "plugin `{plugin_id}` did not register with the host before the startup timeout"
                 )),
@@ -1700,6 +1707,7 @@ mod host {
             process_instance_id: u64,
             exit_status: Option<i32>,
             error_message: Option<String>,
+            suppress_ui_error: bool,
         },
     }
 
@@ -4646,6 +4654,9 @@ mod host {
                             })
                     }
                 };
+                let suppress_ui_error = termination_reason
+                    .as_ref()
+                    .is_some_and(ProcessTermination::suppresses_ui_error);
                 event_sender
                     .send(PluginHostEvent::Exited {
                         plugin_id: exit_plugin_id,
@@ -4653,6 +4664,7 @@ mod host {
                         exit_status,
                         error_message: termination_reason
                             .and_then(|reason| reason.error_message(&plugin_id)),
+                        suppress_ui_error,
                     })
                     .await
                     .ok();
@@ -6235,6 +6247,34 @@ path = "src/main.rs"
                     Some(RemotePluginStartupState::Cancelling)
                 );
             });
+
+            cx.update(|cx| {
+                registry.update(cx, |registry, registry_cx| {
+                    registry.handle_event(
+                        PluginHostEvent::Exited {
+                            plugin_id: PluginId::new("cargo-plugin"),
+                            process_instance_id: 1,
+                            exit_status: None,
+                            error_message: None,
+                            suppress_ui_error: true,
+                        },
+                        registry_cx,
+                    );
+                });
+
+                let panel = panel.read(cx);
+                assert_eq!(
+                    panel.startup_state,
+                    Some(RemotePluginStartupState::Cancelling)
+                );
+                assert!(panel.error_message.is_none());
+                assert!(
+                    !registry
+                        .read(cx)
+                        .panels
+                        .contains_key(&PanelInstanceId::new("test-panel-cargo-plugin-panel-a"))
+                );
+            });
         }
 
         #[gpui::test]
@@ -6818,6 +6858,7 @@ activation = "on_demand"
                             process_instance_id: 1,
                             exit_status: None,
                             error_message: None,
+                            suppress_ui_error: false,
                         },
                         registry_cx,
                     );
@@ -7034,6 +7075,7 @@ activation = "on_demand"
                             process_instance_id: 1,
                             exit_status: None,
                             error_message: None,
+                            suppress_ui_error: false,
                         },
                         registry_cx,
                     );

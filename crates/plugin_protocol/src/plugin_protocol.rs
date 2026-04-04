@@ -905,6 +905,8 @@ impl PartialEq for HostThemeSnapshot {
         self.id == other.id
             && self.name == other.name
             && self.appearance == other.appearance
+            // The refinement types do not currently implement `PartialEq`, so compare the
+            // serialized shapes and treat serialization failure as inequality.
             && serialized_value_eq(&self.colors, &other.colors)
             && serialized_value_eq(&self.status, &other.status)
     }
