@@ -905,8 +905,15 @@ impl PartialEq for HostThemeSnapshot {
         self.id == other.id
             && self.name == other.name
             && self.appearance == other.appearance
-            && serde_json::to_value(&self.colors).ok() == serde_json::to_value(&other.colors).ok()
-            && serde_json::to_value(&self.status).ok() == serde_json::to_value(&other.status).ok()
+            && serialized_value_eq(&self.colors, &other.colors)
+            && serialized_value_eq(&self.status, &other.status)
+    }
+}
+
+fn serialized_value_eq<T: Serialize>(left: &T, right: &T) -> bool {
+    match (serde_json::to_value(left), serde_json::to_value(right)) {
+        (Ok(left_value), Ok(right_value)) => left_value == right_value,
+        _ => false,
     }
 }
 

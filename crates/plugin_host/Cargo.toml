@@ -16,6 +16,7 @@ futures.workspace = true
 gpui.workspace = true
 gpui_api.workspace = true
 gpui_plugin.workspace = true
+log.workspace = true
 paths.workspace = true
 plugin.workspace = true
 plugin_protocol.workspace = true

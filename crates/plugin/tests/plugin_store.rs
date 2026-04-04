@@ -232,6 +232,26 @@ fn install_rejects_symlink_inside_plugin_directory() {
     assert!(error.to_string().contains("contains symlink"));
 }
 
+#[cfg(unix)]
+#[test]
+fn install_rejects_hard_link_inside_plugin_directory() {
+    let fixture = PluginFixture::new("acme-test-panel");
+    fixture.write_plugin("source-plugin", "0.1.0");
+    fs::write(fixture.root.path().join("escape.sh"), "#!/bin/sh\n").unwrap();
+    fs::hard_link(
+        fixture.root.path().join("escape.sh"),
+        fixture.plugin_dir("source-plugin").join("bin/escape"),
+    )
+    .unwrap();
+
+    let mut store = fixture.store();
+    let error = store
+        .install_from_directory(fixture.plugin_dir("source-plugin"))
+        .unwrap_err();
+
+    assert!(error.to_string().contains("hard linked file"));
+}
+
 #[test]
 fn cargo_plugin_manifest_accepts_declared_bin_target() {
     let fixture = PluginFixture::new("acme-test-panel");

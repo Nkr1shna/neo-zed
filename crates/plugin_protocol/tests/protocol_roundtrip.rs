@@ -56,6 +56,43 @@ fn host_to_plugin_action_event_roundtrips_through_serde() {
 }
 
 #[test]
+fn host_theme_snapshot_equality_compares_color_and_status_fields() {
+    let base = HostThemeSnapshot {
+        id: "theme-id".to_string(),
+        name: "One Dark".to_string(),
+        appearance: Appearance::Dark,
+        colors: ThemeColorsRefinement {
+            text: Some(rgb(0xffffff).into()),
+            border: Some(rgb(0x222222).into()),
+            ..Default::default()
+        },
+        status: StatusColorsRefinement {
+            error: Some(rgb(0xff0000).into()),
+            success: Some(rgb(0x00ff00).into()),
+            ..Default::default()
+        },
+    };
+
+    let different_colors = HostThemeSnapshot {
+        colors: ThemeColorsRefinement {
+            text: Some(rgb(0xeeeeee).into()),
+            ..base.colors.clone()
+        },
+        ..base.clone()
+    };
+    let different_status = HostThemeSnapshot {
+        status: StatusColorsRefinement {
+            warning: Some(rgb(0xffff00).into()),
+            ..base.status.clone()
+        },
+        ..base.clone()
+    };
+
+    assert_ne!(base, different_colors);
+    assert_ne!(base, different_status);
+}
+
+#[test]
 fn plugin_identity_wrappers_remain_serde_transparent() {
     let plugin_id = PluginId::new("acme.codex");
     let panel_instance_id = PanelInstanceId::new("panel-7");
