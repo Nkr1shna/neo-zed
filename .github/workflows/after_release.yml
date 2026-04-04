@@ -91,9 +91,9 @@ jobs:
       name: after_release::publish_winget::set_package_name
       run: |
         if ("${{ github.event.release.prerelease || inputs.prerelease }}" -eq "true") {
-            $PACKAGE_NAME = "ZedIndustries.Zed.Preview"
+            $PACKAGE_NAME = "dev.neozed.Preview"
         } else {
-            $PACKAGE_NAME = "ZedIndustries.Zed"
+            $PACKAGE_NAME = "dev.neozed"
         }
 
         echo "PACKAGE_NAME=$PACKAGE_NAME" >> $env:GITHUB_OUTPUT

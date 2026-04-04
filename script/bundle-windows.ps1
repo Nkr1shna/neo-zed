@@ -114,8 +114,15 @@ function BuildZedAndItsFriends {
         "preview" {
             cargo build --release --features preview --no-default-features --package explorer_command_injector --target $target
         }
+        "nightly" {
+            cargo build --release --features nightly --no-default-features --package explorer_command_injector --target $target
+        }
+        "dev" {
+            cargo build --release --features dev --no-default-features --package explorer_command_injector --target $target
+        }
         default {
-            cargo build --release --package explorer_command_injector --target $target
+            Write-Error "can't build explorer_command_injector for $channel."
+            exit 1
         }
     }
     Copy-Item -Path ".\$CargoOutDir\explorer_command_injector.dll" -Destination "$innoDir\zed_explorer_command_injector.dll" -Force
@@ -188,8 +195,15 @@ function MakeAppx {
         "preview" {
             $manifestFile = "$env:ZED_WORKSPACE\crates\explorer_command_injector\AppxManifest-Preview.xml"
         }
-        default {
+        "nightly" {
             $manifestFile = "$env:ZED_WORKSPACE\crates\explorer_command_injector\AppxManifest-Nightly.xml"
+        }
+        "dev" {
+            $manifestFile = "$env:ZED_WORKSPACE\crates\explorer_command_injector\AppxManifest-Dev.xml"
+        }
+        default {
+            Write-Error "can't package AppX manifest for $channel."
+            exit 1
         }
     }
     Copy-Item -Path "$manifestFile" -Destination "$innoDir\make_appx\AppxManifest.xml"
@@ -252,64 +266,60 @@ function BuildInstaller {
         "stable" {
             $appId = "{{2DB0DA96-CA55-49BB-AF4F-64AF36A86712}"
             $appIconName = "app-icon"
-            $appName = "Zed"
-            $appDisplayName = "Zed"
+            $appName = "Neo Zed"
+            $appDisplayName = "Neo Zed"
             $appSetupName = "Zed-$Architecture"
-            # The mutex name here should match the mutex name in crates\zed\src\zed\windows_only_instance.rs
-            $appMutex = "Zed-Stable-Instance-Mutex"
             $appExeName = "Zed"
-            $regValueName = "Zed"
-            $appUserId = "ZedIndustries.Zed"
-            $appShellNameShort = "Z&ed"
-            $appAppxFullName = "ZedIndustries.Zed_1.0.0.0_neutral__japxn1gcva8rg"
+            $regValueName = "NeoZed"
+            $appUserId = "dev.neozed"
+            $appShellNameShort = "Neo &Zed"
+            $legacyAppxPackageName = "ZedIndustries.Zed"
         }
         "preview" {
             $appId = "{{F70E4811-D0E2-4D88-AC99-D63752799F95}"
             $appIconName = "app-icon-preview"
-            $appName = "Zed Preview"
-            $appDisplayName = "Zed Preview"
+            $appName = "Neo Zed Preview"
+            $appDisplayName = "Neo Zed Preview"
             $appSetupName = "Zed-$Architecture"
-            # The mutex name here should match the mutex name in crates\zed\src\zed\windows_only_instance.rs
-            $appMutex = "Zed-Preview-Instance-Mutex"
             $appExeName = "Zed"
-            $regValueName = "ZedPreview"
-            $appUserId = "ZedIndustries.Zed.Preview"
-            $appShellNameShort = "Z&ed Preview"
-            $appAppxFullName = "ZedIndustries.Zed.Preview_1.0.0.0_neutral__japxn1gcva8rg"
+            $regValueName = "NeoZedPreview"
+            $appUserId = "dev.neozed.Preview"
+            $appShellNameShort = "Neo &Zed Preview"
+            $legacyAppxPackageName = "ZedIndustries.Zed.Preview"
         }
         "nightly" {
             $appId = "{{1BDB21D3-14E7-433C-843C-9C97382B2FE0}"
             $appIconName = "app-icon-nightly"
-            $appName = "Zed Nightly"
-            $appDisplayName = "Zed Nightly"
+            $appName = "Neo Zed Nightly"
+            $appDisplayName = "Neo Zed Nightly"
             $appSetupName = "Zed-$Architecture"
-            # The mutex name here should match the mutex name in crates\zed\src\zed\windows_only_instance.rs
-            $appMutex = "Zed-Nightly-Instance-Mutex"
             $appExeName = "Zed"
-            $regValueName = "ZedNightly"
-            $appUserId = "ZedIndustries.Zed.Nightly"
-            $appShellNameShort = "Z&ed Editor Nightly"
-            $appAppxFullName = "ZedIndustries.Zed.Nightly_1.0.0.0_neutral__japxn1gcva8rg"
+            $regValueName = "NeoZedNightly"
+            $appUserId = "dev.neozed.Nightly"
+            $appShellNameShort = "Neo &Zed Nightly"
+            $legacyAppxPackageName = "ZedIndustries.Zed.Nightly"
         }
         "dev" {
             $appId = "{{8357632E-24A4-4F32-BA97-E575B4D1FE5D}"
             $appIconName = "app-icon-dev"
-            $appName = "Zed Dev"
-            $appDisplayName = "Zed Dev"
+            $appName = "Neo Zed Dev"
+            $appDisplayName = "Neo Zed Dev"
             $appSetupName = "Zed-$Architecture"
-            # The mutex name here should match the mutex name in crates\zed\src\zed\windows_only_instance.rs
-            $appMutex = "Zed-Dev-Instance-Mutex"
             $appExeName = "Zed"
-            $regValueName = "ZedDev"
-            $appUserId = "ZedIndustries.Zed.Dev"
-            $appShellNameShort = "Z&ed Dev"
-            $appAppxFullName = "ZedIndustries.Zed.Dev_1.0.0.0_neutral__japxn1gcva8rg"
+            $regValueName = "NeoZedDev"
+            $appUserId = "dev.neozed.Dev"
+            $appShellNameShort = "Neo &Zed Dev"
+            # Dev builds previously reused the nightly AppX manifest, so upgrades need to remove it.
+            $legacyAppxPackageName = "ZedIndustries.Zed.Nightly"
         }
         default {
             Write-Error "can't bundle installer for $channel."
             exit 1
         }
     }
+
+    # The mutex name here should match the mutex name in crates\zed\src\zed\windows_only_instance.rs
+    $appMutex = "$appUserId-Instance-Mutex"
 
     # Windows runner 2022 default has iscc in PATH, https://github.com/actions/runner-images/blob/main/images/windows/Windows2022-Readme.md
     # Currently, we are using Windows 2022 runner.
@@ -331,7 +341,8 @@ function BuildInstaller {
         "AppUserId"      = $appUserId
         "Version"        = "$env:RELEASE_VERSION"
         "SourceDir"      = "$env:ZED_WORKSPACE"
-        "AppxFullName"   = $appAppxFullName
+        "AppxPackageName" = $appUserId
+        "LegacyAppxPackageName" = $legacyAppxPackageName
     }
 
     $defs = @()
