@@ -312,10 +312,10 @@ pub fn app_menus(cx: &mut App) -> Vec<Menu> {
                 MenuItem::action(
                     "Documentation",
                     super::OpenBrowser {
-                        url: "https://zed.dev/docs".into(),
+                        url: "https://neozed.dev/docs".into(),
                     },
                 ),
-                MenuItem::action("Zed Repository", feedback::OpenZedRepo),
+                MenuItem::action("Neo Zed Repository", feedback::OpenZedRepo),
                 MenuItem::action(
                     "Zed Twitter",
                     super::OpenBrowser {
@@ -325,7 +325,7 @@ pub fn app_menus(cx: &mut App) -> Vec<Menu> {
                 MenuItem::action(
                     "Join the Team",
                     super::OpenBrowser {
-                        url: "https://zed.dev/jobs".into(),
+                        url: "https://neozed.dev/jobs".into(),
                     },
                 ),
             ],

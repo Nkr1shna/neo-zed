@@ -12,14 +12,14 @@ actions!(
     ]
 );
 
-const ZED_REPO_URL: &str = "https://github.com/zed-industries/zed";
+const ZED_REPO_URL: &str = "https://github.com/Nkr1shna/neo-zed";
 
-const REQUEST_FEATURE_URL: &str = "https://github.com/zed-industries/zed/discussions/new/choose";
+const REQUEST_FEATURE_URL: &str = "https://github.com/Nkr1shna/neo-zed/discussions/new/choose";
 
 fn file_bug_report_url(specs: &SystemSpecs) -> String {
     format!(
         concat!(
-            "https://github.com/zed-industries/zed/issues/new",
+            "https://github.com/Nkr1shna/neo-zed/issues/new",
             "?",
             "template=10_bug_report.yml",
             "&",
@@ -31,7 +31,7 @@ fn file_bug_report_url(specs: &SystemSpecs) -> String {
 
 fn email_zed_url(specs: &SystemSpecs) -> String {
     format!(
-        concat!("mailto:hi@zed.dev", "?", "body={}"),
+        concat!("mailto:hi@neozed.dev", "?", "body={}"),
         email_body(specs)
     )
 }
@@ -95,4 +95,34 @@ pub fn init(cx: &mut App) {
             });
     })
     .detach();
+}
+
+#[cfg(test)]
+mod tests {
+    use release_channel::ReleaseChannel;
+    use semver::Version;
+
+    use super::*;
+
+    #[test]
+    fn bug_report_url_targets_the_fork_repository() {
+        let specs = SystemSpecs::new_stateless(Version::new(0, 1, 0), None, ReleaseChannel::Stable);
+
+        let url = file_bug_report_url(&specs);
+
+        assert!(url.starts_with(
+            "https://github.com/Nkr1shna/neo-zed/issues/new?template=10_bug_report.yml&environment="
+        ));
+    }
+
+    #[test]
+    fn support_email_uses_the_neozed_mailbox() {
+        let specs = SystemSpecs::new_stateless(Version::new(0, 1, 0), None, ReleaseChannel::Stable);
+
+        let url = email_zed_url(&specs);
+        let body = urlencoding::decode(url.split_once("body=").unwrap().1).unwrap();
+
+        assert!(url.starts_with("mailto:hi@neozed.dev?body="));
+        assert!(body.contains("System Information"));
+    }
 }

@@ -1,11 +1,11 @@
 ---
 title: Telemetry
-description: "What data Zed collects and how to control telemetry settings."
+description: "What data Neo Zed collects and how to control telemetry settings."
 ---
 
-# Telemetry in Zed
+# Telemetry in Neo Zed
 
-Zed collects anonymous telemetry to understand usage patterns and diagnose issues.
+Neo Zed collects anonymous telemetry to understand usage patterns and diagnose issues.
 
 Telemetry falls into two categories:
 
@@ -14,7 +14,7 @@ Telemetry falls into two categories:
 
 ## Configuring Telemetry Settings
 
-You have full control over what data is sent out by Zed.
+You have full control over what data is sent out by Neo Zed.
 To enable or disable some or all telemetry types, open Settings ({#kb zed::OpenSettings}) and search for "telemetry", or add the following to your settings file:
 
 ```json [settings]
@@ -37,9 +37,9 @@ Telemetry is sent from the application to our servers every 5 minutes (or when 5
 
 ### Diagnostics
 
-Crash reports consist of a [minidump](https://learn.microsoft.com/en-us/windows/win32/debug/minidump-files) and debug metadata. Reports are sent on the next launch after a crash, allowing Zed to identify and fix issues without requiring you to file a bug report.
+Crash reports consist of a [minidump](https://learn.microsoft.com/en-us/windows/win32/debug/minidump-files) and debug metadata. Reports are sent on the next launch after a crash, allowing Neo Zed to identify and fix issues without requiring you to file a bug report.
 
-You can inspect what data is sent in the `Panic` struct in [crates/telemetry_events/src/telemetry_events.rs](https://github.com/zed-industries/zed/blob/main/crates/telemetry_events/src/telemetry_events.rs). See also: [Debugging Crashes](./development/debugging-crashes.md).
+You can inspect what data is sent in the `Panic` struct in [crates/telemetry_events/src/telemetry_events.rs](https://github.com/Nkr1shna/neo-zed/blob/main/crates/telemetry_events/src/telemetry_events.rs). See also: [Debugging Crashes](./development/debugging-crashes.md).
 
 ### Client-Side Metrics
 
@@ -52,18 +52,18 @@ Client-side telemetry includes:
 
 This data does not include your code or sensitive project details. Events are sent over HTTPS and rate-limited.
 
-Usage data is tied to a random telemetry ID. If you've authenticated, this ID may be linked to your email so Zed can analyze patterns over time and reach out for feedback.
+Usage data is tied to a random telemetry ID. If you've authenticated, this ID may be linked to your email so Neo Zed can analyze patterns over time and reach out for feedback.
 
-To audit what Zed has reported, run {#action zed::OpenTelemetryLog} from the command palette or click `Help > View Telemetry Log`.
+To audit what Neo Zed has reported, run {#action zed::OpenTelemetryLog} from the command palette or click `Help > View Telemetry Log`.
 
-For the full list of event types, see the `Event` enum in [telemetry_events.rs](https://github.com/zed-industries/zed/blob/main/crates/telemetry_events/src/telemetry_events.rs).
+For the full list of event types, see the `Event` enum in [telemetry_events.rs](https://github.com/Nkr1shna/neo-zed/blob/main/crates/telemetry_events/src/telemetry_events.rs).
 
 ### Server-Side Metrics
 
-When using Zed's hosted services, we collect metadata for rate limiting and billing (e.g., token usage). Zed does not store your prompts or code unless you explicitly share them via feedback ratings.
+When using Neo Zed's hosted services, we collect metadata for rate limiting and billing (e.g., token usage). Neo Zed does not store your prompts or code unless you explicitly share them via feedback ratings.
 
-For details on AI data handling, see [Zed AI Features and Privacy](./ai/ai-improvement.md).
+For details on AI data handling, see [Neo Zed AI Features and Privacy](./ai/ai-improvement.md).
 
 ## Concerns and Questions
 
-If you have concerns about telemetry, you can [open an issue](https://github.com/zed-industries/zed/issues/new/choose) or email hi@zed.dev.
+If you have concerns about telemetry, you can [open an issue](https://github.com/Nkr1shna/neo-zed/issues/new/choose) or email hi@neozed.dev.
