@@ -1,0 +1,51 @@
+{
+  "groupId": "shared-identity",
+  "surface": "file/metadata inspection",
+  "toolsUsed": [
+    "python3",
+    "rg"
+  ],
+  "assertions": [
+    {
+      "id": "VAL-IDENT-001",
+      "status": "pass",
+      "reason": "ReleaseChannel::release_identity maps stable, preview, nightly, and dev to Neo Zed display names and dev.neozed-derived app IDs.",
+      "evidence": [
+        {
+          "kind": "command",
+          "command": "python3 evidence extraction for release_channel mappings",
+          "summary": "Extracted lines 166-179 from crates/release_channel/src/lib.rs showing all four Neo Zed display names and dev.neozed* app IDs."
+        },
+        {
+          "kind": "file",
+          "path": "crates/release_channel/src/lib.rs",
+          "summary": "The release_identity() match arm is the shared source of truth and contains stable/preview/nightly/dev Neo Zed mappings."
+        }
+      ]
+    },
+    {
+      "id": "VAL-IDENT-004",
+      "status": "pass",
+      "reason": "The release-facing path constants and documented platform defaults use Neo Zed / neozed names for data, config, cache, and logs.",
+      "evidence": [
+        {
+          "kind": "command",
+          "command": "python3 evidence extraction for path constants",
+          "summary": "Extracted lines 18-27 from crates/paths/src/paths.rs showing neozed/Neo Zed directory and log constants plus macOS/Linux/Windows path docs."
+        },
+        {
+          "kind": "file",
+          "path": "crates/paths/src/paths.rs",
+          "summary": "UNIX_RELEASE_DIRECTORY_NAME, MACOS_WINDOWS_RELEASE_DIRECTORY_NAME, RELEASE_LOG_FILE_NAME, and CURRENT_DATA_DIR docs all use Neo Zed identities."
+        }
+      ]
+    }
+  ],
+  "frictions": [
+    "Task-based user-testing-flow-validator subagents failed to launch with \"Invalid model: custom:droidproxy:gpt-5.4\"; this flow report was produced manually in the validator session using the same assigned assertion scope."
+  ],
+  "blockers": [],
+  "notes": [
+    "No services or seed data were required for this milestone."
+  ]
+}
