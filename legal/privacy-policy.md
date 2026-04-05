@@ -18,7 +18,7 @@ Questions? Contact us at privacy@neozed.dev. The full policy below contains comp
 
 ## Introduction
 
-This Privacy Policy explains how Zed Industries, Inc. ("**Neo Zed**," "**we**," "**our**," or "**us**") collects, uses, and shares your personal data when you use our websites (including [https://neozed.dev](https://neozed.dev)), our downloadable software ("**Software**"), our subscription service ("**Service**"), or otherwise interact with us.
+This Privacy Policy explains how the temporary Neo Zed legal operator placeholder ("**Neo Zed**," "**we**," "**our**," or "**us**") collects, uses, and shares your personal data when you use our websites (including [https://neozed.dev](https://neozed.dev)), our downloadable software ("**Software**"), our subscription service ("**Service**"), or otherwise interact with us. Neo Zed will publish its final legal operator name here before launch.
 
 As used in this Privacy Policy, “personal data” means any information relating to an identified or identifiable individual and includes any information that constitutes "personally identifiable information," “personal data,” or "personal information" under applicable privacy or data protection laws or regulations.
 
@@ -174,7 +174,5 @@ We will post any adjustments to the Privacy Policy on this page, and the revised
 
 When data is used as outlined in this Privacy Policy, Neo Zed is the data controller and responsible for the processing of your personal data. When Neo Zed processes personal data on behalf of Neo Zed Business customers as a data processor, the terms of our Data Processing Agreement apply. If you have any questions, comments, or concerns about our processing activities, please email us at [privacy@neozed.dev](mailto:privacy@neozed.dev) or write to us at:
 
-Zed Industries, Inc.
-2590 Welton St
-Suite 200, PO Box 1916
-Denver, CO 80205
+Temporary Neo Zed legal operator placeholder
+Final legal mailing address to be published before launch
