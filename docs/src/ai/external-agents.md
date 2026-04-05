@@ -12,7 +12,7 @@ Zed supports [Gemini CLI](https://github.com/google-gemini/gemini-cli) (the refe
 For Zed's built-in agent and the full list of tools it can use natively, see [Agent Tools](./tools.md).
 
 > Note that Zed's interaction with external agents is strictly UI-based; the billing, legal, and terms arrangement is directly between you and the agent provider.
-> Zed does not charge for use of external agents, and our [zero-data retention agreements/privacy guarantees](./ai-improvement.md) are **_only_** applicable for Zed's hosted models.
+> Zed does not charge for use of external agents, and our [zero-data retention agreements/privacy guarantees](./ai-improvement.md) are **_only_** applicable for Neo Zed's hosted models.
 
 ## Gemini CLI {#gemini-cli}
 
@@ -195,14 +195,14 @@ Codex supports the same workflows as Zed's first-party agent. Add context by @-m
 <div class="warning">
 
 Starting from `v0.221.x`, [the ACP Registry](https://agentclientprotocol.com/registry) is the preferred way to install external agents in Zed.
-Learn more about it in [the release blog post](https://zed.dev/blog/acp-registry).
+Learn more about it in [the release blog post](https://neozed.dev/blog/acp-registry).
 At some point in the near future, Agent Server extensions will be deprecated.
 
 </div>
 
 Add more external agents to Zed by installing [Agent Server extensions](../extensions/agent-servers.md).
 
-See what agents are available by filtering for "Agent Servers" in the extensions page, which you can access via the command palette with `zed: extensions`, or the [Zed website](https://zed.dev/extensions?filter=agent-servers).
+See what agents are available by filtering for "Agent Servers" in the extensions page, which you can access via the command palette with `zed: extensions`, or the [Neo Zed website](https://neozed.dev/extensions?filter=agent-servers).
 
 ### Via The ACP Registry
 
@@ -249,7 +249,7 @@ It's also possible to customize environment variables for registry-installed age
 When using external agents in Zed, you can access the debug view via with `dev: open acp logs` from the Command Palette.
 This lets you see the messages being sent and received between Zed and the agent.
 
-![The debug view for ACP logs.](https://zed.dev/img/acp/acp-logs.webp)
+![The debug view for ACP logs.](https://neozed.dev/img/acp/acp-logs.webp)
 
 It's helpful to attach data from this view if you're opening issues about problems with external agents like Claude Agent, Codex, OpenCode, etc.
 

@@ -16,7 +16,7 @@ The Inline Assistant sends your current selection (or line) to a language model 
 If you're using the Inline Assistant for the first time, you need to have at least one LLM provider or external agent configured.
 You can do that by:
 
-1. [subscribing to our Pro plan](https://zed.dev/pricing), so you have access to our hosted models
+1. [subscribing to our Pro plan](https://neozed.dev/pricing), so you have access to our hosted models
 2. [using your own API keys](./llm-providers.md#use-your-own-keys), either from model providers like Anthropic or model gateways like OpenRouter.
 
 If you have already set up an LLM provider to interact with [the Agent Panel](./agent-panel.md#getting-started), then that will also work for the Inline Assistant.
@@ -53,12 +53,12 @@ Here's how you can customize your settings file ([how to edit](../configuring-ze
 {
   "agent": {
     "default_model": {
-      "provider": "zed.dev",
+      "provider": "neozed.dev",
       "model": "claude-sonnet-4-5"
     },
     "inline_alternatives": [
       {
-        "provider": "zed.dev",
+        "provider": "neozed.dev",
         "model": "gpt-4-mini"
       }
     ]
@@ -77,16 +77,16 @@ One with Claude Sonnet 4.5 (the default model), another with GPT-5-mini, and ano
 {
   "agent": {
     "default_model": {
-      "provider": "zed.dev",
+      "provider": "neozed.dev",
       "model": "claude-sonnet-4-5"
     },
     "inline_alternatives": [
       {
-        "provider": "zed.dev",
+        "provider": "neozed.dev",
         "model": "gpt-4-mini"
       },
       {
-        "provider": "zed.dev",
+        "provider": "neozed.dev",
         "model": "gemini-3-flash"
       }
     ]

@@ -14,7 +14,7 @@ For day-to-day workflows, pair remote development with [Tasks](./tasks.md),
 
 Remote development requires two computers, your local machine that runs the Zed UI and the remote server which runs a Zed headless server. The two communicate over SSH, so you will need to be able to SSH from your local machine into the remote server to use this feature.
 
-![Architectural overview of Zed Remote Development](https://zed.dev/img/remote-development/diagram.png)
+![Architectural overview of Zed Remote Development](https://neozed.dev/img/remote-development/diagram.png)
 
 On your local machine, Zed runs its UI, talks to language models, uses Tree-sitter to parse and syntax-highlight code, and store unsaved changes and recent projects. The source code, language servers, tasks, and the terminal all run on the remote server. [AI features](./ai/overview.md) work in remote sessions, including the Agent Panel and Inline Assistant.
 
@@ -22,14 +22,14 @@ On your local machine, Zed runs its UI, talks to language models, uses Tree-sitt
 
 ## Setup
 
-1. Download and install the latest [Zed](https://zed.dev/releases). You need at least Zed v0.159.
+1. Download and install the latest [Neo Zed](https://neozed.dev/releases). You need at least Zed v0.159.
 1. Use {#kb projects::OpenRemote} to open the "Remote Projects" dialog.
 1. Click "Connect New Server" and enter the command you use to SSH into the server. See [Supported SSH options](#supported-ssh-options) for options you can pass.
 1. Your local machine will attempt to connect to the remote server using the `ssh` binary on your path. Assuming the connection is successful, Zed will download the server on the remote host and start it.
 1. Once the Zed server is running, you will be prompted to choose a path to open on the remote server.
    > **Note:** Zed does not currently handle opening very large directories (for example, `/` or `~` that may have >100,000 files) very well. We are working on improving this, but suggest in the meantime opening only specific projects, or subfolders of very large mono-repos.
 
-For simple cases where you don't need any SSH arguments, you can run `zed ssh://[<user>@]<host>[:<port>]/<path>` to open a remote folder/file directly. If you'd like to hotlink into an SSH project, use a link of the format: `zed://ssh/[<user>@]<host>[:<port>]/<path>`.
+For simple cases where you don't need any SSH arguments, you can run `neozed ssh://[<user>@]<host>[:<port>]/<path>` to open a remote folder/file directly. If you'd like to hotlink into an SSH project, use a link of the format: `neozed://ssh/[<user>@]<host>[:<port>]/<path>`.
 
 ## Supported platforms
 
@@ -91,9 +91,9 @@ There are two additional Zed-specific options per connection, `upload_binary_ove
 }
 ```
 
-If you use the command line to open a connection to a host by doing `zed ssh://192.168.1.10/~/.vimrc`, then extra options are read from your settings file by finding the first connection that matches the host/username/port of the URL on the command line.
+If you use the command line to open a connection to a host by doing `neozed ssh://192.168.1.10/~/.vimrc`, then extra options are read from your settings file by finding the first connection that matches the host/username/port of the URL on the command line.
 
-Additionally it's worth noting that while you can pass a password on the command line `zed ssh://user:password@host/~`, we do not support writing a password to your settings file. If you're connecting repeatedly to the same host, you should configure key-based authentication.
+Additionally it's worth noting that while you can pass a password on the command line `neozed ssh://user:password@host/~`, we do not support writing a password to your settings file. If you're connecting repeatedly to the same host, you should configure key-based authentication.
 
 ## Remote Development on Windows (SSH)
 
@@ -222,9 +222,9 @@ Any prompts that SSH needs will be shown in the UI, so you can verify host keys,
 
 Once the master connection is established, Zed will check to see if the remote server binary is present in `~/.zed_server` on the remote, and that its version matches the current version of Zed that you're using.
 
-If it is not there or the version mismatches, Zed will try to download the latest version. By default, it will download from `https://zed.dev` directly, but if you set: `{"upload_binary_over_ssh":true}` in your settings for that server, it will download the binary to your local machine and then upload it to the remote server.
+If it is not there or the version mismatches, Zed will try to download the latest version. By default, it will download from `https://neozed.dev` directly, but if you set: `{"upload_binary_over_ssh":true}` in your settings for that server, it will download the binary to your local machine and then upload it to the remote server.
 
-If you'd like to maintain the server binary yourself you can. You can either download our prebuilt versions from [GitHub](https://github.com/zed-industries/zed/releases), or [build your own](https://zed.dev/docs/development) with `cargo build -p remote_server --release`. If you do this, you must upload it to `~/.zed_server/zed-remote-server-{RELEASE_CHANNEL}-{VERSION}` on the server, for example `~/.zed_server/zed-remote-server-stable-0.217.3+stable.105.80433cb239e868271457ac376673a5f75bc4adb1`. The version must exactly match the version of Zed itself you are using.
+If you'd like to maintain the server binary yourself you can. You can either download our prebuilt versions from [GitHub](https://github.com/Nkr1shna/neo-zed/releases), or [build your own](https://neozed.dev/docs/development) with `cargo build -p remote_server --release`. If you do this, you must upload it to `~/.zed_server/zed-remote-server-{RELEASE_CHANNEL}-{VERSION}` on the server, for example `~/.zed_server/zed-remote-server-stable-0.217.3+stable.105.80433cb239e868271457ac376673a5f75bc4adb1`. The version must exactly match the version of Zed itself you are using.
 
 ## Maintaining the SSH connection
 
@@ -234,7 +234,7 @@ Each connection tries to run the development server in proxy mode. This mode wil
 
 In the case that reconnecting fails, the daemon will not be re-used. That said, unsaved changes are by default persisted locally, so that you do not lose work. You can always reconnect to the project at a later date and Zed will restore unsaved changes.
 
-If you are struggling with connection issues, you should be able to see more information in the Zed log `cmd-shift-p Open Log`. If you are seeing things that are unexpected, please file a [GitHub issue](https://github.com/zed-industries/zed/issues/new) or reach out in the #remoting-feedback channel in the [Zed Discord](https://zed.dev/community-links).
+If you are struggling with connection issues, you should be able to see more information in the Zed log `cmd-shift-p Open Log`. If you are seeing things that are unexpected, please file a [GitHub issue](https://github.com/Nkr1shna/neo-zed/issues/new) or reach out in the #remoting-feedback channel in the [Zed Discord](https://neozed.dev/community-links).
 
 ## Supported SSH Options
 
@@ -260,7 +260,7 @@ Note that we deliberately disallow some options (for example `-t` or `-T`) that 
 
 ## Feedback
 
-Please join the #remoting-feedback channel in the [Zed Discord](https://zed.dev/community-links).
+Please join the #remoting-feedback channel in the [Zed Discord](https://neozed.dev/community-links).
 
 ## See also
 
@@ -269,5 +269,5 @@ Please join the #remoting-feedback channel in the [Zed Discord](https://zed.dev/
 - [Configuring Zed](./configuring-zed.md): Manage shared and project settings,
   including `.zed/settings.json`.
 - [Agent Panel](./ai/agent-panel.md): Use AI workflows in remote projects.
-- [Remote Development on zed.dev](https://zed.dev/remote-development): Product
+- [Remote Development on neozed.dev](https://neozed.dev/remote-development): Product
   overview and release updates.

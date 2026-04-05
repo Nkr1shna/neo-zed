@@ -1,0 +1,9 @@
+commands:
+  install: cargo fetch
+  fmt: cargo fmt --all -- --check
+  lint: ./script/clippy
+  typecheck: cargo check --workspace --all-targets
+  test: cargo test --workspace --lib --bins --tests --no-fail-fast
+  build: cargo build --workspace --bins --examples
+
+services: {}
