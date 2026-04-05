@@ -136,6 +136,7 @@ impl AuthSecretStore {
                 }
                 Err(keyring_error) => {
                     let error_context = format!("{keyring_error:#}");
+                    eprintln!("codex-usage-plugin keyring save failed: {error_context}");
                     Err(keyring_error).context(error_context)
                 }
             },
@@ -187,8 +188,11 @@ impl AuthSecretStore {
                 }
             }
             Err(keyring::Error::NoEntry) => Ok(None),
-            Err(error) => Err(anyhow::Error::new(error)
-                .context("failed to read auth secrets from secure storage")),
+            Err(error) => {
+                eprintln!("codex-usage-plugin keyring read failed while fetching password: {error:#}");
+                Err(anyhow::Error::new(error)
+                    .context("failed to read auth secrets from secure storage"))
+            }
         }
     }
 
@@ -1181,22 +1185,38 @@ fn load_persisted_auth_state_from_disk_with_store(
     let value = serde_json::from_str(&raw)
         .with_context(|| format!("failed to parse auth state `{}`", path.display()))?;
     let mut state = parse_persisted_auth_state(value)?;
+    let secret_scope = stable_secret_scope(path);
     let legacy_secrets = StoredAuthSecrets::from_state(&state);
     let mut should_persist_metadata = false;
 
     match secret_store.load() {
         Ok(Some(secrets)) => {
+            eprintln!(
+                "codex-usage-plugin keyring load succeeded for secret scope {} (refresh_token={})",
+                secret_scope,
+                secrets
+                    .refresh_token
+                    .as_ref()
+                    .is_some()
+            );
             state.access_token = secrets.access_token;
             state.refresh_token = secrets.refresh_token;
         }
         Ok(None) if !legacy_secrets.is_empty() => {
+            eprintln!(
+                "codex-usage-plugin keyring returned empty for secret scope {}, migrating legacy auth state",
+                secret_scope
+            );
             secret_store.save(&legacy_secrets)?;
             state.access_token = legacy_secrets.access_token;
             state.refresh_token = legacy_secrets.refresh_token;
             should_persist_metadata = true;
         }
         Err(error) => {
-            eprintln!("codex-usage-plugin failed to read auth secret storage: {error:#}");
+            eprintln!(
+                "codex-usage-plugin failed to read auth secret storage for scope {}: {error:#}",
+                secret_scope
+            );
             state.access_token = None;
             state.refresh_token = None;
             state.auth_status = String::from("signed-out");
