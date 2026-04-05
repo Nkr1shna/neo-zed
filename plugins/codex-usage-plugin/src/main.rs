@@ -37,7 +37,6 @@ pub const TITLEBAR_WIDGET_ID: &str = "codex-usage-titlebar";
 pub const TITLEBAR_WIDGET_TITLE: &str = "Codex Usage";
 
 const AUTH_STATE_FILENAME: &str = "codex-chatgpt-auth.json";
-const AUTH_SECRET_FILENAME: &str = ".codex-chatgpt-auth-secrets.json";
 const AUTH_KEYRING_SERVICE: &str = "neo-zed.codex-usage-plugin";
 const AUTHORIZE_URL: &str = "https://auth.openai.com/oauth/authorize";
 const TOKEN_URL: &str = "https://auth.openai.com/oauth/token";
@@ -60,6 +59,7 @@ const SUCCESS_HTML: &str =
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum AuthSecretBackend {
     Auto,
+    #[cfg(test)]
     FileOnly,
 }
 
@@ -107,19 +107,14 @@ impl AuthSecretStore {
     fn load(&self) -> Result<Option<StoredAuthSecrets>> {
         let keyring_result = match self.backend {
             AuthSecretBackend::Auto => self.load_from_keyring(),
-            AuthSecretBackend::FileOnly => Ok(None),
+            #[cfg(test)]
+            AuthSecretBackend::FileOnly => self.load_from_file(),
         };
 
         match keyring_result {
             Ok(Some(secrets)) => Ok(Some(secrets)),
-            Ok(None) => self.load_from_file(),
-            Err(keyring_error) => {
-                if let Some(secrets) = self.load_from_file()? {
-                    Ok(Some(secrets))
-                } else {
-                    Err(keyring_error)
-                }
-            }
+            Ok(None) => Ok(None),
+            Err(error) => Err(error),
         }
     }
 
@@ -137,15 +132,14 @@ impl AuthSecretStore {
                     entry
                         .set_password(&encoded)
                         .with_context(|| "failed to write auth secrets to secure storage")?;
-                    self.delete_secret_file_if_exists()?;
                     Ok(())
                 }
                 Err(keyring_error) => {
-                    self.save_to_file(secrets)
-                        .with_context(|| format!("{keyring_error:#}"))?;
-                    Ok(())
+                    let error_context = format!("{keyring_error:#}");
+                    Err(keyring_error).context(error_context)
                 }
             },
+            #[cfg(test)]
             AuthSecretBackend::FileOnly => self.save_to_file(secrets),
         }
     }
@@ -153,7 +147,7 @@ impl AuthSecretStore {
     fn clear(&self) -> Result<()> {
         let mut clear_error = None;
 
-        if let AuthSecretBackend::Auto = self.backend {
+        if self.backend == AuthSecretBackend::Auto {
             if let Ok(entry) = self.keyring_entry() {
                 if let Err(error) = entry.delete_credential() {
                     if !matches!(error, keyring::Error::NoEntry) {
@@ -166,6 +160,7 @@ impl AuthSecretStore {
             }
         }
 
+        #[cfg(test)]
         if let Err(error) = self.delete_secret_file_if_exists() {
             if clear_error.is_none() {
                 clear_error = Some(error);
@@ -197,6 +192,7 @@ impl AuthSecretStore {
         }
     }
 
+    #[cfg(test)]
     fn load_from_file(&self) -> Result<Option<StoredAuthSecrets>> {
         let path = self.secret_file_path();
         let raw = match fs::read_to_string(&path) {
@@ -217,12 +213,14 @@ impl AuthSecretStore {
         }
     }
 
+    #[cfg(test)]
     fn save_to_file(&self, secrets: &StoredAuthSecrets) -> Result<()> {
         let bytes = serde_json::to_vec_pretty(secrets)
             .with_context(|| "failed to encode auth secrets for file storage")?;
         write_bytes_atomically(&self.secret_file_path(), &bytes)
     }
 
+    #[cfg(test)]
     fn delete_secret_file_if_exists(&self) -> Result<()> {
         let path = self.secret_file_path();
         match fs::remove_file(&path) {
@@ -243,8 +241,9 @@ impl AuthSecretStore {
             .with_context(|| "failed to initialize secure auth storage")
     }
 
+    #[cfg(test)]
     fn secret_file_path(&self) -> PathBuf {
-        self.metadata_path.with_file_name(AUTH_SECRET_FILENAME)
+        self.metadata_path.with_file_name(".codex-chatgpt-auth-secrets.json")
     }
 }
 
@@ -1183,15 +1182,33 @@ fn load_persisted_auth_state_from_disk_with_store(
         .with_context(|| format!("failed to parse auth state `{}`", path.display()))?;
     let mut state = parse_persisted_auth_state(value)?;
     let legacy_secrets = StoredAuthSecrets::from_state(&state);
+    let mut should_persist_metadata = false;
 
-    if let Some(secrets) = secret_store.load()? {
-        state.access_token = secrets.access_token;
-        state.refresh_token = secrets.refresh_token;
-    } else if !legacy_secrets.is_empty() {
-        secret_store.save(&legacy_secrets)?;
+    match secret_store.load() {
+        Ok(Some(secrets)) => {
+            state.access_token = secrets.access_token;
+            state.refresh_token = secrets.refresh_token;
+        }
+        Ok(None) if !legacy_secrets.is_empty() => {
+            secret_store.save(&legacy_secrets)?;
+            state.access_token = legacy_secrets.access_token;
+            state.refresh_token = legacy_secrets.refresh_token;
+            should_persist_metadata = true;
+        }
+        Err(error) => {
+            eprintln!("codex-usage-plugin failed to read auth secret storage: {error:#}");
+            state.access_token = None;
+            state.refresh_token = None;
+            state.auth_status = String::from("signed-out");
+            state.last_snapshot = Some(SidecarSnapshot::signed_out());
+            state.last_error = Some(format!(
+                "Secure auth storage unavailable: {error:#}. Please sign in again.",
+            ));
+        }
+        Ok(None) => {}
     }
 
-    if !legacy_secrets.is_empty() {
+    if should_persist_metadata {
         save_persisted_auth_state_to_disk_with_store(path, &state, secret_store)?;
     }
 
