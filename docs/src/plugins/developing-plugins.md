@@ -13,6 +13,8 @@ Plugins run out of process.
 - On Linux, Zed launches plugins with `PR_SET_NO_NEW_PRIVS`, a Landlock filesystem sandbox, and a seccomp filter that blocks mount, namespace, tracing, and kernel-instrumentation syscalls.
 - On Windows, Zed launches plugins inside AppContainers with plugin-scoped filesystem access, then attaches them to dedicated Job Objects so the host can tear down the full plugin process tree.
 
+Plugins should treat secret storage as a host service, not a direct plugin responsibility. In particular, macOS sandboxed plugins should not write credentials directly to Keychain. Use the host secure-storage API exposed through `gpui_plugin` so the host process persists secrets on the plugin's behalf.
+
 ## Plugin Features {#plugin-features}
 
 Plugins can provide:
@@ -138,3 +140,40 @@ fn main() -> Result<()> {
 ```
 
 Each `[[panels]]` and `[[titlebar_widgets]]` entry in `plugin.toml` must also be registered in code.
+
+## Secure Storage
+
+Plugins that need to persist secrets should use `gpui_plugin::host_request` with `PluginHostRequest`. This allows secrets to persist securely across sessions.
+
+```rs
+use gpui::{host_request, PluginHostRequest, PluginHostResponse};
+
+fn load_secret() -> anyhow::Result<Option<String>> {
+    let response = host_request(PluginHostRequest::SecureStorageLoad {
+        key: "my-secret".to_string(),
+    })?;
+
+    let PluginHostResponse::SecureStorageLoad { value } = response else {
+        anyhow::bail!("unexpected secure storage response");
+    };
+
+    Ok(value)
+}
+
+fn save_secret(value: String) -> anyhow::Result<()> {
+    host_request(PluginHostRequest::SecureStorageStore {
+        key: "my-secret".to_string(),
+        value,
+    })?;
+    Ok(())
+}
+
+fn clear_secret() -> anyhow::Result<()> {
+    host_request(PluginHostRequest::SecureStorageClear {
+        key: "my-secret".to_string(),
+    })?;
+    Ok(())
+}
+```
+
+The host scopes secure-storage entries to the plugin id, so keys only need to be unique within a single plugin.

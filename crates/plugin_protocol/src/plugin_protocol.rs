@@ -925,9 +925,29 @@ fn is_default_style_refinement(style: &StyleRefinement) -> bool {
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(tag = "type", rename_all = "snake_case")]
+pub enum PluginHostRequest {
+    SecureStorageLoad { key: String },
+    SecureStorageStore { key: String, value: String },
+    SecureStorageClear { key: String },
+}
+
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(tag = "type", rename_all = "snake_case")]
+pub enum PluginHostResponse {
+    SecureStorageLoad { value: Option<String> },
+    SecureStorageStore,
+    SecureStorageClear,
+}
+
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(tag = "type", rename_all = "snake_case")]
 pub enum PluginToHost {
     Register {
         plugin: PluginMetadata,
+    },
+    HostRequest {
+        request_id: u64,
+        request: PluginHostRequest,
     },
     Render {
         panel_id: String,
@@ -965,6 +985,13 @@ pub enum HostToPlugin {
     },
     ClosePanel {
         panel_instance_id: PanelInstanceId,
+    },
+    HostResponse {
+        request_id: u64,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        response: Option<PluginHostResponse>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        error: Option<String>,
     },
     Shutdown,
 }

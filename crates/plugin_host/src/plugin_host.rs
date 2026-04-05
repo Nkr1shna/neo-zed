@@ -108,6 +108,14 @@ impl<T: Render + 'static> PanelSession<T> {
 
 mod host {
     use anyhow::{Context as _, Result};
+    #[cfg(target_os = "macos")]
+    use core_foundation::{
+        base::{CFType, CFTypeRef, OSStatus, TCFType},
+        boolean::CFBoolean,
+        data::CFData,
+        dictionary::{CFDictionaryRef, CFMutableDictionary},
+        string::{CFString, CFStringRef},
+    };
     use futures::future::{self, Either};
     use futures::io::{BufReader, BufWriter};
     use futures::{AsyncBufReadExt as _, AsyncWriteExt as _};
@@ -119,8 +127,9 @@ mod host {
     use plugin::{InstalledPlugin, PluginStore, PluginStoreLayout};
     use plugin_protocol::{
         DockPosition as PluginDockPosition, EventHandlerId, HostThemeSnapshot, HostToPlugin,
-        PanelActivation, PanelDescriptor, PanelInstanceId, PluginId, PluginToHost,
-        SerializedActionEvent, SerializedClickEvent, SerializedKeyDownEvent, SerializedKeyUpEvent,
+        PanelActivation, PanelDescriptor, PanelInstanceId, PluginHostRequest,
+        PluginHostResponse, PluginId, PluginToHost, SerializedActionEvent,
+        SerializedClickEvent, SerializedKeyDownEvent, SerializedKeyUpEvent,
         SerializedModifiersChangedEvent, SerializedMouseDownEvent, SerializedMouseMoveEvent,
         SerializedMousePressureEvent, SerializedMouseUpEvent, SerializedPinchEvent,
         SerializedScrollWheelEvent, StyleValue, TitlebarWidgetDescriptor, TitlebarWidgetSide,
@@ -146,6 +155,8 @@ mod host {
         io::{FromRawHandle as _, OwnedHandle, RawHandle},
         process::ExitStatusExt as _,
     };
+    #[cfg(target_os = "macos")]
+    use std::ptr;
     use std::{
         any::TypeId,
         collections::{BTreeMap, BTreeSet},
@@ -1157,6 +1168,30 @@ mod host {
                         cx,
                     );
                 }
+                PluginToHost::HostRequest {
+                    request_id,
+                    request,
+                } => {
+                    let Some(process_sender) = self
+                        .processes
+                        .get(&plugin_id)
+                        .map(|process| process.sender.clone())
+                    else {
+                        return Ok(());
+                    };
+                    let (response, error) = match handle_plugin_host_request(&plugin_id, request) {
+                        Ok(response) => (Some(response), None),
+                        Err(error) => (None, Some(format!("{error:#}"))),
+                    };
+                    send_message(
+                        &process_sender,
+                        &HostToPlugin::HostResponse {
+                            request_id,
+                            response,
+                            error,
+                        },
+                    )?;
+                }
                 PluginToHost::Render {
                     panel_instance_id,
                     root,
@@ -1487,6 +1522,110 @@ mod host {
     }
 
     const MAX_PLUGIN_STDIO_LINE_BYTES: usize = 1_048_576;
+    const HOST_SECURE_STORAGE_SERVICE: &str = "neo-zed.plugin-host";
+
+    #[cfg(target_os = "macos")]
+    mod secure_storage {
+        #![allow(non_upper_case_globals)]
+
+        use super::*;
+
+        #[link(name = "Security", kind = "framework")]
+        unsafe extern "C" {
+            static kSecClass: CFStringRef;
+            static kSecClassGenericPassword: CFStringRef;
+            static kSecAttrService: CFStringRef;
+            static kSecAttrAccount: CFStringRef;
+            static kSecValueData: CFStringRef;
+            static kSecReturnData: CFStringRef;
+
+            fn SecItemAdd(attributes: CFDictionaryRef, result: *mut CFTypeRef) -> OSStatus;
+            fn SecItemUpdate(query: CFDictionaryRef, attributes: CFDictionaryRef) -> OSStatus;
+            fn SecItemDelete(query: CFDictionaryRef) -> OSStatus;
+            fn SecItemCopyMatching(query: CFDictionaryRef, result: *mut CFTypeRef) -> OSStatus;
+        }
+
+        const errSecSuccess: OSStatus = 0;
+        const errSecItemNotFound: OSStatus = -25300;
+
+        unsafe fn base_query(
+            service: &CFString,
+            account: &CFString,
+        ) -> CFMutableDictionary<*const core::ffi::c_void, *const core::ffi::c_void> {
+            let mut attrs = CFMutableDictionary::with_capacity(3);
+            unsafe {
+                attrs.set(kSecClass as *const _, kSecClassGenericPassword as *const _);
+                attrs.set(kSecAttrService as *const _, service.as_CFTypeRef());
+                attrs.set(kSecAttrAccount as *const _, account.as_CFTypeRef());
+            }
+            attrs
+        }
+
+        pub fn load(service: &str, account: &str) -> Result<Option<String>> {
+            let service = CFString::from(service);
+            let account = CFString::from(account);
+            let cf_true = CFBoolean::true_value().as_CFTypeRef();
+
+            unsafe {
+                let mut query = base_query(&service, &account);
+                query.set(kSecReturnData as *const _, cf_true);
+
+                let mut result = CFTypeRef::from(ptr::null());
+                let status = SecItemCopyMatching(query.as_concrete_TypeRef(), &mut result);
+                match status {
+                    errSecSuccess => {}
+                    errSecItemNotFound => return Ok(None),
+                    _ => anyhow::bail!("reading keychain item failed: {status}"),
+                }
+
+                let data = CFType::wrap_under_create_rule(result)
+                    .downcast::<CFData>()
+                    .context("keychain item payload was not data")?;
+                let value = String::from_utf8(data.bytes().to_vec())
+                    .context("keychain item payload was not valid utf-8")?;
+                Ok(Some(value))
+            }
+        }
+
+        pub fn store(service: &str, account: &str, value: &str) -> Result<()> {
+            let service = CFString::from(service);
+            let account = CFString::from(account);
+            let value = CFData::from_buffer(value.as_bytes());
+
+            unsafe {
+                let query = base_query(&service, &account);
+
+                let mut update = CFMutableDictionary::with_capacity(1);
+                update.set(kSecValueData as *const _, value.as_CFTypeRef());
+
+                let mut status =
+                    SecItemUpdate(query.as_concrete_TypeRef(), update.as_concrete_TypeRef());
+                if status == errSecItemNotFound {
+                    let mut attrs = base_query(&service, &account);
+                    attrs.set(kSecValueData as *const _, value.as_CFTypeRef());
+                    status = SecItemAdd(attrs.as_concrete_TypeRef(), ptr::null_mut());
+                }
+
+                anyhow::ensure!(status == errSecSuccess, "writing keychain item failed: {status}");
+                Ok(())
+            }
+        }
+
+        pub fn clear(service: &str, account: &str) -> Result<bool> {
+            let service = CFString::from(service);
+            let account = CFString::from(account);
+
+            unsafe {
+                let query = base_query(&service, &account);
+                let status = SecItemDelete(query.as_concrete_TypeRef());
+                match status {
+                    errSecSuccess => Ok(true),
+                    errSecItemNotFound => Ok(false),
+                    _ => anyhow::bail!("deleting keychain item failed: {status}"),
+                }
+            }
+        }
+    }
 
     #[derive(Clone, Debug)]
     enum ProcessTermination {
@@ -1582,6 +1721,7 @@ mod host {
     fn plugin_to_host_message_kind(message: &PluginToHost) -> &'static str {
         match message {
             PluginToHost::Register { .. } => "register",
+            PluginToHost::HostRequest { .. } => "host request",
             PluginToHost::Render { .. } => "render",
             PluginToHost::RenderDelta { .. } => "render delta",
             PluginToHost::ClosePanel { .. } => "close panel",
@@ -3526,6 +3666,128 @@ mod host {
         sender
             .try_send(serde_json::to_string(message)?)
             .context("failed to queue plugin host message")
+    }
+
+    fn secure_storage_account(plugin_id: &PluginId, key: &str) -> String {
+        format!("plugin:{}:{key}", plugin_id.as_str())
+    }
+
+    fn handle_plugin_host_request(
+        plugin_id: &PluginId,
+        request: PluginHostRequest,
+    ) -> Result<PluginHostResponse> {
+        match request {
+            PluginHostRequest::SecureStorageLoad { key } => {
+                let account = secure_storage_account(plugin_id, &key);
+                let value = match read_secure_storage_value(&account) {
+                    Ok(Some(value)) => {
+                        log::warn!(
+                            "plugin host secure storage load succeeded for plugin `{plugin_id}` account `{account}`"
+                        );
+                        Some(value)
+                    }
+                    Ok(None) => {
+                        log::warn!(
+                            "plugin host secure storage returned no entry for plugin `{plugin_id}` account `{account}`"
+                        );
+                        None
+                    }
+                    Err(error) => {
+                        log::warn!(
+                            "plugin host secure storage load failed for plugin `{plugin_id}` account `{account}`: {error}"
+                        );
+                        return Err(error.context(format!(
+                            "failed to read secure storage key `{key}` for plugin `{plugin_id}`"
+                        )));
+                    }
+                };
+                Ok(PluginHostResponse::SecureStorageLoad { value })
+            }
+            PluginHostRequest::SecureStorageStore { key, value } => {
+                let account = secure_storage_account(plugin_id, &key);
+                write_secure_storage_value(&account, &value).with_context(|| {
+                    format!("failed to write secure storage key `{key}` for plugin `{plugin_id}`")
+                })?;
+                log::warn!(
+                    "plugin host secure storage store succeeded for plugin `{plugin_id}` account `{account}`"
+                );
+                Ok(PluginHostResponse::SecureStorageStore)
+            }
+            PluginHostRequest::SecureStorageClear { key } => {
+                let account = secure_storage_account(plugin_id, &key);
+                match clear_secure_storage_value(&account) {
+                    Ok(true) => {
+                        log::warn!(
+                            "plugin host secure storage clear succeeded for plugin `{plugin_id}` account `{account}`"
+                        );
+                    }
+                    Ok(false) => {
+                        log::warn!(
+                            "plugin host secure storage clear found no entry for plugin `{plugin_id}` account `{account}`"
+                        );
+                    }
+                    Err(error) => {
+                        log::warn!(
+                            "plugin host secure storage clear failed for plugin `{plugin_id}` account `{account}`: {error}"
+                        );
+                        return Err(error.context(format!(
+                            "failed to clear secure storage key `{key}` for plugin `{plugin_id}`"
+                        )));
+                    }
+                }
+                Ok(PluginHostResponse::SecureStorageClear)
+            }
+        }
+    }
+
+    #[cfg(target_os = "macos")]
+    fn read_secure_storage_value(account: &str) -> Result<Option<String>> {
+        secure_storage::load(HOST_SECURE_STORAGE_SERVICE, account)
+            .with_context(|| format!("failed to initialize secure storage for `{account}`"))
+    }
+
+    #[cfg(not(target_os = "macos"))]
+    fn read_secure_storage_value(account: &str) -> Result<Option<String>> {
+        let entry = keyring::Entry::new(HOST_SECURE_STORAGE_SERVICE, account)
+            .map_err(anyhow::Error::new)
+            .with_context(|| format!("failed to initialize secure storage for `{account}`"))?;
+        match entry.get_password() {
+            Ok(value) => Ok(Some(value)),
+            Err(keyring::Error::NoEntry) => Ok(None),
+            Err(error) => Err(anyhow::Error::new(error)),
+        }
+    }
+
+    #[cfg(target_os = "macos")]
+    fn write_secure_storage_value(account: &str, value: &str) -> Result<()> {
+        secure_storage::store(HOST_SECURE_STORAGE_SERVICE, account, value)
+            .with_context(|| format!("failed to initialize secure storage for `{account}`"))
+    }
+
+    #[cfg(not(target_os = "macos"))]
+    fn write_secure_storage_value(account: &str, value: &str) -> Result<()> {
+        let entry = keyring::Entry::new(HOST_SECURE_STORAGE_SERVICE, account)
+            .map_err(anyhow::Error::new)
+            .with_context(|| format!("failed to initialize secure storage for `{account}`"))?;
+        entry.set_password(value).map_err(anyhow::Error::new)
+    }
+
+    #[cfg(target_os = "macos")]
+    fn clear_secure_storage_value(account: &str) -> Result<bool> {
+        secure_storage::clear(HOST_SECURE_STORAGE_SERVICE, account)
+            .with_context(|| format!("failed to initialize secure storage for `{account}`"))
+    }
+
+    #[cfg(not(target_os = "macos"))]
+    fn clear_secure_storage_value(account: &str) -> Result<bool> {
+        let entry = keyring::Entry::new(HOST_SECURE_STORAGE_SERVICE, account)
+            .map_err(anyhow::Error::new)
+            .with_context(|| format!("failed to initialize secure storage for `{account}`"))?;
+        match entry.delete_credential() {
+            Ok(()) => Ok(true),
+            Err(keyring::Error::NoEntry) => Ok(false),
+            Err(error) => Err(anyhow::Error::new(error)),
+        }
     }
 
     type PluginProcessReader = Box<dyn futures::AsyncRead + Unpin + Send>;

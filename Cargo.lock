@@ -13002,6 +13002,8 @@ name = "plugin_host"
 version = "0.1.0"
 dependencies = [
  "anyhow",
+ "core-foundation 0.10.0",
+ "core-foundation-sys",
  "db",
  "fs",
  "futures 0.3.31",

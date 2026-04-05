@@ -3,10 +3,11 @@ use futures::{FutureExt as _, future::select, pin_mut};
 use gpui_api::{RenderContext, StyleMap, UiNode, UiNodeKind};
 use plugin_protocol::{
     HostThemeSnapshot, HostToPlugin, PanelDescriptor, PanelInstanceId, PluginId, PluginMetadata,
-    PluginToHost, SerializedActionEvent, SerializedClickEvent, SerializedKeyDownEvent,
-    SerializedKeyUpEvent, SerializedModifiersChangedEvent, SerializedMouseDownEvent,
-    SerializedMouseMoveEvent, SerializedMousePressureEvent, SerializedMouseUpEvent,
-    SerializedPinchEvent, SerializedScrollWheelEvent, TitlebarWidgetDescriptor,
+    PluginToHost, SerializedActionEvent,
+    SerializedClickEvent, SerializedKeyDownEvent, SerializedKeyUpEvent,
+    SerializedModifiersChangedEvent, SerializedMouseDownEvent, SerializedMouseMoveEvent,
+    SerializedMousePressureEvent, SerializedMouseUpEvent, SerializedPinchEvent,
+    SerializedScrollWheelEvent, TitlebarWidgetDescriptor,
     UiEventKind as ProtocolUiEventKind, diff_ui_trees,
 };
 use serde::Deserialize;
@@ -15,12 +16,19 @@ use std::{
     io::{BufRead as _, BufWriter},
     path::Path,
     rc::Rc,
+    sync::{
+        Arc, Mutex, OnceLock,
+        atomic::{AtomicU64, Ordering},
+        mpsc,
+    },
+    thread,
     time::Duration,
 };
 
 pub use gpui::{actions, private};
 #[cfg(any(test, feature = "test-support"))]
 pub use gpui_api::proptest;
+pub use plugin_protocol::{PluginHostRequest, PluginHostResponse};
 pub use gpui_api::{
     AbsoluteLength, Action, ActiveTheme, AlignContent, AlignItems, AlignSelf, Animation,
     AnimationElement, AnimationExt, AnyElement, AnyView, AnyWindowHandle, App, AppContext, ArcCow,
@@ -492,6 +500,7 @@ impl PluginApp {
                     panel_instance_id,
                 }]))
             }
+            HostToPlugin::HostResponse { .. } => Ok(LoopControl::Continue(Vec::new())),
             HostToPlugin::Shutdown => {
                 for session in self.sessions.values_mut() {
                     session.shutdown()?;
@@ -754,6 +763,53 @@ impl From<RuntimeManifest> for PluginMetadata {
     }
 }
 
+enum OutboundMessage {
+    Plugin(PluginToHost),
+    HostRequest {
+        request_id: u64,
+        request: PluginHostRequest,
+    },
+}
+
+struct PendingHostRequest {
+    response_sender: mpsc::Sender<anyhow::Result<PluginHostResponse>>,
+}
+
+struct HostClient {
+    outbound_sender: mpsc::Sender<OutboundMessage>,
+    pending_requests: Arc<Mutex<BTreeMap<u64, PendingHostRequest>>>,
+    next_request_id: AtomicU64,
+}
+
+static HOST_CLIENT: OnceLock<HostClient> = OnceLock::new();
+
+pub fn host_request(request: PluginHostRequest) -> anyhow::Result<PluginHostResponse> {
+    let host_client = HOST_CLIENT
+        .get()
+        .ok_or_else(|| anyhow::anyhow!("plugin host client is not initialized"))?;
+    let request_id = host_client.next_request_id.fetch_add(1, Ordering::Relaxed);
+    let (response_sender, response_receiver) = mpsc::channel();
+    host_client
+        .pending_requests
+        .lock()
+        .map_err(|_| anyhow::anyhow!("plugin host request registry is poisoned"))?
+        .insert(request_id, PendingHostRequest { response_sender });
+    host_client
+        .outbound_sender
+        .send(OutboundMessage::HostRequest {
+            request_id,
+            request,
+        })
+        .map_err(|_| anyhow::anyhow!("failed to send host request to plugin runtime"))?;
+
+    match response_receiver.recv() {
+        Ok(result) => result,
+        Err(_) => Err(anyhow::anyhow!(
+            "plugin host request channel closed before a response was received"
+        )),
+    }
+}
+
 fn write_message(writer: &mut impl std::io::Write, message: &PluginToHost) -> Result<()> {
     serde_json::to_writer(&mut *writer, message)?;
     writer.write_all(b"\n")?;
@@ -761,19 +817,88 @@ fn write_message(writer: &mut impl std::io::Write, message: &PluginToHost) -> Re
     Ok(())
 }
 
+fn write_outbound_message(writer: &mut impl std::io::Write, message: &OutboundMessage) -> Result<()> {
+    match message {
+        OutboundMessage::Plugin(message) => write_message(writer, message),
+        OutboundMessage::HostRequest {
+            request_id,
+            request,
+        } => {
+            serde_json::to_writer(
+                &mut *writer,
+                &PluginToHost::HostRequest {
+                    request_id: *request_id,
+                    request: request.clone(),
+                },
+            )?;
+            writer.write_all(b"\n")?;
+            writer.flush()?;
+            Ok(())
+        }
+    }
+}
+
 pub fn run(register: impl FnOnce(&mut PluginApp)) -> Result<()> {
     let mut app = PluginApp::from_current_directory()?;
     register(&mut app);
     app.validate_registrations()?;
 
-    let (stdin_sender, stdin_receiver) = smol::channel::unbounded::<String>();
-    std::thread::spawn(move || {
+    let (host_message_sender, host_message_receiver) = smol::channel::unbounded::<HostToPlugin>();
+    let pending_requests = Arc::new(Mutex::new(BTreeMap::<u64, PendingHostRequest>::new()));
+    let (outbound_sender, outbound_receiver) = mpsc::channel::<OutboundMessage>();
+
+    HOST_CLIENT
+        .set(HostClient {
+            outbound_sender: outbound_sender.clone(),
+            pending_requests: pending_requests.clone(),
+            next_request_id: AtomicU64::new(1),
+        })
+        .map_err(|_| anyhow::anyhow!("plugin host client was initialized more than once"))?;
+
+    thread::spawn(move || {
         let stdin = std::io::stdin();
         for line in stdin.lock().lines() {
             match line {
                 Ok(line) => {
-                    if stdin_sender.send_blocking(line).is_err() {
-                        break;
+                    let message: HostToPlugin = match serde_json::from_str(&line)
+                        .with_context(|| "failed to decode host message".to_string())
+                    {
+                        Ok(message) => message,
+                        Err(error) => {
+                            eprintln!("{error:#}");
+                            break;
+                        }
+                    };
+
+                    match message {
+                        HostToPlugin::HostResponse {
+                            request_id,
+                            response,
+                            error,
+                        } => {
+                            let pending_request = pending_requests
+                                .lock()
+                                .ok()
+                                .and_then(|mut pending_requests| pending_requests.remove(&request_id));
+                            if let Some(pending_request) = pending_request {
+                                let result = match (response, error) {
+                                    (Some(response), None) => Ok(response),
+                                    (None, Some(error)) => Err(anyhow::anyhow!(error)),
+                                    (Some(_), Some(error)) => {
+                                        Err(anyhow::anyhow!("host response was invalid: {error}"))
+                                    }
+                                    (None, None) => Err(anyhow::anyhow!(
+                                        "host response was missing both payload and error"
+                                    )),
+                                };
+                                let _ = pending_request.response_sender.send(result);
+                            }
+                        }
+                        message => {
+                            if host_message_sender.send_blocking(message).is_err() {
+                                break;
+                            }
+                        }
                     }
                 }
                 Err(error) => {
@@ -784,18 +909,27 @@ pub fn run(register: impl FnOnce(&mut PluginApp)) -> Result<()> {
         }
     });
 
-    let mut stdout = BufWriter::new(std::io::stdout().lock());
-    write_message(
-        &mut stdout,
-        &PluginToHost::Register {
+    thread::spawn(move || {
+        let stdout = std::io::stdout();
+        let mut stdout = BufWriter::new(stdout.lock());
+        while let Ok(message) = outbound_receiver.recv() {
+            if let Err(error) = write_outbound_message(&mut stdout, &message) {
+                eprintln!("failed to write plugin message: {error:#}");
+                break;
+            }
+        }
+    });
+
+    outbound_sender
+        .send(OutboundMessage::Plugin(PluginToHost::Register {
             plugin: app.metadata.clone(),
-        },
-    )?;
+        }))
+        .map_err(|_| anyhow::anyhow!("failed to send plugin registration to host"))?;
 
     smol::block_on(async move {
         loop {
             let timer = smol::Timer::after(Duration::from_millis(16)).fuse();
-            let inbound = stdin_receiver.recv().fuse();
+            let inbound = host_message_receiver.recv().fuse();
             pin_mut!(timer, inbound);
 
             match select(inbound, timer).await {
@@ -804,12 +938,16 @@ pub fn run(register: impl FnOnce(&mut PluginApp)) -> Result<()> {
                         Ok(message) => message,
                         Err(_) => break,
                     };
-                    let decoded: HostToPlugin = serde_json::from_str(&message)
-                        .with_context(|| "failed to decode host message".to_string())?;
-                    match app.handle_message(decoded)? {
+                    match app.handle_message(message)? {
                         LoopControl::Continue(messages) => {
                             for message in messages {
-                                write_message(&mut stdout, &message)?;
+                                outbound_sender
+                                    .send(OutboundMessage::Plugin(message))
+                                    .map_err(|_| {
+                                        anyhow::anyhow!(
+                                            "failed to send plugin response to writer thread"
+                                        )
+                                    })?;
                             }
                         }
                         LoopControl::Shutdown => break,
@@ -819,7 +957,9 @@ pub fn run(register: impl FnOnce(&mut PluginApp)) -> Result<()> {
             }
 
             for message in app.drain_messages()? {
-                write_message(&mut stdout, &message)?;
+                outbound_sender
+                    .send(OutboundMessage::Plugin(message))
+                    .map_err(|_| anyhow::anyhow!("failed to send plugin message to writer thread"))?;
             }
         }
 

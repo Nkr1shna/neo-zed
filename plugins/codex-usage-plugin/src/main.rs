@@ -13,6 +13,7 @@ use std::{fmt::Write as _, process};
 
 use anyhow::{Context as _, Result};
 use base64::Engine as _;
+#[cfg(not(feature = "mirror"))]
 use keyring::Entry;
 use serde::{Deserialize, Serialize};
 use serde_json::{Map, Value, json};
@@ -24,8 +25,8 @@ use std::os::unix::fs::PermissionsExt as _;
 
 #[cfg(feature = "mirror")]
 use gpui_plugin::{
-    ActiveTheme, ClickEvent, Context, IntoElement, Render, StatefulInteractiveElement, Styled,
-    Window, h_flex, px, run, v_flex,
+    ActiveTheme, ClickEvent, Context, IntoElement, PluginHostRequest, PluginHostResponse, Render,
+    StatefulInteractiveElement, Styled, Window, h_flex, host_request, px, run, v_flex,
 };
 #[cfg(feature = "mirror")]
 use ui_plugin::{Button, Divider, Icon, Label, MenuItem, ProgressBar};
@@ -37,7 +38,12 @@ pub const TITLEBAR_WIDGET_ID: &str = "codex-usage-titlebar";
 pub const TITLEBAR_WIDGET_TITLE: &str = "Codex Usage";
 
 const AUTH_STATE_FILENAME: &str = "codex-chatgpt-auth.json";
+#[cfg(feature = "mirror")]
+const AUTH_SECRET_STORAGE_KEY: &str = "chatgpt-auth-secrets";
+#[cfg(not(feature = "mirror"))]
 const AUTH_KEYRING_SERVICE: &str = "neo-zed.codex-usage-plugin";
+#[cfg(not(feature = "mirror"))]
+const AUTH_KEYRING_ACCOUNT: &str = "codex-usage-plugin";
 const AUTHORIZE_URL: &str = "https://auth.openai.com/oauth/authorize";
 const TOKEN_URL: &str = "https://auth.openai.com/oauth/token";
 const USAGE_URL: &str = "https://chatgpt.com/backend-api/wham/usage";
@@ -85,6 +91,7 @@ impl StoredAuthSecrets {
 #[derive(Debug, Clone)]
 struct AuthSecretStore {
     backend: AuthSecretBackend,
+    #[cfg_attr(feature = "mirror", allow(dead_code))]
     metadata_path: PathBuf,
 }
 
@@ -106,7 +113,7 @@ impl AuthSecretStore {
 
     fn load(&self) -> Result<Option<StoredAuthSecrets>> {
         let keyring_result = match self.backend {
-            AuthSecretBackend::Auto => self.load_from_keyring(),
+            AuthSecretBackend::Auto => self.load_from_secure_storage(),
             #[cfg(test)]
             AuthSecretBackend::FileOnly => self.load_from_file(),
         };
@@ -127,19 +134,7 @@ impl AuthSecretStore {
             .with_context(|| "failed to encode stored auth secrets")?;
 
         match self.backend {
-            AuthSecretBackend::Auto => match self.keyring_entry() {
-                Ok(entry) => {
-                    entry
-                        .set_password(&encoded)
-                        .with_context(|| "failed to write auth secrets to secure storage")?;
-                    Ok(())
-                }
-                Err(keyring_error) => {
-                    let error_context = format!("{keyring_error:#}");
-                    eprintln!("codex-usage-plugin keyring save failed: {error_context}");
-                    Err(keyring_error).context(error_context)
-                }
-            },
+            AuthSecretBackend::Auto => self.save_to_secure_storage(&encoded),
             #[cfg(test)]
             AuthSecretBackend::FileOnly => self.save_to_file(secrets),
         }
@@ -149,15 +144,8 @@ impl AuthSecretStore {
         let mut clear_error = None;
 
         if self.backend == AuthSecretBackend::Auto {
-            if let Ok(entry) = self.keyring_entry() {
-                if let Err(error) = entry.delete_credential() {
-                    if !matches!(error, keyring::Error::NoEntry) {
-                        clear_error = Some(
-                            anyhow::Error::new(error)
-                                .context("failed to clear auth secrets from secure storage"),
-                        );
-                    }
-                }
+            if let Err(error) = self.clear_secure_storage() {
+                clear_error = Some(error);
             }
         }
 
@@ -175,24 +163,136 @@ impl AuthSecretStore {
         }
     }
 
+    fn load_from_secure_storage(&self) -> Result<Option<StoredAuthSecrets>> {
+        #[cfg(feature = "mirror")]
+        {
+            let response = host_request(PluginHostRequest::SecureStorageLoad {
+                key: String::from(AUTH_SECRET_STORAGE_KEY),
+            })?;
+            let PluginHostResponse::SecureStorageLoad { value } = response else {
+                anyhow::bail!("host returned an unexpected secure storage load response");
+            };
+            let Some(raw) = value else {
+                eprintln!(
+                    "codex-usage-plugin host secure storage returned no entry for key {}",
+                    AUTH_SECRET_STORAGE_KEY
+                );
+                return Ok(None);
+            };
+            let secrets: StoredAuthSecrets = serde_json::from_str(&raw)
+                .with_context(|| "failed to parse auth secrets from host secure storage")?;
+            if secrets.is_empty() {
+                Ok(None)
+            } else {
+                Ok(Some(secrets))
+            }
+        }
+
+        #[cfg(not(feature = "mirror"))]
+        {
+            self.load_from_keyring()
+        }
+    }
+
+    #[cfg(not(feature = "mirror"))]
     fn load_from_keyring(&self) -> Result<Option<StoredAuthSecrets>> {
-        let entry = self.keyring_entry()?;
-        match entry.get_password() {
-            Ok(raw) => {
-                let secrets: StoredAuthSecrets = serde_json::from_str(&raw)
-                    .with_context(|| "failed to parse auth secrets from secure storage")?;
-                if secrets.is_empty() {
-                    Ok(None)
-                } else {
-                    Ok(Some(secrets))
+        for (account, entry) in self.keyring_entries_for_load()? {
+            match entry.get_password() {
+                Ok(raw) => {
+                    let secrets: StoredAuthSecrets = serde_json::from_str(&raw)
+                        .with_context(|| "failed to parse auth secrets from secure storage")?;
+                    if secrets.is_empty() {
+                        eprintln!(
+                            "codex-usage-plugin keyring entry was empty for account {}",
+                            account
+                        );
+                        continue;
+                    }
+                    if account != AUTH_KEYRING_ACCOUNT {
+                        eprintln!(
+                            "codex-usage-plugin keyring load migrated legacy account {} to {}",
+                            account,
+                            AUTH_KEYRING_ACCOUNT
+                        );
+                        self.save(&secrets)?;
+                    }
+                    return Ok(Some(secrets));
+                }
+                Err(keyring::Error::NoEntry) => {
+                    eprintln!(
+                        "codex-usage-plugin keyring returned no entry for account {}",
+                        account
+                    );
+                }
+                Err(error) => {
+                    eprintln!(
+                        "codex-usage-plugin keyring read failed while fetching password for account {}: {error:#}",
+                        account
+                    );
+                    return Err(anyhow::Error::new(error)
+                        .context("failed to read auth secrets from secure storage"));
                 }
             }
-            Err(keyring::Error::NoEntry) => Ok(None),
-            Err(error) => {
-                eprintln!("codex-usage-plugin keyring read failed while fetching password: {error:#}");
-                Err(anyhow::Error::new(error)
-                    .context("failed to read auth secrets from secure storage"))
+        }
+        Ok(None)
+    }
+
+    fn save_to_secure_storage(&self, encoded: &str) -> Result<()> {
+        #[cfg(feature = "mirror")]
+        {
+            host_request(PluginHostRequest::SecureStorageStore {
+                key: String::from(AUTH_SECRET_STORAGE_KEY),
+                value: encoded.to_string(),
+            })?;
+            eprintln!(
+                "codex-usage-plugin host secure storage save succeeded for key {}",
+                AUTH_SECRET_STORAGE_KEY
+            );
+            Ok(())
+        }
+
+        #[cfg(not(feature = "mirror"))]
+        {
+            match self.keyring_entry() {
+                Ok(entry) => {
+                    entry
+                        .set_password(encoded)
+                        .with_context(|| "failed to write auth secrets to secure storage")?;
+                    eprintln!(
+                        "codex-usage-plugin keyring save succeeded for account {}",
+                        AUTH_KEYRING_ACCOUNT
+                    );
+                    Ok(())
+                }
+                Err(keyring_error) => {
+                    let error_context = format!("{keyring_error:#}");
+                    eprintln!("codex-usage-plugin keyring save failed: {error_context}");
+                    Err(keyring_error).context(error_context)
+                }
             }
+        }
+    }
+
+    fn clear_secure_storage(&self) -> Result<()> {
+        #[cfg(feature = "mirror")]
+        {
+            host_request(PluginHostRequest::SecureStorageClear {
+                key: String::from(AUTH_SECRET_STORAGE_KEY),
+            })?;
+            Ok(())
+        }
+
+        #[cfg(not(feature = "mirror"))]
+        {
+            for entry in self.keyring_entries_for_clear() {
+                if let Err(error) = entry.delete_credential() {
+                    if !matches!(error, keyring::Error::NoEntry) {
+                        return Err(anyhow::Error::new(error)
+                            .context("failed to clear auth secrets from secure storage"));
+                    }
+                }
+            }
+            Ok(())
         }
     }
 
@@ -235,14 +335,54 @@ impl AuthSecretStore {
         }
     }
 
+    #[cfg(not(feature = "mirror"))]
     fn keyring_entry(&self) -> Result<Entry> {
-        let account = format!(
+        self.keyring_entry_for_account(AUTH_KEYRING_ACCOUNT)
+    }
+
+    #[cfg(not(feature = "mirror"))]
+    fn keyring_entry_for_account(&self, account: &str) -> Result<Entry> {
+        Entry::new(AUTH_KEYRING_SERVICE, account)
+            .map_err(anyhow::Error::new)
+            .with_context(|| "failed to initialize secure auth storage")
+    }
+
+    #[cfg(not(feature = "mirror"))]
+    fn keyring_entries_for_load(&self) -> Result<Vec<(String, Entry)>> {
+        let mut entries = Vec::with_capacity(2);
+        entries.push((
+            String::from(AUTH_KEYRING_ACCOUNT),
+            self.keyring_entry_for_account(AUTH_KEYRING_ACCOUNT)?,
+        ));
+        let legacy_account = format!(
             "codex-usage-plugin:{}",
             stable_secret_scope(&self.metadata_path)
         );
-        Entry::new(AUTH_KEYRING_SERVICE, &account)
-            .map_err(anyhow::Error::new)
-            .with_context(|| "failed to initialize secure auth storage")
+        if legacy_account != AUTH_KEYRING_ACCOUNT {
+            entries.push((
+                legacy_account.clone(),
+                self.keyring_entry_for_account(&legacy_account)?,
+            ));
+        }
+        Ok(entries)
+    }
+
+    #[cfg(not(feature = "mirror"))]
+    fn keyring_entries_for_clear(&self) -> Vec<Entry> {
+        let mut entries = Vec::with_capacity(2);
+        if let Ok(entry) = self.keyring_entry_for_account(AUTH_KEYRING_ACCOUNT) {
+            entries.push(entry);
+        }
+        let legacy_account = format!(
+            "codex-usage-plugin:{}",
+            stable_secret_scope(&self.metadata_path)
+        );
+        if legacy_account != AUTH_KEYRING_ACCOUNT {
+            if let Ok(entry) = self.keyring_entry_for_account(&legacy_account) {
+                entries.push(entry);
+            }
+        }
+        entries
     }
 
     #[cfg(test)]
@@ -418,6 +558,7 @@ struct SharedState {
     persisted: PersistedAuthState,
     busy: bool,
     serial: u64,
+    hydrated: bool,
 }
 
 #[derive(Clone)]
@@ -427,16 +568,16 @@ pub struct CodexUsageStore {
 }
 
 impl CodexUsageStore {
-    fn new(auth_state_path: PathBuf) -> Result<Self> {
-        let persisted = load_persisted_auth_state_from_disk_at(&auth_state_path)?;
-        Ok(Self {
+    fn new(auth_state_path: PathBuf) -> Self {
+        Self {
             auth_state_path,
             inner: Arc::new(Mutex::new(SharedState {
-                persisted,
+                persisted: PersistedAuthState::signed_out(),
                 busy: false,
                 serial: 1,
+                hydrated: false,
             })),
-        })
+        }
     }
 
     fn current_view_model(&self) -> ViewModel {
@@ -463,6 +604,44 @@ impl CodexUsageStore {
             last_error: state.persisted.last_error.clone(),
             snapshot,
         }
+    }
+
+    fn ensure_loaded(&self) {
+        {
+            let state = self
+                .inner
+                .lock()
+                .unwrap_or_else(|poisoned| poisoned.into_inner());
+            if state.hydrated {
+                return;
+            }
+        }
+
+        let loaded = match load_persisted_auth_state_from_disk_at(&self.auth_state_path) {
+            Ok(persisted) => persisted,
+            Err(error) => PersistedAuthState {
+                auth_status: String::from("signed-out"),
+                access_token: None,
+                refresh_token: None,
+                account_id: None,
+                expires_at: 0,
+                last_refresh_at: 0,
+                last_snapshot: Some(SidecarSnapshot::signed_out()),
+                last_fetched_at: 0,
+                last_error: Some(format!("Failed to load auth state: {error:#}")),
+            },
+        };
+
+        let mut state = self
+            .inner
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        if state.hydrated {
+            return;
+        }
+        state.persisted = loaded;
+        state.hydrated = true;
+        state.serial = state.serial.saturating_add(1);
     }
 
     fn maybe_refresh_stale(&self) {
@@ -520,8 +699,9 @@ impl CodexUsageStore {
         };
 
         let store = self.clone();
+        let auth_state_path = self.auth_state_path.clone();
         thread::spawn(move || {
-            let result = run_login_flow(prepared_state);
+            let result = run_login_flow(&auth_state_path, prepared_state);
             match result {
                 Ok(updated_state) => store.finish_success(updated_state),
                 Err(error) => store.finish_failure(OperationKind::Login, error),
@@ -674,7 +854,7 @@ fn current_snapshot(state: &PersistedAuthState) -> SidecarSnapshot {
     }
 }
 
-fn run_login_flow(mut state: PersistedAuthState) -> Result<PersistedAuthState> {
+fn run_login_flow(auth_state_path: &Path, mut state: PersistedAuthState) -> Result<PersistedAuthState> {
     let verifier_bytes: [u8; 64] = rand::random();
     let verifier = base64_url_encode(&verifier_bytes);
     let challenge_digest = Sha256::digest(verifier.as_bytes());
@@ -701,6 +881,12 @@ fn run_login_flow(mut state: PersistedAuthState) -> Result<PersistedAuthState> {
         &mut state,
         exchange_authorization_code(&authorization_code, &verifier, &redirect_uri, None)?,
     );
+    save_persisted_auth_state_to_disk_at(auth_state_path, &state).with_context(|| {
+        format!(
+            "failed to persist ChatGPT auth state after OAuth callback `{}`",
+            auth_state_path.display()
+        )
+    })?;
     fetch_and_store_usage_snapshot(&mut state, true)?;
     Ok(state)
 }
@@ -1692,10 +1878,10 @@ struct PluginRuntimeContext {
 
 #[cfg(feature = "mirror")]
 impl PluginRuntimeContext {
-    fn new() -> Result<Self> {
-        Ok(Self {
-            store: CodexUsageStore::new(auth_state_path())?,
-        })
+    fn new() -> Self {
+        Self {
+            store: CodexUsageStore::new(auth_state_path()),
+        }
     }
 }
 
@@ -1708,6 +1894,7 @@ struct CodexUsagePanel {
 #[cfg(feature = "mirror")]
 impl CodexUsagePanel {
     fn new(store: CodexUsageStore, cx: &mut Context<Self>) -> Self {
+        store.ensure_loaded();
         let this = Self {
             view_model: store.current_view_model(),
             store,
@@ -1893,6 +2080,7 @@ struct CodexUsageTitlebarWidget {
 #[cfg(feature = "mirror")]
 impl CodexUsageTitlebarWidget {
     fn new(store: CodexUsageStore, cx: &mut Context<Self>) -> Self {
+        store.ensure_loaded();
         let this = Self {
             view_model: store.current_view_model(),
             store,
@@ -1943,7 +2131,7 @@ impl Render for CodexUsageTitlebarWidget {
 #[cfg(feature = "mirror")]
 pub fn run_plugin() -> Result<()> {
     std::env::set_current_dir(plugin_manifest_directory())?;
-    let runtime_context = PluginRuntimeContext::new()?;
+    let runtime_context = PluginRuntimeContext::new();
     run(|app| {
         let panel_store = runtime_context.store.clone();
         app.register_panel(PANEL_ID, move |cx: &mut Context<CodexUsagePanel>| {
