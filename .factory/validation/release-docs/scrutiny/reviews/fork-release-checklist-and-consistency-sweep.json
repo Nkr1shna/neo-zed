@@ -1,0 +1,23 @@
+{
+  "featureId": "fork-release-checklist-and-consistency-sweep",
+  "status": "fail",
+  "summary": "The feature adds the checklist and repoints many links, but the supposed final consistency sweep still leaves upstream-branded troubleshooting and launch surfaces, keeps the docs chrome dependent on `cdn.zed.dev`, and leaves one Linux docs CTA pointed at a stale section anchor.",
+  "issues": [
+    {
+      "severity": "blocking",
+      "description": "The sweep touched `docs/src/troubleshooting.md` and `crates/zed/src/main.rs`, but both files still present user-visible upstream branding. `docs/src/troubleshooting.md:3`, `:8`, `:14`, `:21`, `:29`, `:34`, and `:36` still describe the page as troubleshooting for `Zed`, refer to `Zed` log paths, and tell users to talk to `Zed staff`, while `crates/zed/src/main.rs:83`, `:145`, and `:165` still emit `Zed failed to launch` / `Zed failed to open a window` strings. Because this commit was the final release-facing consistency sweep, these leftover strings mean the public identity is still inconsistent in the exact surfaces it edited.",
+      "suggestedFix": "Replace the remaining user-facing `Zed` branding in the touched troubleshooting and startup-failure surfaces, including the documented log paths if the runtime now uses Neo Zed paths, and rerun the sweep against the touched files for similar leftovers."
+    },
+    {
+      "severity": "blocking",
+      "description": "`docs/theme/index.hbs:78` still hardcodes the docs chrome background image to `https://cdn.zed.dev/images/noise.png`. That leaves a release-facing docs surface dependent on an upstream-hosted endpoint even after this feature claimed to replace remaining release-facing fork identity leaks.",
+      "suggestedFix": "Serve the noise asset from a fork-owned host or bundle it locally in the docs theme so the Neo Zed docs no longer depend on `cdn.zed.dev`."
+    },
+    {
+      "severity": "non_blocking",
+      "description": "`crates/zed/src/zed.rs:611` still opens `https://neozed.dev/docs/linux#zed-fails-to-open-windows`, but `docs/src/linux.md:147` now titles that section `#### Neo Zed fails to open windows`, so the CTA no longer targets the actual section anchor.",
+      "suggestedFix": "Update the link target to the current anchor (or add an explicit anchor to the docs heading) so the Linux software-emulation warning lands on the intended troubleshooting section."
+    }
+  ],
+  "sharedStateObservations": []
+}
