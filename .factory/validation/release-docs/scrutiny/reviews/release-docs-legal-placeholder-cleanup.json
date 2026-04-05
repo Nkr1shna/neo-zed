@@ -1,0 +1,7 @@
+{
+  "featureId": "release-docs-legal-placeholder-cleanup",
+  "status": "pass",
+  "summary": "The fix removes the upstream legal operator identity from the touched Terms and Privacy Policy surfaces and replaces it with clearly temporary Neo Zed placeholder wording, satisfying the prior blocker without regressing the established @neozed.dev contact routes.",
+  "issues": [],
+  "sharedStateObservations": []
+}

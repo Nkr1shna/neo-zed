@@ -1,0 +1,7 @@
+{
+  "featureId": "release-docs-remaining-surface-cleanup",
+  "status": "pass",
+  "summary": "The fix removes the remaining user-facing Zed branding from the touched troubleshooting and startup-failure surfaces, repoints the docs background asset to neozed.dev, and aligns the Linux GPU CTA with the live section anchor while adding narrow regression tests for the code-backed strings.",
+  "issues": [],
+  "sharedStateObservations": []
+}
