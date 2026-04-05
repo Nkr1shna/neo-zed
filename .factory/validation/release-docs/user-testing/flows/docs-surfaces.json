@@ -1,0 +1,109 @@
+{
+  "groupId": "docs-surfaces",
+  "surface": "file/metadata inspection",
+  "toolsUsed": [
+    "rg",
+    "python3"
+  ],
+  "assertions": [
+    {
+      "id": "VAL-DOCS-001",
+      "status": "pass",
+      "reason": "The audited user-facing docs now teach Neo Zed usage with Neo Zed branding, neozed commands, neozed:// links, and neozed.dev URLs across the README, install pages, platform docs, CLI reference, and troubleshooting surfaces. Scoped absence checks across those usage docs found no remaining upstream zed.dev links, @zed.dev emails, zed:// examples, or zed install/uninstall commands; remaining lowercase `zed` mentions are contextual action IDs, third-party package names, or historical issue references outside the public usage-identity scope.",
+      "evidence": [
+        {
+          "kind": "file",
+          "path": "README.md",
+          "summary": "The repository landing page introduces Neo Zed and points users to https://neozed.dev/download and Neo Zed docs for macOS, Linux, and Windows installation."
+        },
+        {
+          "kind": "file",
+          "path": "docs/src/installation.md",
+          "summary": "The install guide uses Neo Zed branding for download pages, Homebrew, winget, and the https://neozed.dev/install.sh installer."
+        },
+        {
+          "kind": "file",
+          "path": "docs/src/reference/cli.md",
+          "summary": "The CLI reference documents the `neozed` binary, `neozed://` URLs, `neozed --wait`, and `neozed --uninstall`, with only the explicit compatibility alias `--zed` retained."
+        },
+        {
+          "kind": "file",
+          "path": "docs/src/linux.md",
+          "summary": "The Linux guide uses the Neo Zed installer, neozed tarballs, Neo Zed troubleshooting headings, and the fixed `#neo-zed-fails-to-open-windows` section anchor."
+        },
+        {
+          "kind": "file",
+          "path": "docs/src/troubleshooting.md",
+          "summary": "Troubleshooting now uses Neo Zed branding, Neo Zed log paths, Neo Zed community/report links, and Neo Zed-hosted troubleshooting images."
+        },
+        {
+          "kind": "command",
+          "command": "python3 evidence generation for docs-audit.json",
+          "summary": "Saved matched Neo Zed usage surfaces and scoped absence checks to evidence/release-docs/docs-surfaces/docs-audit.json."
+        }
+      ]
+    },
+    {
+      "id": "VAL-DOCS-002",
+      "status": "pass",
+      "reason": "The audited legal, support, and release-facing docs now present the fork identity consistently with Neo Zed branding, neozed.dev URLs, and @neozed.dev contact addresses. Scoped absence checks across the touched legal/support docs found no remaining Zed Industries, Inc. operator branding, no @zed.dev addresses, and no https://zed.dev links.",
+      "evidence": [
+        {
+          "kind": "file",
+          "path": "legal/terms.md",
+          "summary": "The public terms page uses the temporary Neo Zed legal operator placeholder, neozed.dev URLs, and Neo Zed billing/legal contact addresses instead of upstream company branding."
+        },
+        {
+          "kind": "file",
+          "path": "legal/privacy-policy.md",
+          "summary": "The privacy policy uses Neo Zed controller language, neozed.dev privacy/telemetry links, and privacy@neozed.dev contact details."
+        },
+        {
+          "kind": "file",
+          "path": "legal/subprocessors.md",
+          "summary": "The subprocessors page is fully Neo Zed branded and links to Neo Zed-hosted docs and legal pages."
+        },
+        {
+          "kind": "file",
+          "path": "docs/src/telemetry.md",
+          "summary": "The telemetry doc refers to Neo Zed telemetry/crash behavior, links to the fork repository, and tells readers to contact hi@neozed.dev."
+        },
+        {
+          "kind": "file",
+          "path": "docs/upstream-zed-release-process.md",
+          "summary": "The release checklist documents Neo Zed release identity, fork-owned infrastructure, and Neo Zed mailbox requirements for launch readiness."
+        },
+        {
+          "kind": "command",
+          "command": "python3 evidence generation for docs-audit.json",
+          "summary": "Saved legal/support/release-doc matches plus scoped absence checks to evidence/release-docs/docs-surfaces/docs-audit.json."
+        }
+      ]
+    },
+    {
+      "id": "VAL-DOCS-003",
+      "status": "pass",
+      "reason": "A dedicated first-release checklist document exists at docs/upstream-zed-release-process.md and covers the required launch-preparation categories, including DNS/public web content, API/cloud hosting, mailbox readiness, signing/notarization, release automation secrets, package registries, crash/telemetry infrastructure, and launch rehearsals.",
+      "evidence": [
+        {
+          "kind": "file",
+          "path": "docs/upstream-zed-release-process.md",
+          "summary": "The checklist includes the headings \u201cDNS, Site, and Public Web Content\u201d, \u201cAuth, API, Cloud, and Update Hosting\u201d, \u201cEmail and Support Operations\u201d, \u201cSigning, Notarization, and Trusted Distribution\u201d, \u201cRelease Automation and Secrets\u201d, \u201cPackage Registries and Distribution Channels\u201d, \u201cCrash Reporting, Telemetry, and Observability\u201d, and \u201cLaunch Rehearsals\u201d."
+        },
+        {
+          "kind": "command",
+          "command": "python3 evidence generation for docs-audit.json",
+          "summary": "Captured the checklist headings plus required prerequisite items such as neozed.dev/api.neozed.dev/cloud.neozed.dev, public mailboxes, GitHub Actions secrets, Sentry provisioning, package registries, and OAuth/public endpoint readiness in evidence/release-docs/docs-surfaces/docs-audit.json."
+        }
+      ]
+    }
+  ],
+  "frictions": [
+    "Task-based user-testing-flow-validator subagents failed to launch with \"Invalid model: custom:droidproxy:gpt-5.4\", so these flow reports were produced manually in the validator session using the assigned assertion scopes."
+  ],
+  "blockers": [],
+  "notes": [
+    "No services or seed data were required for the release-docs milestone.",
+    "The audited scope was limited to the release-facing documentation and legal files touched by commits ffab302fc4, 32529e1792, b532cd7bb1, and 09c9288825."
+  ]
+}

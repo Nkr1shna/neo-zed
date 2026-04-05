@@ -1,0 +1,87 @@
+{
+  "groupId": "cross-consistency",
+  "surface": "file/metadata inspection",
+  "toolsUsed": [
+    "python3",
+    "rg"
+  ],
+  "assertions": [
+    {
+      "id": "VAL-CROSS-001",
+      "status": "pass",
+      "reason": "Stable, preview, nightly, and dev identities remain aligned across the shared release-channel source of truth, Cargo bundle metadata, install/uninstall scripts, and release workflow logic. The audited matrix shows each channel keeps its matching Neo Zed display name and dev.neozed-derived app ID without channel mixing, while release automation publishes neozed-named desktop artifacts and maps stable/preview/nightly release tags to the correct channel logic.",
+      "evidence": [
+        {
+          "kind": "file",
+          "path": "crates/release_channel/src/lib.rs",
+          "summary": "The release identity mapping pairs Stable/Preview/Nightly/Dev with Neo Zed, Neo Zed Preview, Neo Zed Nightly, and Neo Zed Dev plus dev.neozed/dev.neozed.Preview/dev.neozed.Nightly/dev.neozed.Dev."
+        },
+        {
+          "kind": "file",
+          "path": "crates/zed/Cargo.toml",
+          "summary": "The bundle metadata blocks use matching channel-specific identifiers and names for Neo Zed, Neo Zed Preview, Neo Zed Nightly, and Neo Zed Dev."
+        },
+        {
+          "kind": "file",
+          "path": "script/uninstall.sh",
+          "summary": "The uninstall script routes stable/preview/nightly/dev through matching app IDs, app bundle names, and db suffixes, preserving per-channel consistency on both Linux and macOS."
+        },
+        {
+          "kind": "file",
+          "path": "script/determine-release-channel",
+          "summary": "Stable releases require v${version} tags and preview releases require v${version}-pre tags, while release_nightly.yml forces the nightly channel before bundling."
+        },
+        {
+          "kind": "file",
+          "path": ".github/workflows/release.yml",
+          "summary": "Release workflows upload neozed-linux-*.tar.gz, neozed-*.dmg, and neozed-*.exe artifacts for the public desktop releases."
+        },
+        {
+          "kind": "command",
+          "command": "python3 evidence generation for cross-audit.json",
+          "summary": "Saved the per-channel matrix and workflow checks to evidence/release-docs/cross-consistency/cross-audit.json."
+        }
+      ]
+    },
+    {
+      "id": "VAL-CROSS-002",
+      "status": "pass",
+      "reason": "The public fork identity tuple \u2014 Neo Zed, neozed, neozed://, dev.neozed*, neozed.dev, and https://github.com/Nkr1shna/neo-zed/ \u2014 is present across the audited release-facing source-of-truth files, CLI/docs surfaces, scripts, workflows, and checklist/release docs. Scoped conflict checks found no unexpected upstream tuple values in the audited scope; the only remaining legacy values are explicitly documented compatibility holdovers such as accepting zed:// for old deep links and rejecting old dev.zed Flatpak IDs in tests.",
+      "evidence": [
+        {
+          "kind": "file",
+          "path": "crates/cli/src/main.rs",
+          "summary": "The CLI exposes neozed:// as the public scheme, uses the neozed command throughout help text, and keeps only explicit compatibility aliases/legacy URL acceptance where documented."
+        },
+        {
+          "kind": "file",
+          "path": "docs/theme/index.hbs",
+          "summary": "The docs theme background noise image and download CTA now use Neo Zed-owned https://neozed.dev paths."
+        },
+        {
+          "kind": "file",
+          "path": "docs/upstream-zed-release-process.md",
+          "summary": "The checklist records the full Neo Zed identity tuple, the fork repository URL, and the intentionally preserved compatibility holdovers."
+        },
+        {
+          "kind": "file",
+          "path": "docs/src/telemetry.md",
+          "summary": "The telemetry doc points to the fork repository and hi@neozed.dev, reinforcing the public Neo Zed web/repo/support tuple in release-facing docs."
+        },
+        {
+          "kind": "command",
+          "command": "python3 evidence generation for cross-audit.json",
+          "summary": "Saved tuple-presence checks, allowed compatibility holdovers, and the scoped no-conflict audit to evidence/release-docs/cross-consistency/cross-audit.json."
+        }
+      ]
+    }
+  ],
+  "frictions": [
+    "Task-based user-testing-flow-validator subagents failed to launch with \"Invalid model: custom:droidproxy:gpt-5.4\", so these flow reports were produced manually in the validator session using the assigned assertion scopes."
+  ],
+  "blockers": [],
+  "notes": [
+    "No services or seed data were required for the release-docs milestone.",
+    "Allowed compatibility holdovers in the audited scope were limited to legacy zed:// acceptance, a negative test that rejects old dev.zed Flatpak IDs, and the separately documented zed-remote-server artifact names retained for compatibility."
+  ]
+}
