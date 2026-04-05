@@ -1,0 +1,13 @@
+{
+  "featureId": "docs-user-facing-rebrand",
+  "status": "fail",
+  "summary": "The feature updates most release-facing docs to Neo Zed, but the touched legal pages still identify the service operator as `Zed Industries, Inc.` in the Terms and Privacy Policy, so the legal identity is still upstream-branded and materially inaccurate.",
+  "issues": [
+    {
+      "severity": "blocking",
+      "description": "The rebranded legal pages still say the service is operated by `Zed Industries, Inc.` in `legal/terms.md:8`, `legal/terms.md:188`, `legal/terms.md:210`, `legal/terms.md:250`, `legal/privacy-policy.md:21`, and `legal/privacy-policy.md:177`. Because these are user-facing legal disclosures, shipping them as-is would misidentify who operates Neo Zed and leave upstream branding in a surface this feature explicitly updated.",
+      "suggestedFix": "Replace the upstream company name and mailing details with the actual fork-owned legal entity information, or clearly mark these pages as placeholders until the correct operator details are available."
+    }
+  ],
+  "sharedStateObservations": []
+}
