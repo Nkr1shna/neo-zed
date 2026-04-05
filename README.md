@@ -1,31 +1,29 @@
-# Zed
+# Neo Zed
 
-[![Zed](https://img.shields.io/endpoint?url=https://raw.githubusercontent.com/zed-industries/zed/main/assets/badge/v0.json)](https://zed.dev)
-[![CI](https://github.com/zed-industries/zed/actions/workflows/run_tests.yml/badge.svg)](https://github.com/zed-industries/zed/actions/workflows/run_tests.yml)
+[![Neo Zed](https://img.shields.io/endpoint?url=https://raw.githubusercontent.com/Nkr1shna/neo-zed/main/assets/badge/v0.json)](https://neozed.dev)
+[![CI](https://github.com/Nkr1shna/neo-zed/actions/workflows/run_tests.yml/badge.svg)](https://github.com/Nkr1shna/neo-zed/actions/workflows/run_tests.yml)
 
-Welcome to Zed, a high-performance, multiplayer code editor from the creators of [Atom](https://github.com/atom/atom) and [Tree-sitter](https://github.com/tree-sitter/tree-sitter).
+Welcome to Neo Zed, a high-performance, multiplayer code editor.
 
 ---
 
 ### Installation
 
-On macOS, Linux, and Windows you can [download Zed directly](https://zed.dev/download) or install Zed via your local package manager ([macOS](https://zed.dev/docs/installation#macos)/[Linux](https://zed.dev/docs/linux#installing-via-a-package-manager)/[Windows](https://zed.dev/docs/windows#package-managers)).
+On macOS, Linux, and Windows you can [download Neo Zed directly](https://neozed.dev/download) or install Neo Zed via your local package manager ([macOS](https://neozed.dev/docs/installation#macos)/[Linux](https://neozed.dev/docs/linux#installing-via-a-package-manager)/[Windows](https://neozed.dev/docs/windows#package-managers)).
 
 Other platforms are not yet available:
 
-- Web ([tracking issue](https://github.com/zed-industries/zed/issues/5396))
+- Web (not yet available)
 
-### Developing Zed
+### Developing Neo Zed
 
-- [Building Zed for macOS](./docs/src/development/macos.md)
-- [Building Zed for Linux](./docs/src/development/linux.md)
-- [Building Zed for Windows](./docs/src/development/windows.md)
+- [Building Neo Zed for macOS](./docs/src/development/macos.md)
+- [Building Neo Zed for Linux](./docs/src/development/linux.md)
+- [Building Neo Zed for Windows](./docs/src/development/windows.md)
 
 ### Contributing
 
-See [CONTRIBUTING.md](./CONTRIBUTING.md) for ways you can contribute to Zed.
-
-Also... we're hiring! Check out our [jobs](https://zed.dev/jobs) page for open roles.
+See [CONTRIBUTING.md](./CONTRIBUTING.md) for ways you can contribute to Neo Zed.
 
 ### Licensing
 
@@ -39,8 +37,4 @@ We use [`cargo-about`](https://github.com/EmbarkStudios/cargo-about) to automati
 
 ## Sponsorship
 
-Zed is developed by **Zed Industries, Inc.**, a for-profit company.
-
-If you’d like to financially support the project, you can do so via GitHub Sponsors.
-Sponsorships go directly to Zed Industries and are used as general company revenue.
-There are no perks or entitlements associated with sponsorship.
+Neo Zed is maintained as an open-source fork. If sponsorship options are available for this repository, they are the best way to support ongoing maintenance.
