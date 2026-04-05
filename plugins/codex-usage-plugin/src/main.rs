@@ -44,16 +44,15 @@ const TOKEN_URL: &str = "https://auth.openai.com/oauth/token";
 const USAGE_URL: &str = "https://chatgpt.com/backend-api/wham/usage";
 const CHATGPT_URL: &str = "https://chatgpt.com";
 const CLIENT_ID: &str = "app_EMoamEEZ73f0CkXaXp7hrann";
-const OAUTH_SCOPE: &str = "openid profile email offline_access";
+const OAUTH_SCOPE: &str = "openid email profile offline_access";
 const ACCOUNT_ID_CLAIM: &str = "https://api.openai.com/auth";
-#[cfg(test)]
 const REDIRECT_PORT: u16 = 1455;
 const REDIRECT_PATH: &str = "/auth/callback";
 const DEFAULT_TOKEN_EXPIRY_SECONDS: u64 = 3_600;
 const TOKEN_REFRESH_SKEW_MILLIS: u64 = 5 * 60 * 1_000;
 const AUTO_REFRESH_INTERVAL_MILLIS: u64 = 60 * 1_000;
 const VIEW_POLL_INTERVAL_MILLIS: u64 = 500;
-const LOGIN_TIMEOUT_SECONDS: u64 = 10 * 60;
+const LOGIN_TIMEOUT_SECONDS: u64 = 2 * 60;
 const SUCCESS_HTML: &str =
     "<!doctype html><html><body><p>Authentication successful. Return to Zed.</p></body></html>";
 
@@ -407,7 +406,7 @@ impl ViewModel {
     }
 
     fn refresh_button_disabled(&self) -> bool {
-        !self.has_session || self.busy || self.snapshot.is_pending()
+        self.busy || self.snapshot.is_pending()
     }
 }
 
@@ -442,7 +441,11 @@ impl CodexUsageStore {
             .inner
             .lock()
             .unwrap_or_else(|poisoned| poisoned.into_inner());
-        let snapshot = current_snapshot(&state.persisted);
+        let has_session = state.persisted.refresh_token.is_some();
+        let mut snapshot = current_snapshot(&state.persisted);
+        if !has_session && snapshot.is_authenticated() {
+            snapshot = SidecarSnapshot::signed_out();
+        }
         let account_label = state
             .persisted
             .account_id
@@ -452,7 +455,7 @@ impl CodexUsageStore {
         ViewModel {
             serial: state.serial,
             busy: state.busy,
-            has_session: state.persisted.refresh_token.is_some(),
+            has_session,
             account_label,
             last_error: state.persisted.last_error.clone(),
             snapshot,
@@ -529,7 +532,12 @@ impl CodexUsageStore {
                 .inner
                 .lock()
                 .unwrap_or_else(|poisoned| poisoned.into_inner());
-            if state.busy || state.persisted.refresh_token.is_none() {
+            if state.busy {
+                return;
+            }
+            if state.persisted.refresh_token.is_none() {
+                drop(state);
+                self.begin_login();
                 return;
             }
 
@@ -562,15 +570,14 @@ impl CodexUsageStore {
         if let Err(error) =
             save_persisted_auth_state_to_disk_at(&self.auth_state_path, &state.persisted)
         {
-            state.persisted.auth_status = String::from("error");
             state.persisted.last_error = Some(error.to_string());
-            state.persisted.last_snapshot = Some(SidecarSnapshot::error(Some(&error.to_string())));
+            state.serial = state.serial.saturating_add(1);
         }
     }
 
     fn open_chatgpt(&self) {
         if let Err(error) = open::that_detached(CHATGPT_URL) {
-            self.record_error(String::from("error"), error.to_string());
+            self.record_non_auth_error(error.to_string());
         }
     }
 
@@ -621,6 +628,16 @@ impl CodexUsageStore {
                 Some(SidecarSnapshot::error(Some(&save_error.to_string())));
         }
     }
+
+    fn record_non_auth_error(&self, error_message: String) {
+        let mut state = self
+            .inner
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+
+        state.serial = state.serial.saturating_add(1);
+        state.persisted.last_error = Some(error_message);
+    }
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -664,6 +681,11 @@ fn run_login_flow(mut state: PersistedAuthState) -> Result<PersistedAuthState> {
     let listener = bind_oauth_listener()?;
     let redirect_uri = oauth_redirect_uri(listener.local_addr()?.port());
     let authorize_url = build_authorize_url(&redirect_uri, &challenge, &oauth_state)?;
+    eprintln!(
+        "codex-usage-plugin oauth start: authorize_url={} redirect_uri={}",
+        authorize_url.as_str(),
+        redirect_uri
+    );
     open::that_detached(authorize_url.as_str())
         .with_context(|| "failed to open the ChatGPT sign-in flow")?;
 
@@ -1173,6 +1195,26 @@ fn load_persisted_auth_state_from_disk_with_store(
         save_persisted_auth_state_to_disk_with_store(path, &state, secret_store)?;
     }
 
+    if state.auth_status == "pending" {
+        state.auth_status = if state.refresh_token.is_some() {
+            String::from("authenticated")
+        } else {
+            String::from("signed-out")
+        };
+        if state
+            .last_snapshot
+            .as_ref()
+            .map(SidecarSnapshot::is_pending)
+            .unwrap_or(false)
+        {
+            state.last_snapshot = None;
+        }
+        state.last_error = Some(String::from(
+            "Previous ChatGPT sign-in did not complete. Please sign in again.",
+        ));
+        save_persisted_auth_state_to_disk_with_store(path, &state, secret_store)?;
+    }
+
     Ok(state)
 }
 
@@ -1419,18 +1461,22 @@ fn build_authorize_url(redirect_uri: &str, challenge: &str, oauth_state: &str) -
         .append_pair("client_id", CLIENT_ID)
         .append_pair("redirect_uri", redirect_uri)
         .append_pair("scope", OAUTH_SCOPE)
+        .append_pair("prompt", "login")
         .append_pair("code_challenge", challenge)
         .append_pair("code_challenge_method", "S256")
         .append_pair("state", oauth_state)
         .append_pair("id_token_add_organizations", "true")
-        .append_pair("codex_cli_simplified_flow", "true")
-        .append_pair("originator", "pi");
+        .append_pair("codex_cli_simplified_flow", "true");
     Ok(authorize_url)
 }
 
 fn bind_oauth_listener() -> Result<TcpListener> {
+    #[cfg(test)]
     let listener = TcpListener::bind(("127.0.0.1", 0))
         .with_context(|| "failed to bind the OAuth callback server on an ephemeral port")?;
+    #[cfg(not(test))]
+    let listener = TcpListener::bind(("127.0.0.1", REDIRECT_PORT))
+        .with_context(|| format!("failed to bind the OAuth callback server on port {REDIRECT_PORT}"))?;
     listener
         .set_nonblocking(true)
         .with_context(|| "failed to configure the OAuth callback server")?;
@@ -1446,7 +1492,22 @@ fn wait_for_authorization_code(
     while started_at.elapsed() < timeout {
         match listener.accept() {
             Ok((mut stream, _)) => {
-                return handle_oauth_connection(&mut stream, expected_state);
+                eprintln!("codex-usage-plugin oauth callback connection accepted");
+                match handle_oauth_connection(&mut stream, expected_state) {
+                    Ok(authorization_code) => return Ok(authorization_code),
+                    Err(error)
+                        if error.to_string().contains("OAuth callback state mismatch")
+                            || error
+                                .to_string()
+                                .contains("unexpected OAuth callback path") =>
+                    {
+                        eprintln!(
+                            "codex-usage-plugin oauth callback ignored transient mismatch: {error}"
+                        );
+                        continue;
+                    }
+                    Err(error) => return Err(error),
+                }
             }
             Err(error) if error.kind() == std::io::ErrorKind::WouldBlock => {
                 thread::sleep(Duration::from_millis(100));
@@ -1457,7 +1518,10 @@ fn wait_for_authorization_code(
         }
     }
 
-    anyhow::bail!("ChatGPT sign-in timed out before the OAuth callback arrived")
+    anyhow::bail!(
+        "ChatGPT sign-in timed out after {} seconds before the OAuth callback arrived",
+        timeout.as_secs()
+    )
 }
 
 fn handle_oauth_connection(
@@ -1479,17 +1543,50 @@ fn handle_oauth_connection(
 
     if callback_url.path() != REDIRECT_PATH {
         write_http_response(stream, 404, "Not found")?;
+        eprintln!(
+            "codex-usage-plugin oauth callback ignored path={}",
+            callback_url.path()
+        );
         anyhow::bail!("unexpected OAuth callback path `{}`", callback_url.path());
     }
 
-    if callback_url
+    let callback_error = callback_url
+        .query_pairs()
+        .find(|(key, _)| key == "error")
+        .map(|(_, value)| value.to_string());
+    if let Some(callback_error) = callback_error {
+        let callback_error_description = callback_url
+            .query_pairs()
+            .find(|(key, _)| key == "error_description")
+            .map(|(_, value)| value.to_string());
+        write_http_response(stream, 400, "Authentication failed")?;
+        eprintln!(
+            "codex-usage-plugin oauth callback reported error={} description={}",
+            callback_error,
+            callback_error_description.as_deref().unwrap_or("<missing>")
+        );
+        anyhow::bail!(
+            "OAuth callback returned `{}`{}",
+            callback_error,
+            callback_error_description
+                .as_deref()
+                .map(|description| format!(": {description}"))
+                .unwrap_or_default()
+        );
+    }
+
+    let returned_state = callback_url
         .query_pairs()
         .find(|(key, _)| key == "state")
-        .map(|(_, value)| value.to_string())
-        .as_deref()
-        != Some(expected_state)
-    {
+        .map(|(_, value)| value.to_string());
+
+    if returned_state.as_deref() != Some(expected_state) {
         write_http_response(stream, 400, "State mismatch")?;
+        eprintln!(
+            "codex-usage-plugin oauth callback rejected: state mismatch expected={} received={}",
+            expected_state,
+            returned_state.as_deref().unwrap_or("<missing>")
+        );
         anyhow::bail!("OAuth callback state mismatch");
     }
 
@@ -1500,6 +1597,7 @@ fn handle_oauth_connection(
         .ok_or_else(|| anyhow::anyhow!("OAuth callback is missing an authorization code"))?;
 
     write_http_response(stream, 200, SUCCESS_HTML)?;
+    eprintln!("codex-usage-plugin oauth callback accepted");
     Ok(authorization_code)
 }
 
@@ -1663,23 +1761,26 @@ impl Render for CodexUsagePanel {
     fn render(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let view_model = self.view_model.clone();
 
-        let mut content = v_flex().w_full().gap(px(2.0));
-
         if !view_model.snapshot.is_authenticated() && !view_model.snapshot.is_pending() {
-            content = content.child(
-                v_flex()
-                    .w_full()
-                    .gap(px(2.0))
-                    .child(Label::new(view_model.snapshot.status_label.clone()))
-                    .child(
+            return v_flex()
+                .size_full()
+                .items_center()
+                .justify_center()
+                .p_4()
+                .child(
+                    v_flex().items_center().gap(px(2.0)).child(
                         Button::new("codex-usage-sign-in", "Sign In to ChatGPT").on_click(
                             cx.listener(|this, _: &ClickEvent, _window, cx| {
                                 this.begin_login(cx);
                             }),
                         ),
                     ),
-            );
-        } else if view_model.snapshot.is_pending() {
+                );
+        }
+
+        let mut content = v_flex().w_full().gap(px(2.0));
+
+        if view_model.snapshot.is_pending() {
             content = content.child(Label::new("Waiting for ChatGPT sign-in..."));
         } else {
             if let Some(plan_label) = view_model.snapshot.panel_plan_label() {
@@ -1700,10 +1801,6 @@ impl Render for CodexUsagePanel {
                 "Credits: {}",
                 view_model.snapshot.credits_summary.balance_label
             )));
-        }
-
-        if let Some(error_message) = view_model.last_error.as_deref() {
-            content = content.child(Label::new(error_message.to_string()));
         }
 
         // Menu items rendered by the host as a kebab menu in the panel header
@@ -1855,9 +1952,10 @@ mod tests {
     use std::net::Shutdown;
     use std::net::TcpStream;
     use std::thread;
+    use tempfile::tempdir;
 
     #[test]
-    fn oauth_listener_uses_ephemeral_port() {
+    fn oauth_listener_binds_to_available_callback_port() {
         let listener = bind_oauth_listener().expect("listener should bind");
         let port = listener
             .local_addr()
@@ -1865,7 +1963,6 @@ mod tests {
             .port();
 
         assert_ne!(port, 0);
-        assert_ne!(port, REDIRECT_PORT);
         assert_eq!(
             oauth_redirect_uri(port),
             format!("http://localhost:{port}{REDIRECT_PATH}")
@@ -1939,6 +2036,94 @@ mod tests {
             .expect("callback sender should not panic")
             .expect("callback sender should succeed");
 
-        assert!(error.to_string().contains("state mismatch"));
+        assert!(error.to_string().contains("timed out"));
+    }
+
+    #[test]
+    fn authenticated_snapshot_without_session_renders_signed_out_view() {
+        let temp_dir = tempdir().expect("temp dir should be created");
+        let auth_state_path = temp_dir.path().join(AUTH_STATE_FILENAME);
+        let state = PersistedAuthState {
+            auth_status: String::from("authenticated"),
+            access_token: None,
+            refresh_token: None,
+            account_id: Some(String::from("account_12345678")),
+            expires_at: 0,
+            last_refresh_at: 0,
+            last_snapshot: Some(SidecarSnapshot {
+                auth_status: String::from("authenticated"),
+                plan_type: Some(String::from("pro")),
+                status_label: String::from("ChatGPT connected"),
+                detail: String::from("stale"),
+                primary_used_percent: 42,
+                usage_limits: vec![UsageLimitCard {
+                    id: String::from("codex-primary"),
+                    title: String::from("5 hour usage limit"),
+                    remaining_percent: 58,
+                    resets_at_label: None,
+                }],
+                credits_summary: CreditsSummary {
+                    balance_label: String::from("$12.34"),
+                    detail: String::from("credits"),
+                },
+            }),
+            last_fetched_at: 0,
+            last_error: None,
+        };
+
+        save_persisted_auth_state_to_disk_for_tests(&auth_state_path, &state)
+            .expect("state should save");
+        let store = CodexUsageStore::new(auth_state_path).expect("store should load");
+        let view_model = store.current_view_model();
+
+        assert!(!view_model.has_session);
+        assert_eq!(view_model.snapshot.auth_status, "signed-out");
+        assert_eq!(view_model.auth_button_label(), "Sign In");
+    }
+
+    #[test]
+    fn refresh_button_stays_enabled_when_session_is_missing() {
+        let view_model = ViewModel {
+            serial: 1,
+            busy: false,
+            has_session: false,
+            account_label: None,
+            last_error: None,
+            snapshot: SidecarSnapshot::signed_out(),
+        };
+
+        assert!(!view_model.refresh_button_disabled());
+    }
+
+    #[test]
+    fn loading_pending_state_recovers_to_signed_out() {
+        let temp_dir = tempdir().expect("temp dir should be created");
+        let auth_state_path = temp_dir.path().join(AUTH_STATE_FILENAME);
+        let state = PersistedAuthState {
+            auth_status: String::from("pending"),
+            access_token: None,
+            refresh_token: None,
+            account_id: None,
+            expires_at: 0,
+            last_refresh_at: 0,
+            last_snapshot: Some(SidecarSnapshot::pending()),
+            last_fetched_at: 0,
+            last_error: None,
+        };
+
+        save_persisted_auth_state_to_disk_for_tests(&auth_state_path, &state)
+            .expect("state should save");
+        let loaded = load_persisted_auth_state_from_disk_for_tests(&auth_state_path)
+            .expect("state should load");
+
+        assert_eq!(loaded.auth_status, "signed-out");
+        assert!(loaded.last_snapshot.is_none());
+        assert!(
+            loaded
+                .last_error
+                .as_deref()
+                .map(|message| message.contains("did not complete"))
+                .unwrap_or(false)
+        );
     }
 }
