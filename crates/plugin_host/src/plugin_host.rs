@@ -112,7 +112,7 @@ mod host {
     use futures::io::{BufReader, BufWriter};
     use futures::{AsyncBufReadExt as _, AsyncWriteExt as _};
     use gpui::{
-        Action, App, Context, Entity, EventEmitter, FocusHandle, Focusable, Global,
+        Action, App, ClickEvent, Context, Entity, EventEmitter, FocusHandle, Focusable, Global,
         InteractiveElement, ParentElement, Render, SharedString, StatefulInteractiveElement,
         Styled, Subscription, WeakEntity, Window, div,
     };
@@ -1822,7 +1822,13 @@ mod host {
         }
 
         fn dispatch_click(&mut self, handler_id: EventHandlerId, cx: &mut Context<Self>) {
-            self.dispatch_event(handler_id, UiEventKind::Click, None, cx);
+            let click_event = ClickEvent::default();
+            self.dispatch_event(
+                handler_id,
+                UiEventKind::Click,
+                serialize_payload(SerializedClickEvent::from(&click_event)),
+                cx,
+            );
         }
 
         fn collect_menu_items(tree: &UiNode) -> Vec<&UiNode> {
@@ -2860,8 +2866,13 @@ mod host {
                 .find(|event| event.event == UiEventKind::Click)
             {
                 let handler_id = click_event.handler_id.clone();
-                button = button.on_click(cx.listener(move |this, _, _, cx| {
-                    this.dispatch_plugin_event(handler_id.clone(), UiEventKind::Click, None, cx);
+                button = button.on_click(cx.listener(move |this, click, _, cx| {
+                    this.dispatch_plugin_event(
+                        handler_id.clone(),
+                        UiEventKind::Click,
+                        serialize_payload(SerializedClickEvent::from(click)),
+                        cx,
+                    );
                 }));
             }
 
@@ -2934,8 +2945,13 @@ mod host {
             .find(|event| event.event == UiEventKind::Click)
         {
             let handler_id = click_event.handler_id.clone();
-            button = button.on_click(cx.listener(move |this, _, _, cx| {
-                this.dispatch_plugin_event(handler_id.clone(), UiEventKind::Click, None, cx);
+            button = button.on_click(cx.listener(move |this, click, _, cx| {
+                this.dispatch_plugin_event(
+                    handler_id.clone(),
+                    UiEventKind::Click,
+                    serialize_payload(SerializedClickEvent::from(click)),
+                    cx,
+                );
             }));
         }
 
@@ -4791,19 +4807,36 @@ mod host {
     }
 
     #[cfg(target_os = "macos")]
-    fn insert_home_runtime_paths(paths: &mut BTreeSet<PathBuf>) {
-        paths.insert(env::temp_dir());
+    fn home_dir_from_environment() -> PathBuf {
+        env::var_os("HOME")
+            .map(PathBuf::from)
+            .unwrap_or_else(|| paths::home_dir().clone())
+    }
 
-        if let Some(tmpdir) = env::var_os("TMPDIR").map(PathBuf::from) {
-            paths.insert(tmpdir);
+    #[cfg(target_os = "macos")]
+    fn insert_path_with_canonical_alias(paths: &mut BTreeSet<PathBuf>, path: PathBuf) {
+        if path.as_os_str().is_empty() {
+            return;
         }
 
-        let home_dir = env::var_os("HOME")
-            .map(PathBuf::from)
-            .unwrap_or_else(|| paths::home_dir().clone());
+        paths.insert(path.clone());
+        if let Ok(canonical_path) = path.canonicalize() {
+            paths.insert(canonical_path);
+        }
+    }
+
+    #[cfg(target_os = "macos")]
+    fn insert_home_runtime_paths(paths: &mut BTreeSet<PathBuf>) {
+        insert_path_with_canonical_alias(paths, env::temp_dir());
+
+        if let Some(tmpdir) = env::var_os("TMPDIR").map(PathBuf::from) {
+            insert_path_with_canonical_alias(paths, tmpdir);
+        }
+
+        let home_dir = home_dir_from_environment();
         if !home_dir.as_os_str().is_empty() {
-            paths.insert(home_dir.join("Library").join("Keychains"));
-            paths.insert(home_dir.join("Library").join("Preferences"));
+            insert_path_with_canonical_alias(paths, home_dir.join("Library").join("Keychains"));
+            insert_path_with_canonical_alias(paths, home_dir.join("Library").join("Preferences"));
         }
     }
 
@@ -4827,8 +4860,12 @@ mod host {
         insert_home_runtime_paths(&mut paths);
 
         if let Some(cargo_target_dir) = &launch_spec.cargo_target_dir {
+            let home_dir = home_dir_from_environment();
             paths.insert(cargo_target_dir.clone());
             paths.extend(cargo_workspace_write_paths(&plugin.installation.root));
+            if !home_dir.as_os_str().is_empty() {
+                paths.insert(home_dir);
+            }
             paths.insert(
                 env::var_os("CARGO_HOME")
                     .map(PathBuf::from)
@@ -4893,6 +4930,40 @@ mod host {
     }
 
     #[cfg(target_os = "macos")]
+    fn insert_path_and_ancestors(paths: &mut BTreeSet<PathBuf>, path: &Path) {
+        if !path.is_absolute() || path.as_os_str().is_empty() {
+            return;
+        }
+
+        for ancestor in path.ancestors() {
+            if ancestor.as_os_str().is_empty() {
+                continue;
+            }
+            paths.insert(ancestor.to_path_buf());
+        }
+    }
+
+    #[cfg(target_os = "macos")]
+    fn sandbox_metadata_paths(
+        readable_paths: &[PathBuf],
+        writable_paths: &[PathBuf],
+        launch_spec: &PluginLaunchSpec,
+    ) -> Vec<PathBuf> {
+        let mut paths = BTreeSet::new();
+
+        for path in readable_paths {
+            insert_path_and_ancestors(&mut paths, path);
+        }
+        for path in writable_paths {
+            insert_path_and_ancestors(&mut paths, path);
+        }
+        insert_path_and_ancestors(&mut paths, &launch_spec.current_dir);
+        insert_path_and_ancestors(&mut paths, Path::new(&launch_spec.program));
+
+        paths.into_iter().collect()
+    }
+
+    #[cfg(target_os = "macos")]
     fn sbpl_quote(value: &str) -> String {
         let escaped = value.replace('\\', "\\\\").replace('\"', "\\\"");
         format!("\"{escaped}\"")
@@ -4939,7 +5010,7 @@ mod host {
 
         let readable_paths = sandbox_readable_paths(plugin, launch_spec);
         profile.push_str("(allow file-read*\n");
-        for path in readable_paths {
+        for path in &readable_paths {
             profile.push_str(&format!(
                 "       (subpath {})\n",
                 sbpl_quote(path.as_os_str().to_string_lossy().as_ref())
@@ -4948,8 +5019,18 @@ mod host {
         profile.push_str(")\n");
 
         let writable_paths = sandbox_writable_paths(plugin, launch_spec);
+        let metadata_paths = sandbox_metadata_paths(&readable_paths, &writable_paths, launch_spec);
+        profile.push_str("(allow file-read-metadata\n");
+        for path in metadata_paths {
+            profile.push_str(&format!(
+                "       (literal {})\n",
+                sbpl_quote(path.as_os_str().to_string_lossy().as_ref())
+            ));
+        }
+        profile.push_str(")\n");
+
         profile.push_str("(allow file-write*\n");
-        for path in writable_paths {
+        for path in &writable_paths {
             profile.push_str(&format!(
                 "       (subpath {})\n",
                 sbpl_quote(path.as_os_str().to_string_lossy().as_ref())
@@ -6517,6 +6598,16 @@ edition = "2021"
             );
             assert_eq!(args[3], "run");
             assert_eq!(target_dir, cargo_target_dir(&plugin_root).to_string_lossy());
+            assert!(args[1].contains("(allow file-read-metadata"));
+            assert!(args[1].contains(temp_dir.path().to_string_lossy().as_ref()));
+            let home_dir = home_dir_from_environment();
+            if !home_dir.as_os_str().is_empty() {
+                assert!(args[1].contains(home_dir.to_string_lossy().as_ref()));
+            }
+            let canonical_temp_dir = env::temp_dir()
+                .canonicalize()
+                .expect("temp dir should canonicalize");
+            assert!(args[1].contains(canonical_temp_dir.to_string_lossy().as_ref()));
         }
 
         #[cfg(target_os = "macos")]
