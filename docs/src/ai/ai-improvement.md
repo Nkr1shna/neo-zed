@@ -16,17 +16,17 @@ AI features in Zed include:
 
 By default, Zed does not store your prompts or code context. This data is sent to your selected AI provider (e.g., Anthropic, OpenAI, Google, or xAI) to generate responses, then discarded. Zed will not use your data to evaluate or improve AI features unless you explicitly share it (see [AI Feedback with Ratings](#ai-feedback-with-ratings)) or you opt in to edit prediction training data collection (see [Edit Predictions](#edit-predictions)).
 
-Zed is model-agnostic by design, and none of this changes based on which provider you choose. You can use your own API keys or Zed's hosted models without any data being retained.
+Zed is model-agnostic by design, and none of this changes based on which provider you choose. You can use your own API keys or Neo Zed's hosted models without any data being retained.
 
 ### Data Retention and Training
 
 Zed's Agent Panel can be used via:
 
-- [Zed's hosted models](./subscription.md)
+- [Neo Zed's hosted models](./subscription.md)
 - [connecting a non-Zed AI service via API key](./llm-providers.md)
 - using an [external agent](./external-agents.md) via ACP
 
-When using Zed's hosted models, we require assurances from our service providers that your user content won't be used for training models.
+When using Neo Zed's hosted models, we require assurances from our service providers that your user content won't be used for training models.
 
 | Provider  | No Training Guarantee                                   | Zero-Data Retention (ZDR)                                                                                                                     |
 | --------- | ------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------- |
@@ -85,7 +85,7 @@ Note: Zed's `disabled_globs` settings will prevent predictions from being reques
 Zed does not collect training data for our edit prediction model unless the following conditions are met:
 
 1. **You opt in** – Toggle "Training Data Collection" under the **Privacy** section of the edit prediction status bar menu (click the edit prediction icon in the status bar).
-2. **The project is open source** — detected via LICENSE file ([see detection logic](https://github.com/zed-industries/zed/blob/main/crates/edit_prediction/src/license_detection.rs))
+2. **The project is open source** — detected via LICENSE file ([see detection logic](https://github.com/Nkr1shna/neo-zed/blob/main/crates/edit_prediction/src/license_detection.rs))
 3. **The file isn't excluded** — via `disabled_globs`
 
 ### File Exclusions
@@ -107,7 +107,7 @@ Certain files are always excluded from edit predictions—regardless of opt-in s
 }
 ```
 
-Users may explicitly exclude additional paths and/or file extensions by adding them to [`edit_predictions.disabled_globs`](https://zed.dev/docs/reference/all-settings#edit-predictions) in their Zed settings file ([how to edit](../configuring-zed.md#settings-files)):
+Users may explicitly exclude additional paths and/or file extensions by adding them to [`edit_predictions.disabled_globs`](https://neozed.dev/docs/reference/all-settings#edit-predictions) in their Zed settings file ([how to edit](../configuring-zed.md#settings-files)):
 
 ```json [settings]
 {
@@ -135,4 +135,4 @@ We then use this training dataset to fine-tune [Qwen2.5-Coder-7B](https://huggin
 
 ## Applicable terms
 
-Please see the [Zed Terms of Service](https://zed.dev/terms) for more.
+Please see the [Neo Zed Terms of Service](https://neozed.dev/terms) for more.

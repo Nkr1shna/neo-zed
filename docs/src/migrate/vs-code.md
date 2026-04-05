@@ -13,11 +13,11 @@ It covers which settings import automatically, which shortcuts map cleanly, and 
 
 Zed is available on macOS, Windows, and Linux.
 
-For macOS, you can download it from zed.dev/download, or install via Homebrew:
+For macOS, you can download it from neozed.dev/download, or install via Homebrew:
 `brew install zed-editor/zed/zed`
 
 For most Linux users, the easiest way to install Zed is through our installation script:
-`curl -f https://zed.dev/install.sh | sh`
+`curl -f https://neozed.dev/install.sh | sh`
 
 After installation, you can launch Zed from your Applications folder (macOS) or directly from the terminal (Linux) using:
 `zed .`
@@ -304,16 +304,16 @@ You won’t find one-to-one replacements for every VS Code extension, especially
 Unlike VS Code, Zed doesn’t require an extension to collaborate. It’s built into the core experience.
 
 - Open the Collab Panel in the left dock.
-- Create a channel and [invite your collaborators](https://zed.dev/docs/collaboration#inviting-a-collaborator) to join.
-- [Share your screen or your codebase](https://zed.dev/docs/collaboration#share-a-project) directly.
+- Create a channel and [invite your collaborators](https://neozed.dev/docs/collaboration#inviting-a-collaborator) to join.
+- [Share your screen or your codebase](https://neozed.dev/docs/collaboration#share-a-project) directly.
 
 Once connected, you’ll see each other's cursors, selections, and edits in real time. Voice chat is included, so you can talk as you work. There’s no need for separate tools or third-party logins.
 
-Learn how [Zed uses Zed](https://zed.dev/blog/zed-is-our-office) to plan work and collaborate.
+Learn how [Zed uses Zed](https://neozed.dev/blog/zed-is-our-office) to plan work and collaborate.
 
 ### Using AI in Zed
 
-If you’re used to GitHub Copilot in VS Code, you can do the same in Zed. You can also explore other agents through Zed Pro, or bring your own keys and connect without authentication. You can disable AI features entirely if you prefer.
+If you’re used to GitHub Copilot in VS Code, you can do the same in Zed. You can also explore other agents through Neo Zed Pro, or bring your own keys and connect without authentication. You can disable AI features entirely if you prefer.
 
 #### Configuring GitHub Copilot
 
@@ -328,9 +328,9 @@ Once signed in, just start typing. Zed will offer suggestions inline for you to 
 
 To use other AI models in Zed, you have several options:
 
-- Use Zed’s hosted models, with higher rate limits. Requires [authentication](https://zed.dev/docs/authentication) and subscription to [Zed Pro](https://zed.dev/docs/ai/subscription.html).
-- Bring your own [API keys](https://zed.dev/docs/ai/llm-providers.html), no authentication needed
-- Use [external agents like Claude Agent](https://zed.dev/docs/ai/external-agents.html).
+- Use Neo Zed’s hosted models, with higher rate limits. Requires [authentication](https://neozed.dev/docs/authentication) and subscription to [Neo Zed Pro](https://neozed.dev/docs/ai/subscription.html).
+- Bring your own [API keys](https://neozed.dev/docs/ai/llm-providers.html), no authentication needed
+- Use [external agents like Claude Agent](https://neozed.dev/docs/ai/external-agents.html).
 
 ### Advanced Config and Productivity Tweaks
 

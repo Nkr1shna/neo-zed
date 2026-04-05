@@ -1,8 +1,8 @@
-# Zed Docs
+# Neo Zed Docs
 
-Welcome to Zed's documentation.
+Welcome to Neo Zed's documentation.
 
-This is built on push to `main` and published automatically to [https://zed.dev/docs](https://zed.dev/docs).
+This is built on push to `main` and published automatically to [https://neozed.dev/docs](https://neozed.dev/docs).
 
 To preview the docs locally you will need to install [mdBook](https://rust-lang.github.io/mdBook/) (`cargo install mdbook@0.4.40`), generate the action metadata, and then serve:
 

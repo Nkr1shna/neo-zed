@@ -15,7 +15,7 @@ The default provider is [Zeta, a proprietary open source and open dataset model]
 To use Zeta, [sign in](../authentication.md#what-features-require-signing-in).
 Once signed in, predictions appear as you type.
 
-You can confirm that Zeta is properly configured by opening the [Settings Editor](zed://settings/edit_predictions.providers) (`Cmd+,` on macOS or `Ctrl+,` on Linux/Windows) and searching for `edit_predictions`. The `provider` field should be set to `Zed AI`.
+You can confirm that Zeta is properly configured by opening the [Settings Editor](neozed://settings/edit_predictions.providers) (`Cmd+,` on macOS or `Ctrl+,` on Linux/Windows) and searching for `edit_predictions`. The `provider` field should be set to `Zed AI`.
 
 Or verify this in your settings.json:
 
@@ -31,7 +31,7 @@ The Z icon in the status bar also indicates Zeta is active.
 
 ### Pricing and Plans
 
-The free plan includes 2,000 Zeta predictions per month. The [Pro plan](../ai/plans-and-usage.md) removes this limit. See [Zed's pricing page](https://zed.dev/pricing) for details.
+The free plan includes 2,000 Zeta predictions per month. The [Pro plan](../ai/plans-and-usage.md) removes this limit. See [Neo Zed's pricing page](https://neozed.dev/pricing) for details.
 
 ### Switching Modes {#switching-modes}
 
@@ -50,7 +50,7 @@ Toggle between them via the `mode` key:
 
 Or directly via the UI through the status bar menu:
 
-![Edit Prediction status bar menu, with the modes toggle.](https://zed.dev/img/edit-prediction/status-bar-menu.webp)
+![Edit Prediction status bar menu, with the modes toggle.](https://neozed.dev/img/edit-prediction/status-bar-menu.webp)
 
 > Note that edit prediction modes work with any prediction provider.
 

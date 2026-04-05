@@ -18,7 +18,7 @@ The Collaboration Panel has two sections:
 
 > **Warning:** Sharing a project gives collaborators access to your local file system within that project. Only collaborate with people you trust.
 
-See the [Data and Privacy FAQs](https://zed.dev/faq#data-and-privacy) for more details.
+See the [Data and Privacy FAQs](https://neozed.dev/faq#data-and-privacy) for more details.
 
 ## Audio Settings {#audio-settings}
 

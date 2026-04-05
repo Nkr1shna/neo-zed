@@ -112,7 +112,7 @@ Recordings automatically save after 60 seconds if not stopped manually.
 
 ## Contributor links
 
-- [CONTRIBUTING.md](https://github.com/zed-industries/zed/blob/main/CONTRIBUTING.md)
+- [CONTRIBUTING.md](https://github.com/Nkr1shna/neo-zed/blob/main/CONTRIBUTING.md)
 - [Debugging Crashes](./development/debugging-crashes.md)
-- [Code of Conduct](https://zed.dev/code-of-conduct)
-- [Zed Contributor License](https://zed.dev/cla)
+- [Code of Conduct](https://neozed.dev/code-of-conduct)
+- [Zed Contributor License](https://neozed.dev/cla)

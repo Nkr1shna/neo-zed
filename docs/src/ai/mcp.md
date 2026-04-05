@@ -25,20 +25,20 @@ Check out the [MCP Server Extensions](../extensions/mcp-extensions.md) page to l
 
 Many MCP servers are available as extensions. Find them via:
 
-1. [the Zed website](https://zed.dev/extensions?filter=context-servers)
+1. [the Neo Zed website](https://neozed.dev/extensions?filter=context-servers)
 2. in the app, open the Command Palette and run the `zed: extensions` action
 3. in the app, go to the Agent Panel's top-right menu and look for the "View Server Extensions" menu item
 
 Popular servers available as an extension include:
 
-- [Context7](https://zed.dev/extensions/context7-mcp-server)
-- [GitHub](https://zed.dev/extensions/github-mcp-server)
-- [Puppeteer](https://zed.dev/extensions/puppeteer-mcp-server)
-- [Gem](https://zed.dev/extensions/gem)
-- [Brave Search](https://zed.dev/extensions/brave-search-mcp-server)
+- [Context7](https://neozed.dev/extensions/context7-mcp-server)
+- [GitHub](https://neozed.dev/extensions/github-mcp-server)
+- [Puppeteer](https://neozed.dev/extensions/puppeteer-mcp-server)
+- [Gem](https://neozed.dev/extensions/gem)
+- [Brave Search](https://neozed.dev/extensions/brave-search-mcp-server)
 - [Prisma](https://github.com/aqrln/prisma-mcp-zed)
-- [Framelink Figma](https://zed.dev/extensions/framelink-figma-mcp-server)
-- [Resend](https://zed.dev/extensions/resend-mcp-server)
+- [Framelink Figma](https://neozed.dev/extensions/framelink-figma-mcp-server)
+- [Resend](https://neozed.dev/extensions/resend-mcp-server)
 
 ### As Custom Servers
 
@@ -93,7 +93,7 @@ Mentioning the MCP server by name can help the model pick tools from that server
 
 However, if you want to _ensure_ a given MCP server will be used, you can create [a custom profile](./agent-panel.md#custom-profiles) where all built-in tools (or the ones that could cause conflicts with the server's tools) are turned off and only the tools coming from the MCP server are turned on.
 
-As an example, [the Dagger team suggests](https://container-use.com/agent-integrations#zed) doing that with their [Container Use MCP server](https://zed.dev/extensions/mcp-server-container-use):
+As an example, [the Dagger team suggests](https://container-use.com/agent-integrations#zed) doing that with their [Container Use MCP server](https://neozed.dev/extensions/mcp-server-container-use):
 
 ```json [settings]
 "agent": {

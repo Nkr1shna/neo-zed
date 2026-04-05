@@ -15,13 +15,13 @@ Navigating through the theme list by moving up and down will change the theme in
 
 ## Installing New Themes
 
-You can find hundreds of different theme options in Zed's extensions store, which you can access via the command palette with `zed: extensions` or the [Zed website](https://zed.dev/extensions?filter=themes).
+You can find hundreds of different theme options in Zed's extensions store, which you can access via the command palette with `zed: extensions` or the [Neo Zed website](https://neozed.dev/extensions?filter=themes).
 
 Many popular themes have been ported to Zed, and if you're struggling to choose one, visit [zed-themes.com](https://zed-themes.com), a third-party gallery with visible previews for many of them.
 
 ## Build Your Theme
 
-You can use [Zed's Theme Builder](https://zed.dev/theme-builder) to design your own custom theme based on an existing one.
+You can use [Neo Zed's Theme Builder](https://neozed.dev/theme-builder) to design your own custom theme based on an existing one.
 
 This tool lets you fine-tune and preview how every surface in the Zed app will look.
 You can then export the JSON for [local use](./themes.md#local-themes) or for [publishing in Zed's extension store](./extensions/themes.md).
@@ -109,7 +109,7 @@ For example, add the following to your `settings.json` if you wish to override t
 To see a comprehensive list of list of captures (like `comment` and `comment.doc`) see [Language Extensions: Syntax highlighting](./extensions/languages.md#syntax-highlighting).
 
 To see a list of available theme attributes look at the JSON file for your theme.
-For example, [assets/themes/one/one.json](https://github.com/zed-industries/zed/blob/main/assets/themes/one/one.json) for the default One Dark and One Light themes.
+For example, [assets/themes/one/one.json](https://github.com/Nkr1shna/neo-zed/blob/main/assets/themes/one/one.json) for the default One Dark and One Light themes.
 
 ## Local Themes {#local-themes}
 
