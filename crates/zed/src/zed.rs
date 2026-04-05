@@ -591,6 +591,9 @@ fn initialize_file_watcher(window: &mut Window, cx: &mut Context<Workspace>) {
     }
 }
 
+const LINUX_GPU_TROUBLESHOOTING_URL: &str =
+    "https://neozed.dev/docs/linux#neo-zed-fails-to-open-windows";
+
 fn show_software_emulation_warning_if_needed(
     specs: gpui::GpuSpecs,
     window: &mut Window,
@@ -607,12 +610,12 @@ fn show_software_emulation_warning_if_needed(
             (
                 "Vulkan",
                 "https://neozed.dev/docs/linux",
-                "https://neozed.dev/docs/linux#zed-fails-to-open-windows",
+                LINUX_GPU_TROUBLESHOOTING_URL,
             )
         };
         let message = format!(
             db::indoc! {r#"
-            Zed uses {} for rendering and requires a compatible GPU.
+            Neo Zed uses {} for rendering and requires a compatible GPU.
 
             Currently you are using a software emulated GPU ({}) which
             will result in awful performance.
@@ -2505,6 +2508,14 @@ mod tests {
                 });
             })
             .unwrap();
+    }
+
+    #[test]
+    fn linux_gpu_troubleshooting_url_matches_docs_anchor() {
+        assert_eq!(
+            LINUX_GPU_TROUBLESHOOTING_URL,
+            "https://neozed.dev/docs/linux#neo-zed-fails-to-open-windows"
+        );
     }
 
     #[gpui::test]

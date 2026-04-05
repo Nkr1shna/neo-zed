@@ -144,7 +144,7 @@ If you see an error like "/lib64/libc.so.6: version 'GLIBC_2.29' not found" it m
 
 ### Graphics issues
 
-#### Neo Zed fails to open windows
+#### Neo Zed fails to open windows {#neo-zed-fails-to-open-windows}
 
 Neo Zed requires a GPU to run effectively. Under the hood, we use [Vulkan](https://www.vulkan.org/) to communicate with your GPU. If you are seeing problems with performance, or Neo Zed fails to load, it is possible that Vulkan is the culprit.
 

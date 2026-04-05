@@ -79,8 +79,12 @@ use crate::zed::{OpenRequestKind, eager_load_active_theme_and_icon_theme};
 #[global_allocator]
 static GLOBAL: mimalloc::MiMalloc = mimalloc::MiMalloc;
 
+const STARTUP_FAILURE_MESSAGE: &str = "Neo Zed failed to launch";
+const FAIL_TO_OPEN_WINDOW_MESSAGE_PREFIX: &str = "Neo Zed failed to open a window";
+const LINUX_TROUBLESHOOTING_URL: &str = "https://neozed.dev/docs/linux";
+
 fn files_not_created_on_launch(errors: HashMap<io::ErrorKind, Vec<&Path>>) {
-    let message = "Zed failed to launch";
+    let message = STARTUP_FAILURE_MESSAGE;
     let error_details = errors
         .into_iter()
         .flat_map(|(kind, paths)| {
@@ -142,7 +146,7 @@ fn fail_to_open_window_async(e: anyhow::Error, cx: &mut AsyncApp) {
 
 fn fail_to_open_window(e: anyhow::Error, _cx: &mut App) {
     eprintln!(
-        "Zed failed to open a window: {e:?}. See https://neozed.dev/docs/linux for troubleshooting steps."
+        "{FAIL_TO_OPEN_WINDOW_MESSAGE_PREFIX}: {e:?}. See {LINUX_TROUBLESHOOTING_URL} for troubleshooting steps."
     );
     #[cfg(not(any(target_os = "linux", target_os = "freebsd")))]
     {
@@ -162,10 +166,10 @@ fn fail_to_open_window(e: anyhow::Error, _cx: &mut App) {
             proxy
                 .add_notification(
                     notification_id,
-                    Notification::new("Zed failed to launch")
+                    Notification::new(STARTUP_FAILURE_MESSAGE)
                         .body(Some(
                             format!(
-                                "{e:?}. See https://neozed.dev/docs/linux for troubleshooting steps."
+                                "{e:?}. See {LINUX_TROUBLESHOOTING_URL} for troubleshooting steps."
                             )
                             .as_str(),
                         ))
@@ -2201,5 +2205,15 @@ entry = "bin/test-plugin"
             infer_plugin_source(&layout, &plugin),
             PluginSource::Registry
         ));
+    }
+
+    #[test]
+    fn startup_failure_strings_use_neo_zed_branding() {
+        assert_eq!(STARTUP_FAILURE_MESSAGE, "Neo Zed failed to launch");
+        assert_eq!(
+            FAIL_TO_OPEN_WINDOW_MESSAGE_PREFIX,
+            "Neo Zed failed to open a window"
+        );
+        assert_eq!(LINUX_TROUBLESHOOTING_URL, "https://neozed.dev/docs/linux");
     }
 }
