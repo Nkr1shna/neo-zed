@@ -19,6 +19,7 @@ use project::AgentId;
 use serde::{Deserialize, Serialize};
 use settings::{LanguageModelProviderSetting, LanguageModelSelection};
 
+use feature_flags::{AgentV2FeatureFlag, FeatureFlagAppExt as _};
 use zed_actions::agent::{
     AddSelectionToThread, ConflictContent, ReauthenticateAgent, ResolveConflictedFilesWithAgent,
     ResolveConflictsWithAgent, ReviewBranchDiff,
@@ -55,10 +56,10 @@ use extension::ExtensionEvents;
 use extension_host::ExtensionStore;
 use fs::Fs;
 use gpui::{
-    Action, Animation, AnimationExt, AnyElement, App, AsyncWindowContext, ClipboardItem, Corner,
-    DismissEvent, Entity, EntityId, EventEmitter, ExternalPaths, FocusHandle, Focusable,
-    KeyContext, Pixels, Subscription, Task, UpdateGlobal, WeakEntity, prelude::*,
-    pulsating_between,
+    Action, Animation, AnimationExt, AnyElement, App, AsyncWindowContext, Bounds, ClipboardItem,
+    Corner, DismissEvent, Entity, EntityId, EventEmitter, ExternalPaths, FocusHandle, Focusable,
+    KeyContext, Pixels, Size, Subscription, Task, UpdateGlobal, WeakEntity, WindowBounds,
+    WindowHandle, WindowKind, WindowOptions, point, prelude::*, pulsating_between, size,
 };
 use language::LanguageRegistry;
 use language_model::LanguageModelRegistry;
@@ -92,6 +93,14 @@ use zed_actions::{
 const AGENT_PANEL_KEY: &str = "agent_panel";
 const RECENTLY_UPDATED_MENU_LIMIT: usize = 6;
 const LAST_USED_AGENT_KEY: &str = "agent_panel__last_used_external_agent";
+
+fn detached_agent_window_min_size() -> Size<Pixels> {
+    size(px(360.0), px(320.0))
+}
+
+fn detached_agent_window_default_size() -> Size<Pixels> {
+    size(px(540.0), px(720.0))
+}
 
 #[derive(Serialize, Deserialize)]
 struct LastUsedAgent {
@@ -785,6 +794,77 @@ impl ActiveView {
     }
 }
 
+struct DetachedAgentPanelWindow {
+    panel: WeakEntity<AgentPanel>,
+    show_panel: bool,
+    _subscriptions: Vec<Subscription>,
+}
+
+impl DetachedAgentPanelWindow {
+    fn new(panel: Entity<AgentPanel>, window: &mut Window, cx: &mut Context<Self>) -> Self {
+        let panel = panel.downgrade();
+        let mut subscriptions = Vec::with_capacity(2);
+
+        subscriptions.push(cx.observe_window_bounds(window, {
+            let panel = panel.clone();
+            move |_, window, cx| {
+                let detached_bounds = window.window_bounds();
+                let panel = panel.clone();
+                cx.defer(move |cx| {
+                    panel
+                        .update(cx, |panel, _| {
+                            panel.detached_window_bounds = Some(detached_bounds);
+                        })
+                        .log_err();
+                });
+            }
+        }));
+
+        subscriptions.push(cx.on_release({
+            let panel = panel.clone();
+            move |_, cx| {
+                let panel = panel.clone();
+                cx.defer(move |cx| {
+                    panel
+                        .update(cx, |panel, cx| {
+                            panel.detached_window_handle = None;
+                            cx.notify();
+                        })
+                        .log_err();
+                });
+            }
+        }));
+
+        let this = cx.entity().downgrade();
+        cx.defer(move |cx| {
+            this.update(cx, |this, cx| {
+                this.show_panel = true;
+                cx.notify();
+            })
+            .log_err();
+        });
+
+        Self {
+            panel,
+            show_panel: false,
+            _subscriptions: subscriptions,
+        }
+    }
+}
+
+impl Render for DetachedAgentPanelWindow {
+    fn render(&mut self, _window: &mut Window, _cx: &mut Context<Self>) -> impl IntoElement {
+        if !self.show_panel {
+            return div().size_full().into_any_element();
+        }
+
+        self.panel
+            .upgrade()
+            .map(|panel| panel.into_any_element())
+            .unwrap_or_else(|| div().size_full().into_any_element())
+    }
+}
+
 pub struct AgentPanel {
     workspace: WeakEntity<Workspace>,
     /// Workspace id is used as a database key
@@ -826,6 +906,8 @@ pub struct AgentPanel {
     _worktree_creation_task: Option<Task<()>>,
     show_trust_workspace_message: bool,
     _active_view_observation: Option<Subscription>,
+    detached_window_handle: Option<WindowHandle<DetachedAgentPanelWindow>>,
+    detached_window_bounds: Option<WindowBounds>,
 }
 
 impl AgentPanel {
@@ -1207,6 +1289,8 @@ impl AgentPanel {
                 cx,
             )),
             _active_view_observation: None,
+            detached_window_handle: None,
+            detached_window_bounds: None,
         };
 
         // Initial sync of agent servers from extensions
@@ -1303,6 +1387,74 @@ impl AgentPanel {
     /// so no "Draft" entry appears.
     pub fn clear_active_thread(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         self.set_active_view(ActiveView::Uninitialized, false, window, cx);
+    }
+
+    fn default_detached_window_bounds(&self, window: &Window) -> WindowBounds {
+        let workspace_bounds = window.window_bounds().get_bounds();
+        let detached_origin = point(
+            workspace_bounds.origin.x + px(32.0),
+            workspace_bounds.origin.y + px(32.0),
+        );
+
+        WindowBounds::Windowed(Bounds::new(
+            detached_origin,
+            detached_agent_window_default_size(),
+        ))
+    }
+
+    fn focus_existing_detached_window(&mut self, cx: &mut Context<Self>) -> bool {
+        let Some(detached_window) = self.detached_window_handle else {
+            return false;
+        };
+
+        if detached_window
+            .update(cx, |_root, window, _| {
+                window.activate_window();
+            })
+            .is_ok()
+        {
+            true
+        } else {
+            self.detached_window_handle = None;
+            false
+        }
+    }
+
+    fn open_detached_window(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        if self.focus_existing_detached_window(cx) {
+            return;
+        }
+
+        let panel = cx.entity();
+        let detached_bounds = self
+            .detached_window_bounds
+            .unwrap_or_else(|| self.default_detached_window_bounds(window));
+        self.detached_window_bounds = Some(detached_bounds);
+
+        let options = WindowOptions {
+            kind: WindowKind::Floating,
+            window_bounds: Some(detached_bounds),
+            window_min_size: Some(detached_agent_window_min_size()),
+            window_background: cx.theme().window_background_appearance(),
+            ..WindowOptions::default()
+        };
+
+        match cx.open_window(options, move |window, cx| {
+            cx.new(|cx| DetachedAgentPanelWindow::new(panel.clone(), window, cx))
+        }) {
+            Ok(detached_window) => {
+                self.detached_window_handle = Some(detached_window);
+            }
+            Err(error) => {
+                log::error!("failed to open detached agent panel window: {error:#}");
+            }
+        }
+    }
+
+    fn pop_out_panel(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        cx.defer_in(window, |this, window, cx| {
+            this.open_detached_window(window, cx);
+        });
     }
 
     pub fn new_thread(&mut self, _action: &NewThread, window: &mut Window, cx: &mut Context<Self>) {
@@ -3685,6 +3837,15 @@ impl AgentPanel {
             })
     }
 
+    fn render_pop_out_button(&self, cx: &mut Context<Self>) -> impl IntoElement {
+        IconButton::new("pop-out-agent-panel", IconName::ArrowUpRight)
+            .icon_size(IconSize::Small)
+            .tooltip(Tooltip::text("Pop Out Agent Panel"))
+            .on_click(cx.listener(|this, _, window, cx| {
+                this.pop_out_panel(window, cx);
+            }))
+    }
+
     fn project_has_git_repository(&self, cx: &App) -> bool {
         !self.project.read(cx).repositories(cx).is_empty()
     }
@@ -4073,7 +4234,8 @@ impl AgentPanel {
                 }))
         };
 
-        let use_v2_empty_toolbar = is_empty_state && !is_in_history_or_config;
+        let has_v2_flag = cx.has_flag::<AgentV2FeatureFlag>();
+        let use_v2_empty_toolbar = has_v2_flag && is_empty_state && !is_in_history_or_config;
 
         let max_content_width = AgentSettings::get_global(cx).max_content_width;
 
@@ -4158,6 +4320,14 @@ impl AgentPanel {
                         .gap_1()
                         .pl_1()
                         .pr_1()
+                        .child(self.render_pop_out_button(cx))
+                        .when(show_history_menu && !has_v2_flag, |this| {
+                            this.child(self.render_recent_entries_menu(
+                                IconName::MenuAltTemp,
+                                Corner::TopRight,
+                                cx,
+                            ))
+                        })
                         .child(full_screen_button)
                         .child(self.render_panel_options_menu(window, cx)),
                 )
@@ -4203,6 +4373,7 @@ impl AgentPanel {
                         .gap_1()
                         .pl_1()
                         .pr_1()
+                        .child(self.render_pop_out_button(cx))
                         .child(new_thread_menu)
                         .child(full_screen_button)
                         .child(self.render_panel_options_menu(window, cx)),
@@ -4751,6 +4922,23 @@ impl AgentPanel {
     /// method for test assertions. Not compiled into production builds.
     pub fn active_thread_view_for_tests(&self) -> Option<&Entity<ConversationView>> {
         self.active_conversation_view()
+    }
+
+    /// Opens (or focuses) the detached agent window.
+    ///
+    /// Test-only helper used for detached-window behavior assertions.
+    pub fn open_detached_window_for_tests(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        self.pop_out_panel(window, cx);
+    }
+
+    /// Returns the current detached window handle, if one exists.
+    pub fn detached_window_handle_for_tests(&self) -> Option<gpui::AnyWindowHandle> {
+        self.detached_window_handle.map(gpui::AnyWindowHandle::from)
+    }
+
+    /// Returns the remembered detached window bounds for this workspace.
+    pub fn detached_window_bounds_for_tests(&self) -> Option<WindowBounds> {
+        self.detached_window_bounds
     }
 
     /// Sets the start_thread_in value directly, bypassing validation.
@@ -5359,6 +5547,222 @@ mod tests {
         });
 
         (panel, cx)
+    }
+
+    #[gpui::test]
+    async fn test_detach_reuses_active_thread_and_prevents_duplicate_window(
+        cx: &mut TestAppContext,
+    ) {
+        let (panel, mut visual_cx) = setup_panel(cx).await;
+
+        panel.update_in(&mut visual_cx, |panel, window, cx| {
+            panel.open_external_thread_with_server(
+                Rc::new(StubAgentServer::default_response()),
+                window,
+                cx,
+            );
+        });
+        visual_cx.run_until_parked();
+
+        let active_session_before_detach = active_session_id(&panel, &visual_cx);
+        let initial_window_count = cx.windows().len();
+
+        panel.update_in(&mut visual_cx, |panel, window, cx| {
+            panel.open_detached_window_for_tests(window, cx);
+        });
+        visual_cx.run_until_parked();
+
+        assert_eq!(
+            cx.windows().len(),
+            initial_window_count + 1,
+            "detaching should open exactly one additional floating window"
+        );
+
+        let detached_window_id = panel.read_with(&visual_cx, |panel, _| {
+            panel
+                .detached_window_handle_for_tests()
+                .expect("detached window should be tracked")
+                .window_id()
+        });
+
+        panel.update_in(&mut visual_cx, |panel, window, cx| {
+            panel.open_detached_window_for_tests(window, cx);
+        });
+        visual_cx.run_until_parked();
+
+        assert_eq!(
+            cx.windows().len(),
+            initial_window_count + 1,
+            "repeating detach should focus the existing detached window instead of opening another"
+        );
+
+        let detached_window_id_after_repeat = panel.read_with(&visual_cx, |panel, _| {
+            panel
+                .detached_window_handle_for_tests()
+                .expect("detached window should still exist")
+                .window_id()
+        });
+        assert_eq!(
+            detached_window_id_after_repeat, detached_window_id,
+            "detaching again should keep using the same detached window"
+        );
+
+        let active_session_after_detach = active_session_id(&panel, &visual_cx);
+        assert_eq!(
+            active_session_after_detach, active_session_before_detach,
+            "detaching should preserve the visible active thread"
+        );
+    }
+
+    #[gpui::test]
+    async fn test_detach_remembers_window_bounds_within_session(cx: &mut TestAppContext) {
+        let (panel, mut visual_cx) = setup_panel(cx).await;
+
+        panel.update_in(&mut visual_cx, |panel, window, cx| {
+            panel.open_detached_window_for_tests(window, cx);
+        });
+        visual_cx.run_until_parked();
+
+        let detached_window = panel
+            .read_with(&visual_cx, |panel, _| {
+                panel.detached_window_handle_for_tests()
+            })
+            .expect("detached window should exist after detaching");
+
+        let remembered_size = size(px(777.0), px(555.0));
+        cx.simulate_window_resize(detached_window, remembered_size);
+        cx.run_until_parked();
+        visual_cx.run_until_parked();
+
+        panel.read_with(&visual_cx, |panel, _| {
+            let stored_bounds = panel
+                .detached_window_bounds_for_tests()
+                .expect("detached bounds should be captured while resized");
+            assert_eq!(
+                stored_bounds.get_bounds().size,
+                remembered_size,
+                "latest detached window size should be remembered for this workspace"
+            );
+        });
+
+        detached_window
+            .update(&mut visual_cx, |_, window: &mut Window, _| {
+                window.remove_window();
+            })
+            .expect("detached window should close cleanly");
+        visual_cx.run_until_parked();
+
+        panel.read_with(&visual_cx, |panel, _| {
+            assert!(
+                panel.detached_window_handle_for_tests().is_none(),
+                "closing detached window should clear tracked detached handle"
+            );
+        });
+
+        panel.update_in(&mut visual_cx, |panel, window, cx| {
+            panel.open_detached_window_for_tests(window, cx);
+        });
+        visual_cx.run_until_parked();
+
+        let reopened_window = panel.read_with(&visual_cx, |panel, _| {
+            panel
+                .detached_window_handle_for_tests()
+                .expect("detached window should reopen")
+        });
+        let reopened_bounds = reopened_window
+            .update(&mut visual_cx, |_, window: &mut Window, _| {
+                window.window_bounds()
+            })
+            .expect("reopened detached window should be readable");
+
+        assert_eq!(
+            reopened_bounds.get_bounds().size,
+            remembered_size,
+            "re-detaching in the same app session should reuse the last detached size"
+        );
+    }
+
+    #[gpui::test]
+    async fn test_multiple_workspaces_can_detach_independently(cx: &mut TestAppContext) {
+        init_test(cx);
+        cx.update(|cx| {
+            cx.update_flags(true, vec!["agent-v2".to_string()]);
+            agent::ThreadStore::init_global(cx);
+            language_model::LanguageModelRegistry::test(cx);
+        });
+
+        let fs = FakeFs::new(cx.executor());
+        let project_a = Project::test(fs.clone(), [], cx).await;
+        let project_b = Project::test(fs, [], cx).await;
+
+        let multi_workspace =
+            cx.add_window(|window, cx| MultiWorkspace::test_new(project_a.clone(), window, cx));
+
+        let workspace_a = multi_workspace
+            .read_with(cx, |mw, _| mw.workspace().clone())
+            .unwrap();
+        let workspace_b = multi_workspace
+            .update(cx, |mw, window, cx| {
+                mw.test_add_workspace(project_b.clone(), window, cx)
+            })
+            .unwrap();
+
+        let mut visual_cx = VisualTestContext::from_window(multi_workspace.into(), cx);
+
+        let panel_a = workspace_a.update_in(&mut visual_cx, |workspace, window, cx| {
+            let panel = cx.new(|cx| AgentPanel::new(workspace, None, window, cx));
+            workspace.add_panel(panel.clone(), window, cx);
+            panel
+        });
+        let panel_b = workspace_b.update_in(&mut visual_cx, |workspace, window, cx| {
+            let panel = cx.new(|cx| AgentPanel::new(workspace, None, window, cx));
+            workspace.add_panel(panel.clone(), window, cx);
+            panel
+        });
+
+        let initial_window_count = cx.windows().len();
+
+        panel_a.update_in(&mut visual_cx, |panel, window, cx| {
+            panel.open_detached_window_for_tests(window, cx);
+        });
+        panel_b.update_in(&mut visual_cx, |panel, window, cx| {
+            panel.open_detached_window_for_tests(window, cx);
+        });
+        visual_cx.run_until_parked();
+
+        assert_eq!(
+            cx.windows().len(),
+            initial_window_count + 2,
+            "each workspace should be able to open its own detached window"
+        );
+
+        let panel_a_window = panel_a
+            .read_with(&visual_cx, |panel, _| {
+                panel.detached_window_handle_for_tests()
+            })
+            .expect("workspace A should track a detached window");
+        let panel_b_window = panel_b
+            .read_with(&visual_cx, |panel, _| {
+                panel.detached_window_handle_for_tests()
+            })
+            .expect("workspace B should track a detached window");
+
+        assert_ne!(
+            panel_a_window.window_id(),
+            panel_b_window.window_id(),
+            "detached windows for different workspaces must remain distinct"
+        );
+
+        panel_a.update_in(&mut visual_cx, |panel, window, cx| {
+            panel.open_detached_window_for_tests(window, cx);
+        });
+        visual_cx.run_until_parked();
+
+        assert_eq!(
+            cx.windows().len(),
+            initial_window_count + 2,
+            "re-detaching one workspace should not create a duplicate detached window"
+        );
     }
 
     #[gpui::test]

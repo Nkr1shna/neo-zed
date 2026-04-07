@@ -830,6 +830,11 @@ mod tests {
             cx.set_staff(true);
         });
 
+        let kvp = cx.update(|cx| KeyValueStore::global(cx));
+        kvp.delete_kvp(PARALLEL_AGENT_LAYOUT_BACKFILL_KEY.to_string())
+            .await
+            .unwrap();
+
         fs
     }
 
