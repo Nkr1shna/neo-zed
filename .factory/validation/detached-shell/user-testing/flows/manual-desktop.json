@@ -1,0 +1,664 @@
+{
+  "groupId": "manual-desktop",
+  "testedAt": "2026-04-07T23:35:42.136023+00:00",
+  "isolation": {
+    "milestone": "detached-shell",
+    "surface": "manual desktop validation",
+    "mode": "single-validator",
+    "repoRoot": "/Users/nest/Developer/neo-zed",
+    "missionDir": "/Users/nest/.factory/missions/3e21f30e-0f9a-4ad0-a3ff-784a57259039",
+    "evidenceDir": "/Users/nest/.factory/missions/3e21f30e-0f9a-4ad0-a3ff-784a57259039/evidence/detached-shell/manual-desktop",
+    "platform": "macOS (darwin 25.3.0)",
+    "constraints": [
+      "Single-validator manual desktop surface",
+      "No parallel validators",
+      "No long-running service startup or port claims",
+      "Work restricted to local repo/mission paths"
+    ]
+  },
+  "toolsUsed": [
+    "osascript",
+    "screencapture",
+    "ps",
+    "ls"
+  ],
+  "assertions": [
+    {
+      "id": "VAL-DETACH-001",
+      "title": "Pop out opens a detached agent window",
+      "status": "blocked",
+      "steps": [
+        {
+          "action": "Launch /Users/nest/Developer/neo-zed/target/aarch64-apple-darwin/debug/zed with isolated --user-data-dir and open /Users/nest/Developer/neo-zed",
+          "expected": "Workspace window opens and can host Agent panel interactions",
+          "observed": "Workspace opened successfully (window title observed as neo-zed in relaunched state)."
+        },
+        {
+          "action": "Open Agent panel with \u2318? and inspect panel controls",
+          "expected": "Agent panel is visible and pop-out control is operable from the user surface",
+          "observed": "Agent panel became visible; options menu opened via \u2318\u2325M, but pop-out action was not keyboard-addressable there."
+        },
+        {
+          "action": "Attempt pop-out via keyboard-accessible paths (command palette query: 'pop out', options-menu navigation) and bounded click probes near the toolbar icon area",
+          "expected": "A detached agent window opens (window count increases)",
+          "observed": "No detached window opened; System Events window count stayed at 1 throughout attempts."
+        }
+      ],
+      "evidence": {
+        "screenshots": [
+          "detached-shell/manual-desktop/after-toggle-agent.png",
+          "detached-shell/manual-desktop/after-toggle-options-menu-shortcut.png",
+          "detached-shell/manual-desktop/command-palette-pop-out-query.png"
+        ],
+        "consoleErrors": "Native desktop console/devtools were not exposed in this automation path; mission launch logs zed-launch.log and zed-launch-with-path.log were both 0 bytes.",
+        "network": "N/A (no API/network behavior is part of these detach/floating/focus UI assertions).",
+        "windowCount": "Observed 1 zed window before and after all pop-out attempts."
+      },
+      "issues": "Blocked by manual-surface interaction gap: pop-out control could not be invoked in this non-interactive automation context (no command-palette match for 'pop out', no keyboard action exposed, and no detached window produced by click probes)."
+    },
+    {
+      "id": "VAL-DETACH-002",
+      "title": "Docked panel is hidden while detached",
+      "status": "blocked",
+      "steps": [
+        {
+          "action": "Launch /Users/nest/Developer/neo-zed/target/aarch64-apple-darwin/debug/zed with isolated --user-data-dir and open /Users/nest/Developer/neo-zed",
+          "expected": "Workspace window opens and can host Agent panel interactions",
+          "observed": "Workspace opened successfully (window title observed as neo-zed in relaunched state)."
+        },
+        {
+          "action": "Open Agent panel with \u2318? and inspect panel controls",
+          "expected": "Agent panel is visible and pop-out control is operable from the user surface",
+          "observed": "Agent panel became visible; options menu opened via \u2318\u2325M, but pop-out action was not keyboard-addressable there."
+        },
+        {
+          "action": "Attempt pop-out via keyboard-accessible paths (command palette query: 'pop out', options-menu navigation) and bounded click probes near the toolbar icon area",
+          "expected": "A detached agent window opens (window count increases)",
+          "observed": "No detached window opened; System Events window count stayed at 1 throughout attempts."
+        }
+      ],
+      "evidence": {
+        "screenshots": [
+          "detached-shell/manual-desktop/after-toggle-agent.png",
+          "detached-shell/manual-desktop/after-toggle-options-menu-shortcut.png",
+          "detached-shell/manual-desktop/command-palette-pop-out-query.png"
+        ],
+        "consoleErrors": "Native desktop console/devtools were not exposed in this automation path; mission launch logs zed-launch.log and zed-launch-with-path.log were both 0 bytes.",
+        "network": "N/A (no API/network behavior is part of these detach/floating/focus UI assertions).",
+        "windowCount": "Observed 1 zed window before and after all pop-out attempts."
+      },
+      "issues": "Cannot validate dock suppression because detached mode could not be entered."
+    },
+    {
+      "id": "VAL-DETACH-003",
+      "title": "Detach preserves the active conversation state",
+      "status": "blocked",
+      "steps": [
+        {
+          "action": "Launch /Users/nest/Developer/neo-zed/target/aarch64-apple-darwin/debug/zed with isolated --user-data-dir and open /Users/nest/Developer/neo-zed",
+          "expected": "Workspace window opens and can host Agent panel interactions",
+          "observed": "Workspace opened successfully (window title observed as neo-zed in relaunched state)."
+        },
+        {
+          "action": "Open Agent panel with \u2318? and inspect panel controls",
+          "expected": "Agent panel is visible and pop-out control is operable from the user surface",
+          "observed": "Agent panel became visible; options menu opened via \u2318\u2325M, but pop-out action was not keyboard-addressable there."
+        },
+        {
+          "action": "Attempt pop-out via keyboard-accessible paths (command palette query: 'pop out', options-menu navigation) and bounded click probes near the toolbar icon area",
+          "expected": "A detached agent window opens (window count increases)",
+          "observed": "No detached window opened; System Events window count stayed at 1 throughout attempts."
+        }
+      ],
+      "evidence": {
+        "screenshots": [
+          "detached-shell/manual-desktop/after-toggle-agent.png",
+          "detached-shell/manual-desktop/after-toggle-options-menu-shortcut.png",
+          "detached-shell/manual-desktop/command-palette-pop-out-query.png"
+        ],
+        "consoleErrors": "Native desktop console/devtools were not exposed in this automation path; mission launch logs zed-launch.log and zed-launch-with-path.log were both 0 bytes.",
+        "network": "N/A (no API/network behavior is part of these detach/floating/focus UI assertions).",
+        "windowCount": "Observed 1 zed window before and after all pop-out attempts."
+      },
+      "issues": "Cannot compare pre/post detach thread state because detached window never opened."
+    },
+    {
+      "id": "VAL-DETACH-004",
+      "title": "Repeating pop out does not create a second detached window",
+      "status": "blocked",
+      "steps": [
+        {
+          "action": "Launch /Users/nest/Developer/neo-zed/target/aarch64-apple-darwin/debug/zed with isolated --user-data-dir and open /Users/nest/Developer/neo-zed",
+          "expected": "Workspace window opens and can host Agent panel interactions",
+          "observed": "Workspace opened successfully (window title observed as neo-zed in relaunched state)."
+        },
+        {
+          "action": "Open Agent panel with \u2318? and inspect panel controls",
+          "expected": "Agent panel is visible and pop-out control is operable from the user surface",
+          "observed": "Agent panel became visible; options menu opened via \u2318\u2325M, but pop-out action was not keyboard-addressable there."
+        },
+        {
+          "action": "Attempt pop-out via keyboard-accessible paths (command palette query: 'pop out', options-menu navigation) and bounded click probes near the toolbar icon area",
+          "expected": "A detached agent window opens (window count increases)",
+          "observed": "No detached window opened; System Events window count stayed at 1 throughout attempts."
+        }
+      ],
+      "evidence": {
+        "screenshots": [
+          "detached-shell/manual-desktop/after-toggle-agent.png",
+          "detached-shell/manual-desktop/after-toggle-options-menu-shortcut.png",
+          "detached-shell/manual-desktop/command-palette-pop-out-query.png"
+        ],
+        "consoleErrors": "Native desktop console/devtools were not exposed in this automation path; mission launch logs zed-launch.log and zed-launch-with-path.log were both 0 bytes.",
+        "network": "N/A (no API/network behavior is part of these detach/floating/focus UI assertions).",
+        "windowCount": "Observed 1 zed window before and after all pop-out attempts."
+      },
+      "issues": "Cannot test repeated detach behavior because first detach never succeeded."
+    },
+    {
+      "id": "VAL-DETACH-005",
+      "title": "Closing the detached window restores the docked panel",
+      "status": "blocked",
+      "steps": [
+        {
+          "action": "Launch /Users/nest/Developer/neo-zed/target/aarch64-apple-darwin/debug/zed with isolated --user-data-dir and open /Users/nest/Developer/neo-zed",
+          "expected": "Workspace window opens and can host Agent panel interactions",
+          "observed": "Workspace opened successfully (window title observed as neo-zed in relaunched state)."
+        },
+        {
+          "action": "Open Agent panel with \u2318? and inspect panel controls",
+          "expected": "Agent panel is visible and pop-out control is operable from the user surface",
+          "observed": "Agent panel became visible; options menu opened via \u2318\u2325M, but pop-out action was not keyboard-addressable there."
+        },
+        {
+          "action": "Attempt pop-out via keyboard-accessible paths (command palette query: 'pop out', options-menu navigation) and bounded click probes near the toolbar icon area",
+          "expected": "A detached agent window opens (window count increases)",
+          "observed": "No detached window opened; System Events window count stayed at 1 throughout attempts."
+        }
+      ],
+      "evidence": {
+        "screenshots": [
+          "detached-shell/manual-desktop/after-toggle-agent.png",
+          "detached-shell/manual-desktop/after-toggle-options-menu-shortcut.png",
+          "detached-shell/manual-desktop/command-palette-pop-out-query.png"
+        ],
+        "consoleErrors": "Native desktop console/devtools were not exposed in this automation path; mission launch logs zed-launch.log and zed-launch-with-path.log were both 0 bytes.",
+        "network": "N/A (no API/network behavior is part of these detach/floating/focus UI assertions).",
+        "windowCount": "Observed 1 zed window before and after all pop-out attempts."
+      },
+      "issues": "Cannot test close-to-restore because detached window was never created."
+    },
+    {
+      "id": "VAL-DETACH-006",
+      "title": "App relaunch returns to docked mode",
+      "status": "blocked",
+      "steps": [
+        {
+          "action": "Launch /Users/nest/Developer/neo-zed/target/aarch64-apple-darwin/debug/zed with isolated --user-data-dir and open /Users/nest/Developer/neo-zed",
+          "expected": "Workspace window opens and can host Agent panel interactions",
+          "observed": "Workspace opened successfully (window title observed as neo-zed in relaunched state)."
+        },
+        {
+          "action": "Open Agent panel with \u2318? and inspect panel controls",
+          "expected": "Agent panel is visible and pop-out control is operable from the user surface",
+          "observed": "Agent panel became visible; options menu opened via \u2318\u2325M, but pop-out action was not keyboard-addressable there."
+        },
+        {
+          "action": "Attempt pop-out via keyboard-accessible paths (command palette query: 'pop out', options-menu navigation) and bounded click probes near the toolbar icon area",
+          "expected": "A detached agent window opens (window count increases)",
+          "observed": "No detached window opened; System Events window count stayed at 1 throughout attempts."
+        },
+        {
+          "action": "Relaunch zed with the same isolated user-data-dir",
+          "expected": "If previously detached, app should return in docked mode without auto-restored detached window",
+          "observed": "Relaunch showed one workspace window and no detached window (relaunched-with-project.png), but no prior detached session existed."
+        }
+      ],
+      "evidence": {
+        "screenshots": [
+          "detached-shell/manual-desktop/after-toggle-agent.png",
+          "detached-shell/manual-desktop/after-toggle-options-menu-shortcut.png",
+          "detached-shell/manual-desktop/command-palette-pop-out-query.png",
+          "detached-shell/manual-desktop/relaunched-with-project.png"
+        ],
+        "consoleErrors": "Native desktop console/devtools were not exposed in this automation path; mission launch logs zed-launch.log and zed-launch-with-path.log were both 0 bytes.",
+        "network": "N/A (no API/network behavior is part of these detach/floating/focus UI assertions).",
+        "windowCount": "Observed 1 zed window before and after all pop-out attempts."
+      },
+      "issues": "Relaunch was observed with one docked workspace window, but prerequisite 'relaunch after a detached session' could not be established because detach never succeeded."
+    },
+    {
+      "id": "VAL-DETACH-007",
+      "title": "Repeated detach and restore preserve one continuous state",
+      "status": "blocked",
+      "steps": [
+        {
+          "action": "Launch /Users/nest/Developer/neo-zed/target/aarch64-apple-darwin/debug/zed with isolated --user-data-dir and open /Users/nest/Developer/neo-zed",
+          "expected": "Workspace window opens and can host Agent panel interactions",
+          "observed": "Workspace opened successfully (window title observed as neo-zed in relaunched state)."
+        },
+        {
+          "action": "Open Agent panel with \u2318? and inspect panel controls",
+          "expected": "Agent panel is visible and pop-out control is operable from the user surface",
+          "observed": "Agent panel became visible; options menu opened via \u2318\u2325M, but pop-out action was not keyboard-addressable there."
+        },
+        {
+          "action": "Attempt pop-out via keyboard-accessible paths (command palette query: 'pop out', options-menu navigation) and bounded click probes near the toolbar icon area",
+          "expected": "A detached agent window opens (window count increases)",
+          "observed": "No detached window opened; System Events window count stayed at 1 throughout attempts."
+        }
+      ],
+      "evidence": {
+        "screenshots": [
+          "detached-shell/manual-desktop/after-toggle-agent.png",
+          "detached-shell/manual-desktop/after-toggle-options-menu-shortcut.png",
+          "detached-shell/manual-desktop/command-palette-pop-out-query.png"
+        ],
+        "consoleErrors": "Native desktop console/devtools were not exposed in this automation path; mission launch logs zed-launch.log and zed-launch-with-path.log were both 0 bytes.",
+        "network": "N/A (no API/network behavior is part of these detach/floating/focus UI assertions).",
+        "windowCount": "Observed 1 zed window before and after all pop-out attempts."
+      },
+      "issues": "Cannot execute detach\u2192restore\u2192detach lifecycle because detach entry did not succeed."
+    },
+    {
+      "id": "VAL-FLOAT-001",
+      "title": "Detached window is a PiP-style floating utility window",
+      "status": "blocked",
+      "steps": [
+        {
+          "action": "Launch /Users/nest/Developer/neo-zed/target/aarch64-apple-darwin/debug/zed with isolated --user-data-dir and open /Users/nest/Developer/neo-zed",
+          "expected": "Workspace window opens and can host Agent panel interactions",
+          "observed": "Workspace opened successfully (window title observed as neo-zed in relaunched state)."
+        },
+        {
+          "action": "Open Agent panel with \u2318? and inspect panel controls",
+          "expected": "Agent panel is visible and pop-out control is operable from the user surface",
+          "observed": "Agent panel became visible; options menu opened via \u2318\u2325M, but pop-out action was not keyboard-addressable there."
+        },
+        {
+          "action": "Attempt pop-out via keyboard-accessible paths (command palette query: 'pop out', options-menu navigation) and bounded click probes near the toolbar icon area",
+          "expected": "A detached agent window opens (window count increases)",
+          "observed": "No detached window opened; System Events window count stayed at 1 throughout attempts."
+        }
+      ],
+      "evidence": {
+        "screenshots": [
+          "detached-shell/manual-desktop/after-toggle-agent.png",
+          "detached-shell/manual-desktop/after-toggle-options-menu-shortcut.png",
+          "detached-shell/manual-desktop/command-palette-pop-out-query.png"
+        ],
+        "consoleErrors": "Native desktop console/devtools were not exposed in this automation path; mission launch logs zed-launch.log and zed-launch-with-path.log were both 0 bytes.",
+        "network": "N/A (no API/network behavior is part of these detach/floating/focus UI assertions).",
+        "windowCount": "Observed 1 zed window before and after all pop-out attempts."
+      },
+      "issues": "Cannot observe floating detached shell because detached window did not open."
+    },
+    {
+      "id": "VAL-FLOAT-002",
+      "title": "Detached window remembers bounds within the current app session",
+      "status": "blocked",
+      "steps": [
+        {
+          "action": "Launch /Users/nest/Developer/neo-zed/target/aarch64-apple-darwin/debug/zed with isolated --user-data-dir and open /Users/nest/Developer/neo-zed",
+          "expected": "Workspace window opens and can host Agent panel interactions",
+          "observed": "Workspace opened successfully (window title observed as neo-zed in relaunched state)."
+        },
+        {
+          "action": "Open Agent panel with \u2318? and inspect panel controls",
+          "expected": "Agent panel is visible and pop-out control is operable from the user surface",
+          "observed": "Agent panel became visible; options menu opened via \u2318\u2325M, but pop-out action was not keyboard-addressable there."
+        },
+        {
+          "action": "Attempt pop-out via keyboard-accessible paths (command palette query: 'pop out', options-menu navigation) and bounded click probes near the toolbar icon area",
+          "expected": "A detached agent window opens (window count increases)",
+          "observed": "No detached window opened; System Events window count stayed at 1 throughout attempts."
+        }
+      ],
+      "evidence": {
+        "screenshots": [
+          "detached-shell/manual-desktop/after-toggle-agent.png",
+          "detached-shell/manual-desktop/after-toggle-options-menu-shortcut.png",
+          "detached-shell/manual-desktop/command-palette-pop-out-query.png"
+        ],
+        "consoleErrors": "Native desktop console/devtools were not exposed in this automation path; mission launch logs zed-launch.log and zed-launch-with-path.log were both 0 bytes.",
+        "network": "N/A (no API/network behavior is part of these detach/floating/focus UI assertions).",
+        "windowCount": "Observed 1 zed window before and after all pop-out attempts."
+      },
+      "issues": "Cannot verify detached bounds persistence because detached window did not open."
+    },
+    {
+      "id": "VAL-FLOAT-003",
+      "title": "Multiple workspaces can detach independently",
+      "status": "blocked",
+      "steps": [
+        {
+          "action": "Launch /Users/nest/Developer/neo-zed/target/aarch64-apple-darwin/debug/zed with isolated --user-data-dir and open /Users/nest/Developer/neo-zed",
+          "expected": "Workspace window opens and can host Agent panel interactions",
+          "observed": "Workspace opened successfully (window title observed as neo-zed in relaunched state)."
+        },
+        {
+          "action": "Open Agent panel with \u2318? and inspect panel controls",
+          "expected": "Agent panel is visible and pop-out control is operable from the user surface",
+          "observed": "Agent panel became visible; options menu opened via \u2318\u2325M, but pop-out action was not keyboard-addressable there."
+        },
+        {
+          "action": "Attempt pop-out via keyboard-accessible paths (command palette query: 'pop out', options-menu navigation) and bounded click probes near the toolbar icon area",
+          "expected": "A detached agent window opens (window count increases)",
+          "observed": "No detached window opened; System Events window count stayed at 1 throughout attempts."
+        }
+      ],
+      "evidence": {
+        "screenshots": [
+          "detached-shell/manual-desktop/after-toggle-agent.png",
+          "detached-shell/manual-desktop/after-toggle-options-menu-shortcut.png",
+          "detached-shell/manual-desktop/command-palette-pop-out-query.png"
+        ],
+        "consoleErrors": "Native desktop console/devtools were not exposed in this automation path; mission launch logs zed-launch.log and zed-launch-with-path.log were both 0 bytes.",
+        "network": "N/A (no API/network behavior is part of these detach/floating/focus UI assertions).",
+        "windowCount": "Observed 1 zed window before and after all pop-out attempts."
+      },
+      "issues": "Cannot validate multi-workspace detached behavior because single-workspace detach prerequisite failed."
+    },
+    {
+      "id": "VAL-FLOAT-004",
+      "title": "Basic detach works across all targeted desktop environments",
+      "status": "blocked",
+      "steps": [
+        {
+          "action": "Launch /Users/nest/Developer/neo-zed/target/aarch64-apple-darwin/debug/zed with isolated --user-data-dir and open /Users/nest/Developer/neo-zed",
+          "expected": "Workspace window opens and can host Agent panel interactions",
+          "observed": "Workspace opened successfully (window title observed as neo-zed in relaunched state)."
+        },
+        {
+          "action": "Open Agent panel with \u2318? and inspect panel controls",
+          "expected": "Agent panel is visible and pop-out control is operable from the user surface",
+          "observed": "Agent panel became visible; options menu opened via \u2318\u2325M, but pop-out action was not keyboard-addressable there."
+        },
+        {
+          "action": "Attempt pop-out via keyboard-accessible paths (command palette query: 'pop out', options-menu navigation) and bounded click probes near the toolbar icon area",
+          "expected": "A detached agent window opens (window count increases)",
+          "observed": "No detached window opened; System Events window count stayed at 1 throughout attempts."
+        },
+        {
+          "action": "Check available desktop environments in this validator session",
+          "expected": "Ability to execute manual checks on macOS, Windows, Linux/X11, and Linux/Wayland",
+          "observed": "Session provided macOS only; Windows and Linux (X11/Wayland) were unavailable."
+        }
+      ],
+      "evidence": {
+        "screenshots": [
+          "detached-shell/manual-desktop/after-toggle-agent.png",
+          "detached-shell/manual-desktop/after-toggle-options-menu-shortcut.png",
+          "detached-shell/manual-desktop/command-palette-pop-out-query.png"
+        ],
+        "consoleErrors": "Native desktop console/devtools were not exposed in this automation path; mission launch logs zed-launch.log and zed-launch-with-path.log were both 0 bytes.",
+        "network": "N/A (no API/network behavior is part of these detach/floating/focus UI assertions).",
+        "windowCount": "Observed 1 zed window before and after all pop-out attempts."
+      },
+      "issues": "Only macOS surface was available in-session (no Windows/Linux X11/Wayland), and detach entry could not be exercised even on macOS."
+    },
+    {
+      "id": "VAL-CROSS-001",
+      "title": "Focus commands target the detached agent window",
+      "status": "blocked",
+      "steps": [
+        {
+          "action": "Launch /Users/nest/Developer/neo-zed/target/aarch64-apple-darwin/debug/zed with isolated --user-data-dir and open /Users/nest/Developer/neo-zed",
+          "expected": "Workspace window opens and can host Agent panel interactions",
+          "observed": "Workspace opened successfully (window title observed as neo-zed in relaunched state)."
+        },
+        {
+          "action": "Open Agent panel with \u2318? and inspect panel controls",
+          "expected": "Agent panel is visible and pop-out control is operable from the user surface",
+          "observed": "Agent panel became visible; options menu opened via \u2318\u2325M, but pop-out action was not keyboard-addressable there."
+        },
+        {
+          "action": "Attempt pop-out via keyboard-accessible paths (command palette query: 'pop out', options-menu navigation) and bounded click probes near the toolbar icon area",
+          "expected": "A detached agent window opens (window count increases)",
+          "observed": "No detached window opened; System Events window count stayed at 1 throughout attempts."
+        }
+      ],
+      "evidence": {
+        "screenshots": [
+          "detached-shell/manual-desktop/after-toggle-agent.png",
+          "detached-shell/manual-desktop/after-toggle-options-menu-shortcut.png",
+          "detached-shell/manual-desktop/command-palette-pop-out-query.png"
+        ],
+        "consoleErrors": "Native desktop console/devtools were not exposed in this automation path; mission launch logs zed-launch.log and zed-launch-with-path.log were both 0 bytes.",
+        "network": "N/A (no API/network behavior is part of these detach/floating/focus UI assertions).",
+        "windowCount": "Observed 1 zed window before and after all pop-out attempts."
+      },
+      "issues": "Cannot validate focus routing to detached surface because detached window did not open."
+    },
+    {
+      "id": "VAL-CROSS-002",
+      "title": "Agent reveal affordances route to the detached window",
+      "status": "blocked",
+      "steps": [
+        {
+          "action": "Launch /Users/nest/Developer/neo-zed/target/aarch64-apple-darwin/debug/zed with isolated --user-data-dir and open /Users/nest/Developer/neo-zed",
+          "expected": "Workspace window opens and can host Agent panel interactions",
+          "observed": "Workspace opened successfully (window title observed as neo-zed in relaunched state)."
+        },
+        {
+          "action": "Open Agent panel with \u2318? and inspect panel controls",
+          "expected": "Agent panel is visible and pop-out control is operable from the user surface",
+          "observed": "Agent panel became visible; options menu opened via \u2318\u2325M, but pop-out action was not keyboard-addressable there."
+        },
+        {
+          "action": "Attempt pop-out via keyboard-accessible paths (command palette query: 'pop out', options-menu navigation) and bounded click probes near the toolbar icon area",
+          "expected": "A detached agent window opens (window count increases)",
+          "observed": "No detached window opened; System Events window count stayed at 1 throughout attempts."
+        }
+      ],
+      "evidence": {
+        "screenshots": [
+          "detached-shell/manual-desktop/after-toggle-agent.png",
+          "detached-shell/manual-desktop/after-toggle-options-menu-shortcut.png",
+          "detached-shell/manual-desktop/command-palette-pop-out-query.png"
+        ],
+        "consoleErrors": "Native desktop console/devtools were not exposed in this automation path; mission launch logs zed-launch.log and zed-launch-with-path.log were both 0 bytes.",
+        "network": "N/A (no API/network behavior is part of these detach/floating/focus UI assertions).",
+        "windowCount": "Observed 1 zed window before and after all pop-out attempts."
+      },
+      "issues": "Cannot validate reveal routing to detached surface because detached window did not open."
+    },
+    {
+      "id": "VAL-CROSS-003",
+      "title": "Closing a workspace cleans up its detached agent window",
+      "status": "blocked",
+      "steps": [
+        {
+          "action": "Launch /Users/nest/Developer/neo-zed/target/aarch64-apple-darwin/debug/zed with isolated --user-data-dir and open /Users/nest/Developer/neo-zed",
+          "expected": "Workspace window opens and can host Agent panel interactions",
+          "observed": "Workspace opened successfully (window title observed as neo-zed in relaunched state)."
+        },
+        {
+          "action": "Open Agent panel with \u2318? and inspect panel controls",
+          "expected": "Agent panel is visible and pop-out control is operable from the user surface",
+          "observed": "Agent panel became visible; options menu opened via \u2318\u2325M, but pop-out action was not keyboard-addressable there."
+        },
+        {
+          "action": "Attempt pop-out via keyboard-accessible paths (command palette query: 'pop out', options-menu navigation) and bounded click probes near the toolbar icon area",
+          "expected": "A detached agent window opens (window count increases)",
+          "observed": "No detached window opened; System Events window count stayed at 1 throughout attempts."
+        }
+      ],
+      "evidence": {
+        "screenshots": [
+          "detached-shell/manual-desktop/after-toggle-agent.png",
+          "detached-shell/manual-desktop/after-toggle-options-menu-shortcut.png",
+          "detached-shell/manual-desktop/command-palette-pop-out-query.png"
+        ],
+        "consoleErrors": "Native desktop console/devtools were not exposed in this automation path; mission launch logs zed-launch.log and zed-launch-with-path.log were both 0 bytes.",
+        "network": "N/A (no API/network behavior is part of these detach/floating/focus UI assertions).",
+        "windowCount": "Observed 1 zed window before and after all pop-out attempts."
+      },
+      "issues": "Cannot validate detached-window cleanup on workspace close because detached window did not open."
+    },
+    {
+      "id": "VAL-CROSS-004",
+      "title": "Toggle and reveal paths do not resurrect a docked duplicate while detached",
+      "status": "blocked",
+      "steps": [
+        {
+          "action": "Launch /Users/nest/Developer/neo-zed/target/aarch64-apple-darwin/debug/zed with isolated --user-data-dir and open /Users/nest/Developer/neo-zed",
+          "expected": "Workspace window opens and can host Agent panel interactions",
+          "observed": "Workspace opened successfully (window title observed as neo-zed in relaunched state)."
+        },
+        {
+          "action": "Open Agent panel with \u2318? and inspect panel controls",
+          "expected": "Agent panel is visible and pop-out control is operable from the user surface",
+          "observed": "Agent panel became visible; options menu opened via \u2318\u2325M, but pop-out action was not keyboard-addressable there."
+        },
+        {
+          "action": "Attempt pop-out via keyboard-accessible paths (command palette query: 'pop out', options-menu navigation) and bounded click probes near the toolbar icon area",
+          "expected": "A detached agent window opens (window count increases)",
+          "observed": "No detached window opened; System Events window count stayed at 1 throughout attempts."
+        }
+      ],
+      "evidence": {
+        "screenshots": [
+          "detached-shell/manual-desktop/after-toggle-agent.png",
+          "detached-shell/manual-desktop/after-toggle-options-menu-shortcut.png",
+          "detached-shell/manual-desktop/command-palette-pop-out-query.png"
+        ],
+        "consoleErrors": "Native desktop console/devtools were not exposed in this automation path; mission launch logs zed-launch.log and zed-launch-with-path.log were both 0 bytes.",
+        "network": "N/A (no API/network behavior is part of these detach/floating/focus UI assertions).",
+        "windowCount": "Observed 1 zed window before and after all pop-out attempts."
+      },
+      "issues": "Cannot validate while-detached toggle/reveal behavior because detached mode was never entered."
+    },
+    {
+      "id": "VAL-CROSS-005",
+      "title": "Focus routing stays isolated between detached workspaces",
+      "status": "blocked",
+      "steps": [
+        {
+          "action": "Launch /Users/nest/Developer/neo-zed/target/aarch64-apple-darwin/debug/zed with isolated --user-data-dir and open /Users/nest/Developer/neo-zed",
+          "expected": "Workspace window opens and can host Agent panel interactions",
+          "observed": "Workspace opened successfully (window title observed as neo-zed in relaunched state)."
+        },
+        {
+          "action": "Open Agent panel with \u2318? and inspect panel controls",
+          "expected": "Agent panel is visible and pop-out control is operable from the user surface",
+          "observed": "Agent panel became visible; options menu opened via \u2318\u2325M, but pop-out action was not keyboard-addressable there."
+        },
+        {
+          "action": "Attempt pop-out via keyboard-accessible paths (command palette query: 'pop out', options-menu navigation) and bounded click probes near the toolbar icon area",
+          "expected": "A detached agent window opens (window count increases)",
+          "observed": "No detached window opened; System Events window count stayed at 1 throughout attempts."
+        }
+      ],
+      "evidence": {
+        "screenshots": [
+          "detached-shell/manual-desktop/after-toggle-agent.png",
+          "detached-shell/manual-desktop/after-toggle-options-menu-shortcut.png",
+          "detached-shell/manual-desktop/command-palette-pop-out-query.png"
+        ],
+        "consoleErrors": "Native desktop console/devtools were not exposed in this automation path; mission launch logs zed-launch.log and zed-launch-with-path.log were both 0 bytes.",
+        "network": "N/A (no API/network behavior is part of these detach/floating/focus UI assertions).",
+        "windowCount": "Observed 1 zed window before and after all pop-out attempts."
+      },
+      "issues": "Cannot validate isolated detached focus routing because detached windows could not be created."
+    },
+    {
+      "id": "VAL-CROSS-006",
+      "title": "Reattached workspaces route focus back to the docked panel",
+      "status": "blocked",
+      "steps": [
+        {
+          "action": "Launch /Users/nest/Developer/neo-zed/target/aarch64-apple-darwin/debug/zed with isolated --user-data-dir and open /Users/nest/Developer/neo-zed",
+          "expected": "Workspace window opens and can host Agent panel interactions",
+          "observed": "Workspace opened successfully (window title observed as neo-zed in relaunched state)."
+        },
+        {
+          "action": "Open Agent panel with \u2318? and inspect panel controls",
+          "expected": "Agent panel is visible and pop-out control is operable from the user surface",
+          "observed": "Agent panel became visible; options menu opened via \u2318\u2325M, but pop-out action was not keyboard-addressable there."
+        },
+        {
+          "action": "Attempt pop-out via keyboard-accessible paths (command palette query: 'pop out', options-menu navigation) and bounded click probes near the toolbar icon area",
+          "expected": "A detached agent window opens (window count increases)",
+          "observed": "No detached window opened; System Events window count stayed at 1 throughout attempts."
+        }
+      ],
+      "evidence": {
+        "screenshots": [
+          "detached-shell/manual-desktop/after-toggle-agent.png",
+          "detached-shell/manual-desktop/after-toggle-options-menu-shortcut.png",
+          "detached-shell/manual-desktop/command-palette-pop-out-query.png"
+        ],
+        "consoleErrors": "Native desktop console/devtools were not exposed in this automation path; mission launch logs zed-launch.log and zed-launch-with-path.log were both 0 bytes.",
+        "network": "N/A (no API/network behavior is part of these detach/floating/focus UI assertions).",
+        "windowCount": "Observed 1 zed window before and after all pop-out attempts."
+      },
+      "issues": "Cannot validate post-reattach routing because detach/reattach cycle could not be executed."
+    }
+  ],
+  "frictions": [
+    {
+      "description": "Agent panel pop-out control is icon-only and not exposed as a discoverable keyboard action in this session; command palette search for 'pop out' returned no matches.",
+      "resolved": false,
+      "resolution": "Tried options-menu shortcut (\u2318\u2325M), command palette search, keyboard navigation, and bounded click probes; none produced a detached window.",
+      "affectedAssertions": [
+        "VAL-DETACH-001",
+        "VAL-DETACH-002",
+        "VAL-DETACH-003",
+        "VAL-DETACH-004",
+        "VAL-DETACH-005",
+        "VAL-DETACH-006",
+        "VAL-DETACH-007",
+        "VAL-FLOAT-001",
+        "VAL-FLOAT-002",
+        "VAL-FLOAT-003",
+        "VAL-CROSS-001",
+        "VAL-CROSS-002",
+        "VAL-CROSS-003",
+        "VAL-CROSS-004",
+        "VAL-CROSS-005",
+        "VAL-CROSS-006"
+      ]
+    },
+    {
+      "description": "Cross-platform manual validation surface was not available from this single macOS session.",
+      "resolved": false,
+      "resolution": "Marked platform-wide assertion blocked with explicit missing prerequisites (Windows, Linux/X11, Linux/Wayland).",
+      "affectedAssertions": [
+        "VAL-FLOAT-004"
+      ]
+    }
+  ],
+  "blockers": [
+    {
+      "description": "Could not open a detached agent window from the manual desktop surface in this environment.",
+      "affectedAssertions": [
+        "VAL-DETACH-001",
+        "VAL-DETACH-002",
+        "VAL-DETACH-003",
+        "VAL-DETACH-004",
+        "VAL-DETACH-005",
+        "VAL-DETACH-006",
+        "VAL-DETACH-007",
+        "VAL-FLOAT-001",
+        "VAL-FLOAT-002",
+        "VAL-FLOAT-003",
+        "VAL-CROSS-001",
+        "VAL-CROSS-002",
+        "VAL-CROSS-003",
+        "VAL-CROSS-004",
+        "VAL-CROSS-005",
+        "VAL-CROSS-006"
+      ],
+      "quickFixAttempted": "Executed multiple non-disruptive retries: reopen Agent panel, invoke options menu via \u2318\u2325M, command palette search for 'pop out', keyboard selection attempts, and bounded coordinate click probes around toolbar icon region; window count remained 1."
+    },
+    {
+      "description": "Required additional desktop environments for VAL-FLOAT-004 were unavailable.",
+      "affectedAssertions": [
+        "VAL-FLOAT-004"
+      ],
+      "quickFixAttempted": "Verified active environment and proceeded with macOS-only evidence capture; no way to provision Windows/Linux surfaces within mission constraints."
+    }
+  ],
+  "summary": "Tested 17 assertions: 0 passed, 0 failed, 17 blocked. Primary blocker was inability to open a detached window from this automation-accessible manual surface; VAL-FLOAT-004 was additionally blocked by missing Windows/Linux environments."
+}

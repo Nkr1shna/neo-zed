@@ -1,0 +1,96 @@
+{
+  "milestone": "detached-shell",
+  "round": 1,
+  "status": "fail",
+  "assertionsSummary": {
+    "total": 17,
+    "passed": 0,
+    "failed": 0,
+    "blocked": 17
+  },
+  "passedAssertions": [],
+  "failedAssertions": [],
+  "blockedAssertions": [
+    {
+      "id": "VAL-DETACH-001",
+      "blockedBy": "Blocked by manual-surface interaction gap: pop-out control could not be invoked in this non-interactive automation context (no command-palette match for 'pop out', no keyboard action exposed, and no detached window produced by click probes)."
+    },
+    {
+      "id": "VAL-DETACH-002",
+      "blockedBy": "Cannot validate dock suppression because detached mode could not be entered."
+    },
+    {
+      "id": "VAL-DETACH-003",
+      "blockedBy": "Cannot compare pre/post detach thread state because detached window never opened."
+    },
+    {
+      "id": "VAL-DETACH-004",
+      "blockedBy": "Cannot test repeated detach behavior because first detach never succeeded."
+    },
+    {
+      "id": "VAL-DETACH-005",
+      "blockedBy": "Cannot test close-to-restore because detached window was never created."
+    },
+    {
+      "id": "VAL-DETACH-006",
+      "blockedBy": "Relaunch was observed with one docked workspace window, but prerequisite 'relaunch after a detached session' could not be established because detach never succeeded."
+    },
+    {
+      "id": "VAL-DETACH-007",
+      "blockedBy": "Cannot execute detach\u2192restore\u2192detach lifecycle because detach entry did not succeed."
+    },
+    {
+      "id": "VAL-FLOAT-001",
+      "blockedBy": "Cannot observe floating detached shell because detached window did not open."
+    },
+    {
+      "id": "VAL-FLOAT-002",
+      "blockedBy": "Cannot verify detached bounds persistence because detached window did not open."
+    },
+    {
+      "id": "VAL-FLOAT-003",
+      "blockedBy": "Cannot validate multi-workspace detached behavior because single-workspace detach prerequisite failed."
+    },
+    {
+      "id": "VAL-FLOAT-004",
+      "blockedBy": "Only macOS surface was available in-session (no Windows/Linux X11/Wayland), and detach entry could not be exercised even on macOS."
+    },
+    {
+      "id": "VAL-CROSS-001",
+      "blockedBy": "Cannot validate focus routing to detached surface because detached window did not open."
+    },
+    {
+      "id": "VAL-CROSS-002",
+      "blockedBy": "Cannot validate reveal routing to detached surface because detached window did not open."
+    },
+    {
+      "id": "VAL-CROSS-003",
+      "blockedBy": "Cannot validate detached-window cleanup on workspace close because detached window did not open."
+    },
+    {
+      "id": "VAL-CROSS-004",
+      "blockedBy": "Cannot validate while-detached toggle/reveal behavior because detached mode was never entered."
+    },
+    {
+      "id": "VAL-CROSS-005",
+      "blockedBy": "Cannot validate isolated detached focus routing because detached windows could not be created."
+    },
+    {
+      "id": "VAL-CROSS-006",
+      "blockedBy": "Cannot validate post-reattach routing because detach/reattach cycle could not be executed."
+    }
+  ],
+  "appliedUpdates": [
+    {
+      "target": "user-testing.md",
+      "description": "Added manual desktop flow validator guidance for detached-shell isolation and blocked-prerequisite handling.",
+      "source": "setup"
+    },
+    {
+      "target": "user-testing.md",
+      "description": "Documented round findings: pop-out action was not discoverable via keyboard/command palette automation paths and VAL-FLOAT-004 requires separate platform sessions.",
+      "source": "flow-report"
+    }
+  ],
+  "previousRound": null
+}

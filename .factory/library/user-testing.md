@@ -66,3 +66,16 @@ This mission is a native desktop UI feature. The primary validation surfaces are
 
 - No long-running services, seeded databases, or browser automation are required.
 - Validation should run against the checked-out repo state plus writes under `.factory/validation/` and mission evidence paths only.
+
+## Flow Validator Guidance: manual desktop validation
+
+- Run this surface in a single validator session (`max concurrent validators = 1`).
+- Stay in the local repo and mission directories only; do not create sidecar services or use extra ports.
+- Keep one detached-shell validation scope per run and avoid mutating unrelated global app settings while capturing evidence.
+- Save flow reports under `.factory/validation/detached-shell/user-testing/flows/` and evidence under the mission evidence path provided by the validator prompt.
+- If required native desktop environments (Windows/Linux X11/Wayland) are unavailable in-session, mark those assertions as `blocked` with the exact missing prerequisite.
+
+### Detached-shell round findings
+
+- In the current automation-accessible macOS surface, the Agent panel pop-out action was not discoverable from command palette or keyboard-only paths; rely on direct toolbar control interaction when running this validation manually.
+- `VAL-FLOAT-004` requires explicit per-platform runs (macOS, Windows, Linux/X11, Linux/Wayland). A single macOS-only session is insufficient and should be marked blocked for missing platform prerequisites.
