@@ -1,0 +1,42 @@
+{
+  "milestone": "detached-shell",
+  "round": 1,
+  "status": "override",
+  "validatorsRun": {
+    "test": {
+      "passed": false,
+      "command": "cargo test --workspace --lib --bins --tests --no-fail-fast -- --test-threads=6",
+      "exitCode": 101
+    },
+    "typecheck": {
+      "passed": false,
+      "command": "cargo check --workspace --all-targets",
+      "exitCode": 101
+    },
+    "lint": {
+      "passed": false,
+      "command": "./script/clippy",
+      "exitCode": 101
+    }
+  },
+  "reviewsSummary": {
+    "total": 0,
+    "passed": 0,
+    "failed": 0,
+    "failedFeatures": []
+  },
+  "blockingIssues": [
+    "Pre-existing codex-usage-plugin compile/test failure blocks workspace-wide cargo check/test.",
+    "Pre-existing plugin_protocol clippy failure blocks repo-standard lint.",
+    "Pre-existing scrutiny gate failure prevented review subagent synthesis for this milestone."
+  ],
+  "nonBlockingIssues": [],
+  "appliedUpdates": [],
+  "suggestedGuidanceUpdates": [],
+  "rejectedObservations": [],
+  "override": {
+    "reason": "Overridden because all scrutiny gate failures match unrelated pre-existing validator debt already documented in mission AGENTS.md and .factory/library/user-testing.md.",
+    "decision": "Continue the mission without creating unrelated fix features; rely on user-testing validation plus targeted feature tests for detached-shell work."
+  },
+  "previousRound": null
+}
