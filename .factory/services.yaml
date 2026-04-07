@@ -3,7 +3,10 @@ commands:
   fmt: cargo fmt --all -- --check
   lint: ./script/clippy
   typecheck: cargo check --workspace --all-targets
-  test: cargo test --workspace --lib --bins --tests --no-fail-fast
+  test: cargo test --workspace --lib --bins --tests --no-fail-fast -- --test-threads=6
+  test_agent_ui: cargo test -p agent_ui --lib --tests -- --test-threads=6
+  test_workspace: cargo test -p workspace --lib --tests -- --test-threads=6
+  visual_test_runner: cargo build -p zed --bin zed_visual_test_runner --features visual-tests
   build: cargo build --workspace --bins --examples
 
 services: {}

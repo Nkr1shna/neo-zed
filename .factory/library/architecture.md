@@ -1,80 +1,103 @@
 # Architecture
 
-High-level map of the release-identity surfaces for the Neo Zed fork mission.
+How the detached agent panel PiP feature should fit into Neo Zed.
 
 ## What belongs here
 
-- Sources of truth for public product identity
-- How identity flows into packaging, scripts, release workflows, docs, and networked surfaces
-- Invariants workers must preserve while rebranding
+- Workspace, dock, and detached-window ownership rules
+- High-level relationships between `Workspace`, `AgentPanel`, detached presentation, and GPUI windowing
+- Platform invariants for always-on-top support
 
-## Identity sources of truth
+## Core model
 
-### 1. Shared application identity
-- `crates/release_channel/src/lib.rs` is the primary source of truth for:
-  - channel display names
-  - public app IDs / bundle IDs
-  - Windows app identifiers
-  - release-channel derived identity
-- `crates/paths/src/paths.rs` is the primary source of truth for:
-  - config/data/cache/log/support paths
-  - local storage naming visible to users and uninstall flows
+### 1. One agent experience per workspace
+- `AgentPanel` remains the single source of truth for agent UI state for a workspace.
+- The feature must not create a second independent agent session or duplicate conversation model when detaching.
+- Existing per-workspace thread and panel state should continue to flow through the same workspace-owned panel entity.
 
-### 2. Public command and scheme identity
-- `crates/cli`, `crates/install_cli`, and related scripts define the public CLI command surface.
-- `crates/zed/Cargo.toml`, desktop templates, and docs define the public deep-link scheme and bundle registration.
+### 2. Two presentations of the same workspace-owned panel
+- **Docked presentation:** the existing panel rendered inside the workspace dock.
+- **Detached presentation:** a floating native window with a window-local shell that wraps the same workspace-owned agent experience.
+- Only one presentation is visible at a time for a given workspace.
+- Preferred pattern: keep `AgentPanel` as the state owner and add a detached shell/root view around it rather than creating a second agent view model.
 
-### 3. Desktop packaging surfaces
-- macOS:
-  - `crates/zed/Cargo.toml`
-  - `crates/zed/resources/info/*`
-  - `script/bundle-mac`
-  - `script/install.sh`
-  - `script/uninstall.sh`
-- Windows:
-  - `crates/zed/resources/windows/zed.iss`
-  - `crates/explorer_command_injector/AppxManifest*.xml`
-  - `script/bundle-windows.ps1`
-  - release workflows / winget publication
-- Linux:
-  - `crates/zed/resources/zed.desktop.in`
-  - `crates/zed/resources/flatpak/zed.metainfo.xml.in`
-  - `crates/zed/resources/snap/snapcraft.yaml.in`
-  - `script/bundle-linux`
-  - `script/install.sh`
-  - `script/uninstall.sh`
+### 3. Workspace-owned detach controller
+- Detached-window lifecycle state should be owned by the workspace layer, not by a second agent view model.
+- The controller should track:
+  - whether the workspace is currently detached
+  - the detached window handle/identity
+  - most recently used detached bounds
+  - requested always-on-top state for the current app session
+- Closing the detached window must restore the docked presentation for that same workspace.
 
-### 4. Networked/public surfaces
-- `assets/settings/default.json` establishes the default site/server URL.
-- `crates/http_client` maps the primary domain to API/cloud endpoints.
-- `crates/client`, `crates/auto_update`, `crates/feedback`, telemetry/crash scripts, and docs expose public URLs, repo links, support links, and email surfaces.
+## Dock and routing rules
 
-### 5. Release and documentation surfaces
-- `.github/workflows/*` publish artifact names and registry/package metadata.
-- `docs/`, `legal/`, and release-oriented scripts/docs expose the public brand and support surfaces.
+### Dock suppression
+- While detached, the workspace must continue to own `AgentPanel`, but the docked presentation must be suppressed.
+- Suppression means:
+  - no visible agent panel body in the dock
+  - no duplicate docked agent content
+  - no empty reserved dock space or ghost shell attributable to the agent panel
+- Detach is a presentation-mode switch, not panel deletion.
+
+### Focus and reveal routing
+- Normal agent focus/reveal/toggle flows should resolve to the detached window when that workspace is detached.
+- After reattachment, those same flows must resolve back to the docked panel.
+- Routing must be keyed to the owning workspace, not to the most recently active app window or to project-name similarity.
+
+### Multi-workspace behavior
+- Each workspace may have at most one detached agent window.
+- Multiple workspaces may each detach independently.
+- Actions for workspace A must never focus, mutate, or steal workspace B’s detached agent surface.
+
+## Detached window behavior
+
+### Floating shell
+- The detached presentation should be a native floating window that can coexist visibly with the owning workspace window.
+- The detached shell should reuse the same visible thread, transcript, and draft state the user had before detaching.
+- Detached bounds are remembered per workspace within the current app session only.
+- Relaunch returns to docked mode; detached presentation itself is not restored across app restart.
+
+## Likely code ownership / entry points
+
+- `crates/agent_ui/src/agent_panel.rs`
+  - existing panel actions, toolbar/menu affordances, active-thread handling, panel serialization
+- `crates/agent_ui/src/conversation_view.rs`
+  - existing focus/reveal and notification-driven panel routing
+- `crates/workspace/src/workspace.rs`
+  - dock/panel ownership, focus routing, panel lifecycle
+- `crates/workspace/src/multi_workspace.rs`
+  - workspace/window lifecycle edge cases
+- `crates/gpui/src/platform.rs` and `crates/gpui/src/window.rs`
+  - shared runtime always-on-top API surface
+- `crates/gpui_macos/src/window.rs`, `crates/gpui_windows/src/window.rs`, `crates/gpui_linux/src/linux/x11/window.rs`, `crates/gpui_linux/src/linux/wayland/window.rs`
+  - backend behavior for runtime always-on-top and Wayland degradation
+
+### Cleanup
+- Closing the detached window restores the docked presentation.
+- Closing the owning workspace removes its detached window cleanly.
+- No stale focus target, orphaned floating window, or dead reveal path should remain after teardown.
+
+## Always-on-top architecture
+
+### GPUI abstraction
+- GPUI needs an explicit runtime always-on-top capability exposed on `Window` / `PlatformWindow`.
+- Creation-time floating behavior is not sufficient because the lock must toggle at runtime.
+- The detached window should use that API rather than backend-specific logic from agent UI code.
+
+### Platform expectations
+- Supported for the lock toggle:
+  - macOS
+  - Windows
+  - Linux/X11
+- Graceful degradation:
+  - Linux/Wayland supports detach itself, but the lock control should be absent or visibly disabled and must never imply success.
 
 ## Required invariants
 
-1. The public fork identity tuple must stay consistent:
-   - product name: `Neo Zed`
-   - CLI: `neozed`
-   - scheme: `neozed://`
-   - base bundle/app ID: `dev.neozed`
-   - site: `https://neozed.dev`
-   - API: `https://api.neozed.dev`
-   - cloud/update host: `https://cloud.neozed.dev`
-   - repo URL: `https://github.com/Nkr1shna/neo-zed/`
-
-2. Channel identities derive from the same base:
-   - stable: `Neo Zed` / `dev.neozed`
-   - preview: `Neo Zed Preview` / `dev.neozed.Preview`
-   - nightly: `Neo Zed Nightly` / `dev.neozed.Nightly`
-   - dev: `Neo Zed Dev` / `dev.neozed.Dev`
-
-3. Preserve upstream pullability:
-   - do not rename Rust component/type/module names unless the old name leaks directly into release identity
-   - leave intentionally compatibility-sensitive internal protocol names alone unless they are part of a public release-facing registration surface
-
-4. Prefer updating existing source-of-truth files over scattered one-off replacements.
-
-5. Packaging/workflow identities and docs must agree; do not leave mismatched names, IDs, commands, or URLs between surfaces.
+1. A workspace has one logical agent panel state, regardless of whether it is docked or detached.
+2. A workspace has at most one detached agent window at a time.
+3. Detaching must never create duplicate visible agent surfaces for the same workspace.
+4. Reattaching must preserve visible thread and draft state.
+5. Relaunch always returns to docked mode.
+6. Always-on-top is runtime-toggleable on supported platforms and explicitly unavailable on Wayland.

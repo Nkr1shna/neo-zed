@@ -1,46 +1,36 @@
 # Environment
 
-Environment variables, external dependencies, and release-identity setup notes for the Neo Zed fork mission.
+Environment and setup notes for the detached agent panel PiP mission.
 
-## Canonical public identity
+## External dependencies
 
-- Product name: `Neo Zed`
-- CLI command: `neozed`
-- URL scheme: `neozed://`
-- Base bundle/app ID: `dev.neozed`
-- Domain: `https://neozed.dev`
-- API domain: `https://api.neozed.dev`
-- Cloud/update domain: `https://cloud.neozed.dev`
-- Repo URL: `https://github.com/Nkr1shna/neo-zed/`
+- No new credentials, accounts, databases, or external APIs are required for this mission.
+- No long-running local services need to be started for implementation or validation.
 
-## Email convention
+## Local tooling findings
 
-Preserve the existing mailbox local parts on the new domain where release-facing addresses are needed:
-
-- `hi@neozed.dev`
-- `legal@neozed.dev`
-- `privacy@neozed.dev`
-- `billing-support@neozed.dev`
-- `arbitration-opt-out@neozed.dev`
-
-## Release credentials not required for this mission
-
-Workers should not block implementation on missing distribution credentials unless a feature explicitly requires a live signed build:
-
-- macOS signing / notarization certificates
-- Windows signing credentials
-- Sentry / crash-reporting credentials
-- registry publication credentials (winget / stores)
-
-These missing credentials must instead be captured in the release checklist document if still required for first release.
-
-## Tooling findings
-
-- `cargo`, `cargo fmt`, `python3`, `plutil`, and `rg` are available locally.
-- `cargo nextest` is not installed locally; do not assume it for baseline validation.
+- `cargo`, `cargo fmt`, `python3`, and `rg` are available locally.
+- `cargo nextest` is not installed locally; workers should use `cargo test` for local verification unless a feature explicitly installs or requires something else.
 - The repo-standard lint command is `./script/clippy`.
+
+## Machine/resource notes
+
+- The planning dry run observed a 12-core machine with ample memory.
+- Repo-wide Rust test commands should still use conservative test parallelism because this workspace is large and shares one target directory.
+- `.factory/services.yaml` therefore caps test threads at 6 for the baseline `cargo test` commands.
+
+## Platform scope
+
+- In scope:
+  - macOS
+  - Windows
+  - Linux/X11
+  - Linux/Wayland
+- Expected degradation:
+  - Wayland supports detach/restore
+  - Wayland does not promise always-on-top; the lock control must be disabled or unavailable there
 
 ## What does not belong here
 
 - Service ports or start/stop commands (use `.factory/services.yaml`)
-- Architecture/source-of-truth explanations (use `architecture.md`)
+- Architectural behavior or invariants (use `architecture.md`)
