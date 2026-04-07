@@ -13,6 +13,8 @@ Mission-specific notes for detached agent windows and always-on-top behavior.
 - Detached agent windows are native floating windows, not separate workspaces and not full app-window replacements.
 - A detached window reuses the owning workspace’s existing `AgentPanel` state.
 - Each workspace may have at most one detached agent window.
+- While detached, the window must expose a pop-in restore affordance instead of another pop-out affordance.
+- Activating pop-in restores the panel to the owning workspace window instead of closing into an ambiguous state.
 - Closing the detached window restores the docked panel for the same workspace.
 
 ## Always-on-top rules
