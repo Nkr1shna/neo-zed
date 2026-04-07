@@ -86,6 +86,12 @@ pub trait Panel: Focusable + EventEmitter<PanelEvent> + Render + Sized {
     fn is_agent_panel(&self) -> bool {
         false
     }
+    fn visible_in_dock(&self, _cx: &App) -> bool {
+        true
+    }
+    fn focus_detached_panel(&mut self, _cx: &mut Context<Self>) -> bool {
+        false
+    }
 }
 
 pub trait PanelHandle: Send + Sync {
@@ -115,6 +121,8 @@ pub trait PanelHandle: Send + Sync {
     fn activation_priority(&self, cx: &App) -> u32;
     fn enabled(&self, cx: &App) -> bool;
     fn is_agent_panel(&self, cx: &App) -> bool;
+    fn visible_in_dock(&self, cx: &App) -> bool;
+    fn focus_detached_panel(&self, cx: &mut App) -> bool;
     fn move_to_next_position(&self, window: &mut Window, cx: &mut App) {
         let current_position = self.position(window, cx);
         let next_position = [
@@ -238,6 +246,14 @@ where
 
     fn is_agent_panel(&self, cx: &App) -> bool {
         self.read(cx).is_agent_panel()
+    }
+
+    fn visible_in_dock(&self, cx: &App) -> bool {
+        self.read(cx).visible_in_dock(cx)
+    }
+
+    fn focus_detached_panel(&self, cx: &mut App) -> bool {
+        self.update(cx, |this, cx| this.focus_detached_panel(cx))
     }
 }
 
@@ -491,6 +507,13 @@ impl Dock {
             .position(|entry| entry.panel.remote_id() == Some(panel_id))
     }
 
+    pub fn panel_for_proto_id(&self, panel_id: PanelId) -> Option<&Arc<dyn PanelHandle>> {
+        self.panel_entries
+            .iter()
+            .find(|entry| entry.panel.remote_id() == Some(panel_id))
+            .map(|entry| &entry.panel)
+    }
+
     pub fn panel_for_id(&self, panel_id: EntityId) -> Option<&Arc<dyn PanelHandle>> {
         self.panel_entries
             .iter()
@@ -605,7 +628,7 @@ impl Dock {
                     let panel_id = Entity::entity_id(&panel);
                     let was_visible = this.is_open()
                         && this
-                            .visible_panel()
+                            .visible_panel(cx)
                             .is_some_and(|active_panel| active_panel.panel_id() == panel_id);
                     let size_state = this
                         .panel_entries
@@ -691,7 +714,7 @@ impl Dock {
                     }
                     PanelEvent::Close => {
                         if this
-                            .visible_panel()
+                            .visible_panel(cx)
                             .is_some_and(|p| p.panel_id() == Entity::entity_id(panel))
                         {
                             this.set_open(false, window, cx);
@@ -822,8 +845,8 @@ impl Dock {
         }
     }
 
-    pub fn visible_panel(&self) -> Option<&Arc<dyn PanelHandle>> {
-        let entry = self.visible_entry()?;
+    pub fn visible_panel(&self, cx: &App) -> Option<&Arc<dyn PanelHandle>> {
+        let entry = self.visible_entry(cx)?;
         Some(&entry.panel)
     }
 
@@ -832,16 +855,17 @@ impl Dock {
         Some(&panel_entry.panel)
     }
 
-    fn visible_entry(&self) -> Option<&PanelEntry> {
+    fn visible_entry(&self, cx: &App) -> Option<&PanelEntry> {
         if self.is_open {
             self.active_panel_entry()
+                .filter(|entry| entry.panel.visible_in_dock(cx))
         } else {
             None
         }
     }
 
     pub fn zoomed_panel(&self, window: &Window, cx: &App) -> Option<Arc<dyn PanelHandle>> {
-        let entry = self.visible_entry()?;
+        let entry = self.visible_entry(cx)?;
         if entry.panel.is_zoomed(window, cx) {
             Some(entry.panel.clone())
         } else {
@@ -1058,7 +1082,7 @@ impl Dock {
 impl Render for Dock {
     fn render(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let dispatch_context = Self::dispatch_context();
-        if let Some(entry) = self.visible_entry() {
+        if let Some(entry) = self.visible_entry(cx) {
             let position = self.position;
             let create_resize_handle = || {
                 let handle = div()
@@ -1179,7 +1203,7 @@ impl Render for PanelButtons {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let dock = self.dock.read(cx);
         let active_index = dock.active_panel_index;
-        let is_open = dock.is_open;
+        let has_visible_panel = dock.visible_panel(cx).is_some();
         let dock_position = dock.position;
 
         let (menu_anchor, menu_attach) = match dock.position {
@@ -1209,7 +1233,7 @@ impl Render for PanelButtons {
                 let dock_for_menu = dock_entity.clone();
                 let workspace_for_menu = workspace.clone();
 
-                let is_active_button = Some(i) == active_index && is_open;
+                let is_active_button = Some(i) == active_index && has_visible_panel;
                 let (action, tooltip) = if is_active_button {
                     let action = dock.toggle_action();
 

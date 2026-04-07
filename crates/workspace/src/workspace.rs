@@ -2363,7 +2363,7 @@ impl Workspace {
         };
 
         let opposite_dock = self.dock_at_position(opposite_position).read(cx);
-        let panel = opposite_dock.visible_panel()?;
+        let panel = opposite_dock.visible_panel(cx)?;
         let mut size_state = opposite_dock
             .stored_panel_size_state(panel.as_ref())
             .unwrap_or_default();
@@ -4110,12 +4110,59 @@ impl Workspace {
         self.serialize_workspace(window, cx);
     }
 
+    fn focus_detached_panel<T: Panel>(&mut self, cx: &mut Context<Self>) -> Option<Entity<T>> {
+        let panel = self.panel::<T>(cx)?;
+        panel
+            .update(cx, |panel, cx| panel.focus_detached_panel(cx))
+            .then_some(panel)
+    }
+
+    fn focus_detached_panel_by_id(
+        &mut self,
+        panel_id: EntityId,
+        cx: &mut Context<Self>,
+    ) -> Option<Arc<dyn PanelHandle>> {
+        for dock in self.all_docks() {
+            let Some(panel) = dock.read(cx).panel_for_id(panel_id).cloned() else {
+                continue;
+            };
+
+            if panel.focus_detached_panel(cx) {
+                return Some(panel);
+            }
+        }
+
+        None
+    }
+
+    fn focus_detached_panel_for_proto_id(
+        &mut self,
+        panel_id: PanelId,
+        cx: &mut Context<Self>,
+    ) -> Option<Arc<dyn PanelHandle>> {
+        for dock in self.all_docks() {
+            let Some(panel) = dock.read(cx).panel_for_proto_id(panel_id).cloned() else {
+                continue;
+            };
+
+            if panel.focus_detached_panel(cx) {
+                return Some(panel);
+            }
+        }
+
+        None
+    }
+
     /// Transfer focus to the panel of the given type.
     pub fn focus_panel<T: Panel>(
         &mut self,
         window: &mut Window,
         cx: &mut Context<Self>,
     ) -> Option<Entity<T>> {
+        if let Some(panel) = self.focus_detached_panel::<T>(cx) {
+            return Some(panel);
+        }
+
         let panel = self.focus_or_unfocus_panel::<T>(window, cx, &mut |_, _, _| true)?;
         panel.to_any().downcast().ok()
     }
@@ -4129,6 +4176,15 @@ impl Workspace {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) -> bool {
+        if self.focus_detached_panel::<T>(cx).is_some() {
+            telemetry::event!(
+                "Panel Button Clicked",
+                name = T::persistent_name(),
+                toggle_state = true
+            );
+            return true;
+        }
+
         let mut did_focus_panel = false;
         self.focus_or_unfocus_panel::<T>(window, cx, &mut |panel, window, cx| {
             did_focus_panel = !panel.panel_focus_handle(cx).contains_focused(window, cx);
@@ -4162,6 +4218,10 @@ impl Workspace {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) -> Option<Arc<dyn PanelHandle>> {
+        if let Some(panel) = self.focus_detached_panel_for_proto_id(panel_id, cx) {
+            return Some(panel);
+        }
+
         let mut panel = None;
         for dock in self.all_docks() {
             if let Some(panel_index) = dock.read(cx).panel_index_for_proto_id(panel_id) {
@@ -4188,6 +4248,10 @@ impl Workspace {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) -> Option<Arc<dyn PanelHandle>> {
+        if let Some(panel) = self.focus_detached_panel_by_id(panel_id, cx) {
+            return Some(panel);
+        }
+
         let mut panel = None;
         for dock in self.all_docks() {
             if let Some(panel_index) = dock.read(cx).panel_index_for_id(panel_id) {
@@ -4214,6 +4278,10 @@ impl Workspace {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) -> bool {
+        if self.focus_detached_panel_by_id(panel_id, cx).is_some() {
+            return true;
+        }
+
         let mut did_focus_panel = false;
         let mut found_panel = false;
         let docks = [
@@ -4313,6 +4381,10 @@ impl Workspace {
 
     /// Open the panel of the given type
     pub fn open_panel<T: Panel>(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        if self.focus_detached_panel::<T>(cx).is_some() {
+            return;
+        }
+
         for dock in self.all_docks() {
             if let Some(panel_index) = dock.read(cx).panel_index_for_type::<T>() {
                 dock.update(cx, |dock, cx| {
@@ -4326,6 +4398,10 @@ impl Workspace {
     /// Open the panel of the given type, dismissing any zoomed items that
     /// would obscure it (e.g. a zoomed terminal).
     pub fn reveal_panel<T: Panel>(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        if self.focus_detached_panel::<T>(cx).is_some() {
+            return;
+        }
+
         let dock_position = self.all_docks().iter().find_map(|dock| {
             let dock = dock.read(cx);
             dock.panel_index_for_type::<T>().map(|_| dock.position())
@@ -7233,7 +7309,7 @@ impl Workspace {
             .on_action(cx.listener(
                 |workspace: &mut Workspace, _: &ResetOpenDocksSize, _window, cx| {
                     for dock in workspace.all_docks() {
-                        let panel = dock.read(cx).visible_panel().cloned();
+                        let panel = dock.read(cx).visible_panel(cx).cloned();
                         if let Some(panel) = panel {
                             dock.update(cx, |dock, cx| {
                                 dock.set_panel_size_state(
@@ -7572,7 +7648,7 @@ impl Workspace {
         // included in the element tree so its focus handle remains mounted — without
         // this, toggle_panel_focus cannot focus the panel when the dock is closed.
         let dock = dock.read(cx);
-        if let Some(panel) = dock.visible_panel() {
+        if let Some(panel) = dock.visible_panel(cx) {
             let size_state = dock.stored_panel_size_state(panel.as_ref());
             if position.axis() == Axis::Horizontal {
                 let use_flexible = panel.has_flexible_size(window, cx);
@@ -10775,7 +10851,7 @@ mod tests {
 
     use super::*;
     use crate::{
-        dock::{PanelEvent, test::TestPanel},
+        dock::{PanelEvent, test::TestPanel, test::ToggleTestPanel},
         item::{
             ItemBufferKind, ItemEvent,
             test::{TestItem, TestProjectItem},
@@ -10791,6 +10867,101 @@ mod tests {
     use settings::SettingsStore;
     use util::path;
     use util::rel_path::rel_path;
+
+    struct DetachedRoutingPanel {
+        position: DockPosition,
+        focus_handle: FocusHandle,
+        detached: bool,
+        detached_focus_count: usize,
+        activation_priority: u32,
+    }
+
+    impl DetachedRoutingPanel {
+        fn new(position: DockPosition, activation_priority: u32, cx: &mut App) -> Self {
+            Self {
+                position,
+                focus_handle: cx.focus_handle(),
+                detached: false,
+                detached_focus_count: 0,
+                activation_priority,
+            }
+        }
+    }
+
+    impl EventEmitter<PanelEvent> for DetachedRoutingPanel {}
+
+    impl Focusable for DetachedRoutingPanel {
+        fn focus_handle(&self, _cx: &App) -> FocusHandle {
+            self.focus_handle.clone()
+        }
+    }
+
+    impl Render for DetachedRoutingPanel {
+        fn render(&mut self, _window: &mut Window, _cx: &mut Context<Self>) -> impl IntoElement {
+            div().track_focus(&self.focus_handle)
+        }
+    }
+
+    impl Panel for DetachedRoutingPanel {
+        fn persistent_name() -> &'static str {
+            "DetachedRoutingPanel"
+        }
+
+        fn panel_key() -> &'static str {
+            "DetachedRoutingPanel"
+        }
+
+        fn position(&self, _window: &Window, _cx: &App) -> DockPosition {
+            self.position
+        }
+
+        fn position_is_valid(&self, _position: DockPosition) -> bool {
+            true
+        }
+
+        fn set_position(
+            &mut self,
+            position: DockPosition,
+            _window: &mut Window,
+            cx: &mut Context<Self>,
+        ) {
+            self.position = position;
+            cx.notify();
+        }
+
+        fn default_size(&self, _window: &Window, _cx: &App) -> Pixels {
+            px(300.)
+        }
+
+        fn icon(&self, _window: &Window, _cx: &App) -> Option<ui::IconName> {
+            None
+        }
+
+        fn icon_tooltip(&self, _window: &Window, _cx: &App) -> Option<&'static str> {
+            None
+        }
+
+        fn toggle_action(&self) -> Box<dyn Action> {
+            ToggleTestPanel.boxed_clone()
+        }
+
+        fn activation_priority(&self) -> u32 {
+            self.activation_priority
+        }
+
+        fn visible_in_dock(&self, _cx: &App) -> bool {
+            !self.detached
+        }
+
+        fn focus_detached_panel(&mut self, _cx: &mut Context<Self>) -> bool {
+            if self.detached {
+                self.detached_focus_count += 1;
+                true
+            } else {
+                false
+            }
+        }
+    }
 
     #[gpui::test]
     async fn test_tab_disambiguation(cx: &mut TestAppContext) {
@@ -12406,7 +12577,7 @@ mod tests {
                 workspace
                     .left_dock()
                     .read(cx)
-                    .visible_panel()
+                    .visible_panel(cx)
                     .unwrap()
                     .panel_id(),
                 left_panel.panel_id(),
@@ -12420,7 +12591,7 @@ mod tests {
                 workspace
                     .right_dock()
                     .read(cx)
-                    .visible_panel()
+                    .visible_panel(cx)
                     .unwrap()
                     .panel_id(),
                 right_panel.panel_id(),
@@ -12464,7 +12635,7 @@ mod tests {
                 workspace
                     .bottom_dock()
                     .read(cx)
-                    .visible_panel()
+                    .visible_panel(cx)
                     .unwrap()
                     .panel_id(),
                 left_panel.panel_id(),
@@ -12518,7 +12689,7 @@ mod tests {
                 workspace
                     .bottom_dock()
                     .read(cx)
-                    .visible_panel()
+                    .visible_panel(cx)
                     .unwrap()
                     .panel_id(),
                 left_panel.panel_id(),
@@ -12829,7 +13000,7 @@ mod tests {
                 let panel = workspace
                     .right_dock()
                     .read(cx)
-                    .visible_panel()
+                    .visible_panel(cx)
                     .expect("flexible dock should have a visible panel")
                     .panel_id();
 
@@ -12849,7 +13020,7 @@ mod tests {
 
             let right_dock = workspace.right_dock().read(cx);
             let flexible_panel = right_dock
-                .visible_panel()
+                .visible_panel(cx)
                 .expect("flexible dock should still have a visible panel");
             assert_eq!(flexible_panel.panel_id(), panel);
             assert_eq!(
@@ -13117,7 +13288,7 @@ mod tests {
             let right_dock = workspace.right_dock().clone();
             let right_panel = right_dock
                 .read(cx)
-                .visible_panel()
+                .visible_panel(cx)
                 .expect("right dock should have a visible panel")
                 .clone();
             workspace.toggle_dock_panel_flexible_size(
@@ -13129,7 +13300,7 @@ mod tests {
 
             let right_dock = right_dock.read(cx);
             let right_panel = right_dock
-                .visible_panel()
+                .visible_panel(cx)
                 .expect("right dock should still have a visible panel");
             assert!(
                 right_panel.has_flexible_size(window, cx),
@@ -13217,7 +13388,7 @@ mod tests {
 
             let left_dock = workspace.left_dock();
             assert_eq!(
-                left_dock.read(cx).visible_panel().unwrap().panel_id(),
+                left_dock.read(cx).visible_panel(cx).unwrap().panel_id(),
                 panel_1.panel_id()
             );
             assert_eq!(
@@ -13230,7 +13401,7 @@ mod tests {
                 workspace
                     .right_dock()
                     .read(cx)
-                    .visible_panel()
+                    .visible_panel(cx)
                     .unwrap()
                     .panel_id(),
                 panel_2.panel_id(),
@@ -13248,10 +13419,10 @@ mod tests {
             // Since panel_1 was visible on the left, it should now be visible now that it's been moved to the right.
             // Since it was the only panel on the left, the left dock should now be closed.
             assert!(!workspace.left_dock().read(cx).is_open());
-            assert!(workspace.left_dock().read(cx).visible_panel().is_none());
+            assert!(workspace.left_dock().read(cx).visible_panel(cx).is_none());
             let right_dock = workspace.right_dock();
             assert_eq!(
-                right_dock.read(cx).visible_panel().unwrap().panel_id(),
+                right_dock.read(cx).visible_panel(cx).unwrap().panel_id(),
                 panel_1.panel_id()
             );
             assert_eq!(
@@ -13277,7 +13448,7 @@ mod tests {
                 workspace
                     .right_dock()
                     .read(cx)
-                    .visible_panel()
+                    .visible_panel(cx)
                     .unwrap()
                     .panel_id(),
                 panel_1.panel_id(),
@@ -13294,7 +13465,7 @@ mod tests {
             let left_dock = workspace.left_dock();
             assert!(left_dock.read(cx).is_open());
             assert_eq!(
-                left_dock.read(cx).visible_panel().unwrap().panel_id(),
+                left_dock.read(cx).visible_panel(cx).unwrap().panel_id(),
                 panel_1.panel_id()
             );
             assert_eq!(
@@ -13333,7 +13504,7 @@ mod tests {
             let left_dock = workspace.left_dock();
             assert!(left_dock.read(cx).is_open());
             assert_eq!(
-                left_dock.read(cx).visible_panel().unwrap().panel_id(),
+                left_dock.read(cx).visible_panel(cx).unwrap().panel_id(),
                 panel_1.panel_id(),
             );
             assert!(panel_1.focus_handle(cx).is_focused(window));
@@ -13347,7 +13518,7 @@ mod tests {
             let left_dock = workspace.left_dock();
             assert!(left_dock.read(cx).is_open());
             assert_eq!(
-                left_dock.read(cx).visible_panel().unwrap().panel_id(),
+                left_dock.read(cx).visible_panel(cx).unwrap().panel_id(),
                 panel_1.panel_id(),
             );
         });
@@ -13433,6 +13604,111 @@ mod tests {
         workspace.update(cx, |workspace, cx| {
             let right_dock = workspace.right_dock();
             assert!(!right_dock.read(cx).is_open());
+        });
+    }
+
+    #[gpui::test]
+    async fn test_detached_panel_routing_uses_detached_surface(cx: &mut gpui::TestAppContext) {
+        init_test(cx);
+        let fs = FakeFs::new(cx.executor());
+        let project = Project::test(fs, [], cx).await;
+        let (workspace, cx) =
+            cx.add_window_view(|window, cx| Workspace::test_new(project, window, cx));
+
+        let detached_panel = workspace.update_in(cx, |workspace, window, cx| {
+            let panel = cx.new(|cx| DetachedRoutingPanel::new(DockPosition::Right, 200, cx));
+            workspace.add_panel(panel.clone(), window, cx);
+            workspace.reveal_panel::<DetachedRoutingPanel>(window, cx);
+            panel
+        });
+        let panel_id = detached_panel.entity_id();
+
+        workspace.read_with(cx, |workspace, cx| {
+            assert_eq!(
+                workspace
+                    .right_dock()
+                    .read(cx)
+                    .visible_panel(cx)
+                    .map(|panel| panel.panel_id()),
+                Some(panel_id),
+                "panel should be visible in dock before detaching"
+            );
+        });
+
+        detached_panel.update(cx, |panel, cx| {
+            panel.detached = true;
+            cx.notify();
+        });
+
+        workspace.update_in(cx, |workspace, window, cx| {
+            assert!(
+                workspace
+                    .focus_panel::<DetachedRoutingPanel>(window, cx)
+                    .is_some(),
+                "focus should route to detached surface"
+            );
+            assert!(
+                workspace.toggle_panel_focus::<DetachedRoutingPanel>(window, cx),
+                "toggle should route to detached surface"
+            );
+            workspace.reveal_panel::<DetachedRoutingPanel>(window, cx);
+            assert!(
+                workspace.toggle_panel_by_id(panel_id, window, cx),
+                "toggle-by-id should route to detached surface"
+            );
+            assert!(
+                workspace.reveal_panel_by_id(panel_id, window, cx).is_some(),
+                "reveal-by-id should route to detached surface"
+            );
+        });
+
+        detached_panel.read_with(cx, |panel, _| {
+            assert_eq!(
+                panel.detached_focus_count, 5,
+                "all routing entry points should target the detached surface"
+            );
+        });
+        workspace.read_with(cx, |workspace, cx| {
+            assert!(
+                workspace.right_dock().read(cx).visible_panel(cx).is_none(),
+                "dock should be suppressed while panel is detached"
+            );
+        });
+
+        detached_panel.update(cx, |panel, cx| {
+            panel.detached = false;
+            cx.notify();
+        });
+
+        workspace.update_in(cx, |workspace, window, cx| {
+            assert!(
+                workspace
+                    .focus_panel::<DetachedRoutingPanel>(window, cx)
+                    .is_some(),
+                "focus should return to dock once reattached"
+            );
+            assert!(
+                workspace.reveal_panel_by_id(panel_id, window, cx).is_some(),
+                "reveal-by-id should return to dock once reattached"
+            );
+        });
+
+        workspace.read_with(cx, |workspace, cx| {
+            assert_eq!(
+                workspace
+                    .right_dock()
+                    .read(cx)
+                    .visible_panel(cx)
+                    .map(|panel| panel.panel_id()),
+                Some(panel_id),
+                "reattached panel should be visible in the dock"
+            );
+        });
+        detached_panel.read_with(cx, |panel, _| {
+            assert_eq!(
+                panel.detached_focus_count, 5,
+                "reattached routing should no longer use detached focus path"
+            );
         });
     }
 
@@ -15039,8 +15315,8 @@ mod tests {
             parsed["theme"],
             serde_json::json!({
                 "mode": "system",
-                "light": "One Light",
-                "dark": "One Dark"
+                "light": "NeoZed Light",
+                "dark": "NeoZed Dark"
             })
         );
 

@@ -827,8 +827,7 @@ impl DetachedAgentPanelWindow {
                 cx.defer(move |cx| {
                     panel
                         .update(cx, |panel, cx| {
-                            panel.detached_window_handle = None;
-                            cx.notify();
+                            panel.set_detached_window_handle(None, cx);
                         })
                         .log_err();
                 });
@@ -906,6 +905,7 @@ pub struct AgentPanel {
     _worktree_creation_task: Option<Task<()>>,
     show_trust_workspace_message: bool,
     _active_view_observation: Option<Subscription>,
+    _release_subscription: Subscription,
     detached_window_handle: Option<WindowHandle<DetachedAgentPanelWindow>>,
     detached_window_bounds: Option<WindowBounds>,
 }
@@ -1246,6 +1246,15 @@ impl AgentPanel {
                 this.sync_start_thread_in_with_git_state(cx);
             }
         });
+        let _release_subscription = cx.on_release(|panel, cx| {
+            if let Some(detached_window) = panel.detached_window_handle.take() {
+                detached_window
+                    .update(cx, |_, window, _| {
+                        window.remove_window();
+                    })
+                    .log_err();
+            }
+        });
 
         let mut panel = Self {
             workspace_id,
@@ -1289,6 +1298,7 @@ impl AgentPanel {
                 cx,
             )),
             _active_view_observation: None,
+            _release_subscription: release_subscription,
             detached_window_handle: None,
             detached_window_bounds: None,
         };
@@ -1374,7 +1384,7 @@ impl AgentPanel {
 
                 workspace_read.all_docks().iter().any(|dock| {
                     dock.read(cx)
-                        .visible_panel()
+                        .visible_panel(cx)
                         .is_some_and(|visible_panel| visible_panel.panel_id() == panel_id)
                 })
             })
@@ -1387,6 +1397,28 @@ impl AgentPanel {
     /// so no "Draft" entry appears.
     pub fn clear_active_thread(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         self.set_active_view(ActiveView::Uninitialized, false, window, cx);
+    }
+
+    fn notify_workspace_detached_state_changed(&self, cx: &mut Context<Self>) {
+        let Some(workspace) = self.workspace.upgrade() else {
+            return;
+        };
+
+        cx.defer(move |cx| {
+            workspace.update(cx, |_workspace, cx| {
+                cx.notify();
+            });
+        });
+    }
+
+    fn set_detached_window_handle(
+        &mut self,
+        detached_window_handle: Option<WindowHandle<DetachedAgentPanelWindow>>,
+        cx: &mut Context<Self>,
+    ) {
+        self.detached_window_handle = detached_window_handle;
+        cx.notify();
+        self.notify_workspace_detached_state_changed(cx);
     }
 
     fn default_detached_window_bounds(&self, window: &Window) -> WindowBounds {
@@ -1415,7 +1447,7 @@ impl AgentPanel {
         {
             true
         } else {
-            self.detached_window_handle = None;
+            self.set_detached_window_handle(None, cx);
             false
         }
     }
@@ -1443,7 +1475,7 @@ impl AgentPanel {
             cx.new(|cx| DetachedAgentPanelWindow::new(panel.clone(), window, cx))
         }) {
             Ok(detached_window) => {
-                self.detached_window_handle = Some(detached_window);
+                self.set_detached_window_handle(Some(detached_window), cx);
             }
             Err(error) => {
                 log::error!("failed to open detached agent panel window: {error:#}");
@@ -3637,6 +3669,14 @@ impl Panel for AgentPanel {
         true
     }
 
+    fn visible_in_dock(&self, _cx: &App) -> bool {
+        self.detached_window_handle.is_none()
+    }
+
+    fn focus_detached_panel(&mut self, cx: &mut Context<Self>) -> bool {
+        self.focus_existing_detached_window(cx)
+    }
+
     fn is_zoomed(&self, _window: &Window, _cx: &App) -> bool {
         self.zoomed
     }
@@ -5549,6 +5589,211 @@ mod tests {
         (panel, cx)
     }
 
+    async fn setup_workspace_with_visible_panel(
+        cx: &mut TestAppContext,
+    ) -> (Entity<Workspace>, Entity<AgentPanel>, VisualTestContext) {
+        init_test(cx);
+        cx.update(|cx| {
+            cx.update_flags(true, vec!["agent-v2".to_string()]);
+            agent::ThreadStore::init_global(cx);
+            language_model::LanguageModelRegistry::test(cx);
+        });
+
+        let fs = FakeFs::new(cx.executor());
+        let project = Project::test(fs, [], cx).await;
+
+        let multi_workspace =
+            cx.add_window(|window, cx| MultiWorkspace::test_new(project.clone(), window, cx));
+
+        let workspace = multi_workspace
+            .read_with(cx, |mw, _cx| mw.workspace().clone())
+            .unwrap();
+
+        let mut visual_cx = VisualTestContext::from_window(multi_workspace.into(), cx);
+
+        let panel = workspace.update_in(&mut visual_cx, |workspace, window, cx| {
+            let panel = cx.new(|cx| AgentPanel::new(workspace, None, window, cx));
+            workspace.add_panel(panel.clone(), window, cx);
+            workspace.reveal_panel::<AgentPanel>(window, cx);
+            panel
+        });
+        visual_cx.run_until_parked();
+
+        (workspace, panel, visual_cx)
+    }
+
+    #[gpui::test]
+    async fn test_detach_suppresses_docked_panel_and_restores_on_close(cx: &mut TestAppContext) {
+        let (workspace, panel, mut visual_cx) = setup_workspace_with_visible_panel(cx).await;
+        let panel_id = panel.entity_id();
+
+        workspace.read_with(&visual_cx, |workspace, cx| {
+            let panel_position = workspace
+                .agent_panel_position(cx)
+                .expect("agent panel should be present in a dock");
+            let visible_panel_id = workspace
+                .dock_at_position(panel_position)
+                .read(cx)
+                .visible_panel(cx)
+                .map(|panel| panel.panel_id());
+            assert_eq!(
+                visible_panel_id,
+                Some(panel_id),
+                "agent panel should be visible in the dock before detaching"
+            );
+        });
+
+        panel.update_in(&mut visual_cx, |panel, window, cx| {
+            panel.open_detached_window_for_tests(window, cx);
+        });
+        visual_cx.run_until_parked();
+
+        workspace.read_with(&visual_cx, |workspace, cx| {
+            let panel_position = workspace
+                .agent_panel_position(cx)
+                .expect("agent panel should still belong to the workspace");
+            assert!(
+                workspace
+                    .dock_at_position(panel_position)
+                    .read(cx)
+                    .visible_panel(cx)
+                    .is_none(),
+                "docked agent panel should be fully suppressed while detached"
+            );
+        });
+
+        let detached_window = panel
+            .read_with(&visual_cx, |panel, _| {
+                panel.detached_window_handle_for_tests()
+            })
+            .expect("detached window should exist after detaching");
+        detached_window
+            .update(&mut visual_cx, |_, window: &mut Window, _| {
+                window.remove_window();
+            })
+            .expect("detached window should close cleanly");
+        visual_cx.run_until_parked();
+
+        workspace.read_with(&visual_cx, |workspace, cx| {
+            let panel_position = workspace
+                .agent_panel_position(cx)
+                .expect("agent panel should still be registered");
+            let visible_panel_id = workspace
+                .dock_at_position(panel_position)
+                .read(cx)
+                .visible_panel(cx)
+                .map(|panel| panel.panel_id());
+            assert_eq!(
+                visible_panel_id,
+                Some(panel_id),
+                "closing the detached window should restore the docked panel"
+            );
+        });
+    }
+
+    #[gpui::test]
+    async fn test_detached_routing_stays_detached_until_reattach(cx: &mut TestAppContext) {
+        let (workspace, panel, mut visual_cx) = setup_workspace_with_visible_panel(cx).await;
+        let panel_id = panel.entity_id();
+
+        panel.update_in(&mut visual_cx, |panel, window, cx| {
+            panel.open_detached_window_for_tests(window, cx);
+        });
+        visual_cx.run_until_parked();
+
+        let detached_window_id = panel.read_with(&visual_cx, |panel, _| {
+            panel
+                .detached_window_handle_for_tests()
+                .expect("detached window should exist after detaching")
+                .window_id()
+        });
+
+        workspace.update_in(&mut visual_cx, |workspace, window, cx| {
+            assert!(
+                workspace.focus_panel::<AgentPanel>(window, cx).is_some(),
+                "focus should route to the detached window while detached"
+            );
+            assert!(
+                workspace.toggle_panel_focus::<AgentPanel>(window, cx),
+                "toggle should reuse the detached surface while detached"
+            );
+            workspace.reveal_panel::<AgentPanel>(window, cx);
+            assert!(
+                workspace.toggle_panel_by_id(panel_id, window, cx),
+                "toggle-by-id should reuse the detached window"
+            );
+            assert!(
+                workspace.reveal_panel_by_id(panel_id, window, cx).is_some(),
+                "reveal-by-id should route to the detached window"
+            );
+        });
+        visual_cx.run_until_parked();
+
+        let detached_window_id_after_routing = panel.read_with(&visual_cx, |panel, _| {
+            panel
+                .detached_window_handle_for_tests()
+                .expect("detached window should still exist after routing")
+                .window_id()
+        });
+        assert_eq!(
+            detached_window_id_after_routing, detached_window_id,
+            "routing entry points should keep targeting the same detached window"
+        );
+
+        workspace.read_with(&visual_cx, |workspace, cx| {
+            let panel_position = workspace
+                .agent_panel_position(cx)
+                .expect("agent panel should still be tracked");
+            assert!(
+                workspace
+                    .dock_at_position(panel_position)
+                    .read(cx)
+                    .visible_panel(cx)
+                    .is_none(),
+                "routing while detached should not resurrect a docked duplicate"
+            );
+        });
+
+        let detached_window = panel.read_with(&visual_cx, |panel, _| {
+            panel
+                .detached_window_handle_for_tests()
+                .expect("detached window should still exist")
+        });
+        detached_window
+            .update(&mut visual_cx, |_, window: &mut Window, _| {
+                window.remove_window();
+            })
+            .expect("detached window should close cleanly");
+        visual_cx.run_until_parked();
+
+        workspace.update_in(&mut visual_cx, |workspace, window, cx| {
+            assert!(
+                workspace.focus_panel::<AgentPanel>(window, cx).is_some(),
+                "after reattaching, focus should return to the docked panel"
+            );
+            assert!(
+                workspace.reveal_panel_by_id(panel_id, window, cx).is_some(),
+                "after reattaching, reveal-by-id should return to the docked panel"
+            );
+        });
+
+        workspace.read_with(&visual_cx, |workspace, cx| {
+            let panel_position = workspace
+                .agent_panel_position(cx)
+                .expect("agent panel should still be tracked");
+            let visible_panel_id = workspace
+                .dock_at_position(panel_position)
+                .read(cx)
+                .visible_panel(cx)
+                .map(|panel| panel.panel_id());
+            assert_eq!(
+                visible_panel_id,
+                Some(panel_id),
+                "reattached routing should target the restored docked panel"
+            );
+        });
+    }
+
     #[gpui::test]
     async fn test_detach_reuses_active_thread_and_prevents_duplicate_window(
         cx: &mut TestAppContext,
@@ -5762,6 +6007,126 @@ mod tests {
             cx.windows().len(),
             initial_window_count + 2,
             "re-detaching one workspace should not create a duplicate detached window"
+        );
+
+        workspace_a.read_with(&visual_cx, |workspace, cx| {
+            let panel_position = workspace
+                .agent_panel_position(cx)
+                .expect("workspace A should still own an agent panel");
+            assert!(
+                workspace
+                    .dock_at_position(panel_position)
+                    .read(cx)
+                    .visible_panel(cx)
+                    .is_none(),
+                "workspace A dock should stay suppressed while detached"
+            );
+        });
+        workspace_b.read_with(&visual_cx, |workspace, cx| {
+            let panel_position = workspace
+                .agent_panel_position(cx)
+                .expect("workspace B should still own an agent panel");
+            assert!(
+                workspace
+                    .dock_at_position(panel_position)
+                    .read(cx)
+                    .visible_panel(cx)
+                    .is_none(),
+                "workspace B dock should stay suppressed while detached"
+            );
+        });
+
+        workspace_a.update_in(&mut visual_cx, |workspace, window, cx| {
+            workspace.focus_panel::<AgentPanel>(window, cx);
+        });
+        visual_cx.run_until_parked();
+        assert_eq!(
+            cx.update(|cx| cx.active_window().map(|window| window.window_id())),
+            Some(panel_a_window.window_id()),
+            "workspace A focus should activate only workspace A's detached window"
+        );
+
+        workspace_b.update_in(&mut visual_cx, |workspace, window, cx| {
+            workspace.focus_panel::<AgentPanel>(window, cx);
+        });
+        visual_cx.run_until_parked();
+        assert_eq!(
+            cx.update(|cx| cx.active_window().map(|window| window.window_id())),
+            Some(panel_b_window.window_id()),
+            "workspace B focus should activate only workspace B's detached window"
+        );
+    }
+
+    #[gpui::test]
+    async fn test_removing_workspace_closes_its_detached_window(cx: &mut TestAppContext) {
+        init_test(cx);
+        cx.update(|cx| {
+            cx.update_flags(true, vec!["agent-v2".to_string()]);
+            agent::ThreadStore::init_global(cx);
+            language_model::LanguageModelRegistry::test(cx);
+        });
+
+        let fs = FakeFs::new(cx.executor());
+        let project_a = Project::test(fs.clone(), [], cx).await;
+        let project_b = Project::test(fs, [], cx).await;
+
+        let multi_workspace =
+            cx.add_window(|window, cx| MultiWorkspace::test_new(project_a.clone(), window, cx));
+
+        let workspace_a = multi_workspace
+            .read_with(cx, |mw, _| mw.workspace().clone())
+            .unwrap();
+        let _workspace_b = multi_workspace
+            .update(cx, |mw, window, cx| {
+                mw.test_add_workspace(project_b.clone(), window, cx)
+            })
+            .unwrap();
+
+        let mut visual_cx = VisualTestContext::from_window(multi_workspace.clone().into(), cx);
+
+        let panel_a = workspace_a.update_in(&mut visual_cx, |workspace, window, cx| {
+            let panel = cx.new(|cx| AgentPanel::new(workspace, None, window, cx));
+            workspace.add_panel(panel.clone(), window, cx);
+            panel
+        });
+
+        panel_a.update_in(&mut visual_cx, |panel, window, cx| {
+            panel.open_detached_window_for_tests(window, cx);
+        });
+        visual_cx.run_until_parked();
+
+        let detached_window_id = panel_a.read_with(&visual_cx, |panel, _| {
+            panel
+                .detached_window_handle_for_tests()
+                .expect("workspace A should have a detached window")
+                .window_id()
+        });
+        let window_count_before_removal = cx.windows().len();
+
+        multi_workspace
+            .update(&mut visual_cx, |multi_workspace, window, cx| {
+                assert!(
+                    multi_workspace.remove(&workspace_a, window, cx),
+                    "workspace A should be removable while detached"
+                );
+            })
+            .unwrap();
+
+        drop(panel_a);
+        drop(workspace_a);
+        visual_cx.run_until_parked();
+        cx.run_until_parked();
+
+        assert_eq!(
+            cx.windows().len(),
+            window_count_before_removal - 1,
+            "removing a detached workspace should close its detached window"
+        );
+        assert!(
+            !cx.windows()
+                .iter()
+                .any(|window| window.window_id() == detached_window_id),
+            "removed workspace should not leave an orphaned detached window"
         );
     }
 
