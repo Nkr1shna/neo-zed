@@ -25,8 +25,9 @@ use std::os::unix::fs::PermissionsExt as _;
 
 #[cfg(feature = "mirror")]
 use gpui_plugin::{
-    ActiveTheme, ClickEvent, Context, IntoElement, PluginHostRequest, PluginHostResponse, Render,
-    StatefulInteractiveElement, Styled, Window, h_flex, host_request, px, run, v_flex,
+    ActiveTheme, ClickEvent, Context, InteractiveElement, IntoElement, ParentElement,
+    PluginHostRequest, PluginHostResponse, Render, StatefulInteractiveElement, Styled, Window, div,
+    h_flex, host_request, px, run, v_flex,
 };
 #[cfg(feature = "mirror")]
 use ui_plugin::{Button, Divider, Icon, Label, MenuItem, ProgressBar};
@@ -36,6 +37,10 @@ pub const PANEL_ID: &str = "codex-usage-panel";
 pub const PANEL_TITLE: &str = "Codex Usage";
 pub const TITLEBAR_WIDGET_ID: &str = "codex-usage-titlebar";
 pub const TITLEBAR_WIDGET_TITLE: &str = "Codex Usage";
+pub const FIXTURE_PANEL_ID: &str = "plugin-surface-fixture-panel";
+pub const FIXTURE_PANEL_TITLE: &str = "Plugin Surface Fixture";
+pub const FIXTURE_TITLEBAR_WIDGET_ID: &str = "plugin-surface-fixture-titlebar";
+pub const FIXTURE_TITLEBAR_WIDGET_TITLE: &str = "Plugin Surface Fixture";
 
 const AUTH_STATE_FILENAME: &str = "codex-chatgpt-auth.json";
 #[cfg(feature = "mirror")]
@@ -51,6 +56,7 @@ const CHATGPT_URL: &str = "https://chatgpt.com";
 const CLIENT_ID: &str = "app_EMoamEEZ73f0CkXaXp7hrann";
 const OAUTH_SCOPE: &str = "openid email profile offline_access";
 const ACCOUNT_ID_CLAIM: &str = "https://api.openai.com/auth";
+#[cfg(not(test))]
 const REDIRECT_PORT: u16 = 1455;
 const REDIRECT_PATH: &str = "/auth/callback";
 const DEFAULT_TOKEN_EXPIRY_SECONDS: u64 = 3_600;
@@ -211,8 +217,7 @@ impl AuthSecretStore {
                     if account != AUTH_KEYRING_ACCOUNT {
                         eprintln!(
                             "codex-usage-plugin keyring load migrated legacy account {} to {}",
-                            account,
-                            AUTH_KEYRING_ACCOUNT
+                            account, AUTH_KEYRING_ACCOUNT
                         );
                         self.save(&secrets)?;
                     }
@@ -387,7 +392,8 @@ impl AuthSecretStore {
 
     #[cfg(test)]
     fn secret_file_path(&self) -> PathBuf {
-        self.metadata_path.with_file_name(".codex-chatgpt-auth-secrets.json")
+        self.metadata_path
+            .with_file_name(".codex-chatgpt-auth-secrets.json")
     }
 }
 
@@ -854,7 +860,10 @@ fn current_snapshot(state: &PersistedAuthState) -> SidecarSnapshot {
     }
 }
 
-fn run_login_flow(auth_state_path: &Path, mut state: PersistedAuthState) -> Result<PersistedAuthState> {
+fn run_login_flow(
+    auth_state_path: &Path,
+    mut state: PersistedAuthState,
+) -> Result<PersistedAuthState> {
     let verifier_bytes: [u8; 64] = rand::random();
     let verifier = base64_url_encode(&verifier_bytes);
     let challenge_digest = Sha256::digest(verifier.as_bytes());
@@ -1380,10 +1389,7 @@ fn load_persisted_auth_state_from_disk_with_store(
             eprintln!(
                 "codex-usage-plugin keyring load succeeded for secret scope {} (refresh_token={})",
                 secret_scope,
-                secrets
-                    .refresh_token
-                    .as_ref()
-                    .is_some()
+                secrets.refresh_token.as_ref().is_some()
             );
             state.access_token = secrets.access_token;
             state.refresh_token = secrets.refresh_token;
@@ -1459,6 +1465,7 @@ pub(crate) fn save_persisted_auth_state_to_disk_for_tests(
 }
 
 #[cfg(test)]
+#[allow(dead_code)]
 pub(crate) fn auth_secret_path_for_tests(path: &Path) -> PathBuf {
     AuthSecretStore::file_only_for_metadata_path(path).secret_file_path()
 }
@@ -1698,8 +1705,9 @@ fn bind_oauth_listener() -> Result<TcpListener> {
     let listener = TcpListener::bind(("127.0.0.1", 0))
         .with_context(|| "failed to bind the OAuth callback server on an ephemeral port")?;
     #[cfg(not(test))]
-    let listener = TcpListener::bind(("127.0.0.1", REDIRECT_PORT))
-        .with_context(|| format!("failed to bind the OAuth callback server on port {REDIRECT_PORT}"))?;
+    let listener = TcpListener::bind(("127.0.0.1", REDIRECT_PORT)).with_context(|| {
+        format!("failed to bind the OAuth callback server on port {REDIRECT_PORT}")
+    })?;
     listener
         .set_nonblocking(true)
         .with_context(|| "failed to configure the OAuth callback server")?;
@@ -1720,9 +1728,7 @@ fn wait_for_authorization_code(
                     Ok(authorization_code) => return Ok(authorization_code),
                     Err(error)
                         if error.to_string().contains("OAuth callback state mismatch")
-                            || error
-                                .to_string()
-                                .contains("unexpected OAuth callback path") =>
+                            || error.to_string().contains("unexpected OAuth callback path") =>
                     {
                         eprintln!(
                             "codex-usage-plugin oauth callback ignored transient mismatch: {error}"
@@ -1874,6 +1880,7 @@ fn auth_state_path() -> PathBuf {
 #[derive(Clone)]
 struct PluginRuntimeContext {
     store: CodexUsageStore,
+    fixture_store: ValidationFixtureStore,
 }
 
 #[cfg(feature = "mirror")]
@@ -1881,7 +1888,91 @@ impl PluginRuntimeContext {
     fn new() -> Self {
         Self {
             store: CodexUsageStore::new(auth_state_path()),
+            fixture_store: ValidationFixtureStore::new(),
         }
+    }
+}
+
+#[cfg(feature = "mirror")]
+#[derive(Clone)]
+struct ValidationFixtureStore {
+    state: Arc<Mutex<ValidationFixtureState>>,
+}
+
+#[cfg(feature = "mirror")]
+#[derive(Clone, Copy, Default)]
+struct ValidationFixtureSnapshot {
+    startup_count: u64,
+    session_count: u64,
+    action_count: u64,
+    serial: u64,
+}
+
+#[cfg(feature = "mirror")]
+#[derive(Default)]
+struct ValidationFixtureState {
+    startup_count: u64,
+    session_count: u64,
+    action_count: u64,
+    serial: u64,
+}
+
+#[cfg(feature = "mirror")]
+impl ValidationFixtureState {
+    fn snapshot(&self) -> ValidationFixtureSnapshot {
+        ValidationFixtureSnapshot {
+            startup_count: self.startup_count,
+            session_count: self.session_count,
+            action_count: self.action_count,
+            serial: self.serial,
+        }
+    }
+}
+
+#[cfg(feature = "mirror")]
+impl ValidationFixtureStore {
+    fn new() -> Self {
+        Self {
+            state: Arc::new(Mutex::new(ValidationFixtureState::default())),
+        }
+    }
+
+    fn record_startup(&self) -> ValidationFixtureSnapshot {
+        let mut state = self
+            .state
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        state.startup_count = state.startup_count.saturating_add(1);
+        state.serial = state.serial.saturating_add(1);
+        state.snapshot()
+    }
+
+    fn begin_surface_session(&self) -> ValidationFixtureSnapshot {
+        let mut state = self
+            .state
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        state.session_count = state.session_count.saturating_add(1);
+        state.serial = state.serial.saturating_add(1);
+        state.snapshot()
+    }
+
+    fn record_action(&self) -> ValidationFixtureSnapshot {
+        let mut state = self
+            .state
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        state.action_count = state.action_count.saturating_add(1);
+        state.serial = state.serial.saturating_add(1);
+        state.snapshot()
+    }
+
+    fn snapshot(&self) -> ValidationFixtureSnapshot {
+        let state = self
+            .state
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        state.snapshot()
     }
 }
 
@@ -1904,6 +1995,7 @@ impl CodexUsagePanel {
         this
     }
 
+    #[allow(clippy::disallowed_methods)]
     fn spawn_sync_loop(&self, cx: &mut Context<Self>) {
         let store = self.store.clone();
         cx.spawn(async move |this, cx| {
@@ -1991,15 +2083,13 @@ impl Render for CodexUsagePanel {
                 .items_center()
                 .justify_center()
                 .p_4()
-                .child(
-                    v_flex().items_center().gap(px(2.0)).child(
-                        Button::new("codex-usage-sign-in", "Sign In to ChatGPT").on_click(
-                            cx.listener(|this, _: &ClickEvent, _window, cx| {
-                                this.begin_login(cx);
-                            }),
-                        ),
-                    ),
-                );
+                .child(v_flex().items_center().gap(px(2.0)).child(
+                    Button::new("codex-usage-sign-in", "Sign In to ChatGPT").on_click(cx.listener(
+                        |this, _: &ClickEvent, _window, cx| {
+                            this.begin_login(cx);
+                        },
+                    )),
+                ));
         }
 
         let mut content = v_flex().w_full().gap(px(2.0));
@@ -2090,6 +2180,7 @@ impl CodexUsageTitlebarWidget {
         this
     }
 
+    #[allow(clippy::disallowed_methods)]
     fn spawn_sync_loop(&self, cx: &mut Context<Self>) {
         let store = self.store.clone();
         cx.spawn(async move |this, cx| {
@@ -2129,9 +2220,202 @@ impl Render for CodexUsageTitlebarWidget {
 }
 
 #[cfg(feature = "mirror")]
+struct PluginSurfaceFixturePanel {
+    store: ValidationFixtureStore,
+    snapshot: ValidationFixtureSnapshot,
+}
+
+#[cfg(feature = "mirror")]
+impl PluginSurfaceFixturePanel {
+    fn new(store: ValidationFixtureStore, cx: &mut Context<Self>) -> Self {
+        let snapshot = store.begin_surface_session();
+        let this = Self { store, snapshot };
+        this.spawn_sync_loop(cx);
+        this
+    }
+
+    #[allow(clippy::disallowed_methods)]
+    fn spawn_sync_loop(&self, cx: &mut Context<Self>) {
+        let store = self.store.clone();
+        cx.spawn(async move |this, cx| {
+            loop {
+                smol::Timer::after(Duration::from_millis(VIEW_POLL_INTERVAL_MILLIS)).await;
+                let snapshot = store.snapshot();
+                if this
+                    .update(cx, |this, cx| this.sync_snapshot(snapshot, cx))
+                    .is_err()
+                {
+                    break;
+                }
+            }
+        })
+        .detach();
+    }
+
+    fn sync_snapshot(&mut self, snapshot: ValidationFixtureSnapshot, cx: &mut Context<Self>) {
+        if self.snapshot.serial != snapshot.serial {
+            self.snapshot = snapshot;
+            cx.notify();
+        }
+    }
+
+    fn record_action(&mut self, cx: &mut Context<Self>) {
+        let snapshot = self.store.record_action();
+        self.sync_snapshot(snapshot, cx);
+    }
+}
+
+#[cfg(feature = "mirror")]
+impl Render for PluginSurfaceFixturePanel {
+    fn render(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        let snapshot = self.snapshot;
+
+        v_flex()
+            .size_full()
+            .w_full()
+            .overflow_y_scroll()
+            .gap(px(2.0))
+            .p_4()
+            .child(Label::new(FIXTURE_PANEL_TITLE).weight(gpui_plugin::FontWeight(700.0)))
+            .child(Label::new(format!(
+                "Startup counter: {}",
+                snapshot.startup_count
+            )))
+            .child(Label::new(format!(
+                "Session counter: {}",
+                snapshot.session_count
+            )))
+            .child(Label::new(format!("Action counter: {}", snapshot.action_count)))
+            .child(
+                Button::new(
+                    "plugin-surface-fixture-increment-action",
+                    "Increment action counter",
+                )
+                .on_click(cx.listener(|this, _: &ClickEvent, _window, cx| {
+                    this.record_action(cx);
+                })),
+            )
+            .child(
+                div()
+                    .id("plugin-surface-canvas-root")
+                    .w_full()
+                    .flex()
+                    .flex_col()
+                    .gap(px(2.0))
+                    .p_2()
+                    .rounded_md()
+                    .border_1()
+                    .border_color(cx.theme().colors().border)
+                    .bg(cx.theme().colors().editor_background)
+                    .child(
+                        Label::new("Canvas Surface (fixture)")
+                            .weight(gpui_plugin::FontWeight(600.0)),
+                    )
+                    .child(
+                        div()
+                            .id("plugin-surface-nested-zoom-target")
+                            .w_full()
+                            .flex()
+                            .flex_col()
+                            .gap(px(1.0))
+                            .p_2()
+                            .rounded_md()
+                            .border_1()
+                            .border_color(cx.theme().colors().border_variant)
+                            .bg(cx.theme().colors().background)
+                            .child(Label::new("Nested Zoom Target (labeled fixture region)"))
+                            .child(Label::new(
+                                "Use Shift-Escape while focused here to validate child-target zoom.",
+                            )),
+                    )
+                    .child(
+                        div()
+                            .id("plugin-surface-zoom-sibling")
+                            .w_full()
+                            .flex()
+                            .flex_col()
+                            .gap(px(1.0))
+                            .p_2()
+                            .rounded_md()
+                            .border_1()
+                            .border_color(cx.theme().colors().border_variant)
+                            .bg(cx.theme().colors().surface_background)
+                            .child(Label::new("Sibling Region (should not become the zoom target)")),
+                    ),
+            )
+            .child(
+                MenuItem::new(
+                    "plugin-surface-fixture-menu-increment-action",
+                    "Increment action counter",
+                )
+                .on_click(cx.listener(|this, _: &ClickEvent, _window, cx| {
+                    this.record_action(cx);
+                })),
+            )
+    }
+}
+
+#[cfg(feature = "mirror")]
+struct PluginSurfaceFixtureTitlebarWidget {
+    store: ValidationFixtureStore,
+    snapshot: ValidationFixtureSnapshot,
+}
+
+#[cfg(feature = "mirror")]
+impl PluginSurfaceFixtureTitlebarWidget {
+    fn new(store: ValidationFixtureStore, cx: &mut Context<Self>) -> Self {
+        let snapshot = store.begin_surface_session();
+        let this = Self { store, snapshot };
+        this.spawn_sync_loop(cx);
+        this
+    }
+
+    #[allow(clippy::disallowed_methods)]
+    fn spawn_sync_loop(&self, cx: &mut Context<Self>) {
+        let store = self.store.clone();
+        cx.spawn(async move |this, cx| {
+            loop {
+                smol::Timer::after(Duration::from_millis(VIEW_POLL_INTERVAL_MILLIS)).await;
+                let snapshot = store.snapshot();
+                if this
+                    .update(cx, |this, cx| this.sync_snapshot(snapshot, cx))
+                    .is_err()
+                {
+                    break;
+                }
+            }
+        })
+        .detach();
+    }
+
+    fn sync_snapshot(&mut self, snapshot: ValidationFixtureSnapshot, cx: &mut Context<Self>) {
+        if self.snapshot.serial != snapshot.serial {
+            self.snapshot = snapshot;
+            cx.notify();
+        }
+    }
+}
+
+#[cfg(feature = "mirror")]
+impl Render for PluginSurfaceFixtureTitlebarWidget {
+    fn render(&mut self, _window: &mut Window, _cx: &mut Context<Self>) -> impl IntoElement {
+        let snapshot = self.snapshot;
+        h_flex()
+            .id("plugin-surface-fixture-titlebar-widget")
+            .gap(px(1.0))
+            .child(Icon::new("box_open"))
+            .child(Label::new(format!(
+                "{FIXTURE_TITLEBAR_WIDGET_TITLE} S{} A{}",
+                snapshot.session_count, snapshot.action_count
+            )))
+    }
+}
+
+#[cfg(feature = "mirror")]
 pub fn run_plugin() -> Result<()> {
     std::env::set_current_dir(plugin_manifest_directory())?;
     let runtime_context = PluginRuntimeContext::new();
+    runtime_context.fixture_store.record_startup();
     run(|app| {
         let panel_store = runtime_context.store.clone();
         app.register_panel(PANEL_ID, move |cx: &mut Context<CodexUsagePanel>| {
@@ -2143,6 +2427,22 @@ pub fn run_plugin() -> Result<()> {
             TITLEBAR_WIDGET_ID,
             move |cx: &mut Context<CodexUsageTitlebarWidget>| {
                 CodexUsageTitlebarWidget::new(titlebar_store.clone(), cx)
+            },
+        );
+
+        let fixture_panel_store = runtime_context.fixture_store.clone();
+        app.register_panel(
+            FIXTURE_PANEL_ID,
+            move |cx: &mut Context<PluginSurfaceFixturePanel>| {
+                PluginSurfaceFixturePanel::new(fixture_panel_store.clone(), cx)
+            },
+        );
+
+        let fixture_titlebar_store = runtime_context.fixture_store.clone();
+        app.register_titlebar_widget(
+            FIXTURE_TITLEBAR_WIDGET_ID,
+            move |cx: &mut Context<PluginSurfaceFixtureTitlebarWidget>| {
+                PluginSurfaceFixtureTitlebarWidget::new(fixture_titlebar_store.clone(), cx)
             },
         );
     })
@@ -2298,7 +2598,7 @@ mod tests {
 
         save_persisted_auth_state_to_disk_for_tests(&auth_state_path, &state)
             .expect("state should save");
-        let store = CodexUsageStore::new(auth_state_path).expect("store should load");
+        let store = CodexUsageStore::new(auth_state_path);
         let view_model = store.current_view_model();
 
         assert!(!view_model.has_session);

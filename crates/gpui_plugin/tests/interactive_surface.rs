@@ -5,7 +5,7 @@ gpui::actions!(plugin_test, [OpenPanel]);
 
 #[test]
 fn gpui_plugin_exposes_interactive_surface() {
-    let focus_handle = gpui::FocusHandle::default();
+    let focus_handle = gpui::FocusHandle;
     let scroll_handle = gpui::ScrollHandle::new();
     let scroll_anchor = gpui::ScrollAnchor::for_handle(scroll_handle.clone());
 

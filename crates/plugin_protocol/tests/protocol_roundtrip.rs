@@ -125,7 +125,7 @@ fn render_delta_roundtrips_and_applies_to_existing_tree() {
 
     assert_eq!(decoded, message);
 
-    let mut patched = previous.clone();
+    let mut patched = previous;
     apply_ui_patches(&mut patched, &patches).expect("patches apply");
     assert_eq!(patched, current);
 }

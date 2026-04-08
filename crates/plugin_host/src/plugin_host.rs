@@ -127,13 +127,13 @@ mod host {
     use plugin::{InstalledPlugin, PluginStore, PluginStoreLayout};
     use plugin_protocol::{
         DockPosition as PluginDockPosition, EventHandlerId, HostThemeSnapshot, HostToPlugin,
-        PanelActivation, PanelDescriptor, PanelInstanceId, PluginHostRequest,
-        PluginHostResponse, PluginId, PluginToHost, SerializedActionEvent,
-        SerializedClickEvent, SerializedKeyDownEvent, SerializedKeyUpEvent,
-        SerializedModifiersChangedEvent, SerializedMouseDownEvent, SerializedMouseMoveEvent,
-        SerializedMousePressureEvent, SerializedMouseUpEvent, SerializedPinchEvent,
-        SerializedScrollWheelEvent, StyleValue, TitlebarWidgetDescriptor, TitlebarWidgetSide,
-        UiEvent, UiEventKind, UiEventPhase, UiNode, UiNodeKind, apply_ui_patches,
+        PanelActivation, PanelDescriptor, PanelInstanceId, PluginHostRequest, PluginHostResponse,
+        PluginId, PluginToHost, SerializedActionEvent, SerializedClickEvent,
+        SerializedKeyDownEvent, SerializedKeyUpEvent, SerializedModifiersChangedEvent,
+        SerializedMouseDownEvent, SerializedMouseMoveEvent, SerializedMousePressureEvent,
+        SerializedMouseUpEvent, SerializedPinchEvent, SerializedScrollWheelEvent, StyleValue,
+        TitlebarWidgetDescriptor, TitlebarWidgetSide, UiEvent, UiEventKind, UiEventPhase, UiNode,
+        UiNodeKind, apply_ui_patches,
     };
     use serde::Deserialize;
     #[cfg(target_os = "windows")]
@@ -1241,13 +1241,10 @@ mod host {
                 } => {
                     let updated_root =
                         if let Some(binding) = self.panels.get(&panel_instance_id).cloned() {
-                            let mut root = if let Ok(tree) =
-                                binding.panel.read_with(cx, |panel, _| panel.tree.clone())
-                            {
-                                tree
-                            } else {
-                                None
-                            };
+                            let mut root: Option<UiNode> = binding
+                                .panel
+                                .read_with(cx, |panel, _| panel.tree.clone())
+                                .unwrap_or_default();
                             let Some(mut root) = root.take() else {
                                 self.close_remote_view(&plugin_id, &panel_instance_id)?;
                                 return Ok(());
@@ -1391,7 +1388,7 @@ mod host {
                 process_instance_id,
             )?;
             self.processes.insert(
-                plugin_id.clone(),
+                plugin_id,
                 PluginProcess {
                     sender: spawned.sender.clone(),
                     terminate_sender: spawned.terminate_sender,
@@ -1606,7 +1603,10 @@ mod host {
                     status = SecItemAdd(attrs.as_concrete_TypeRef(), ptr::null_mut());
                 }
 
-                anyhow::ensure!(status == errSecSuccess, "writing keychain item failed: {status}");
+                anyhow::ensure!(
+                    status == errSecSuccess,
+                    "writing keychain item failed: {status}"
+                );
                 Ok(())
             }
         }
@@ -2461,20 +2461,25 @@ mod host {
                         render_remote_node(dispatcher, child, &child_path, cx)
                     }),
                 );
+                let fallback_div_identity = node
+                    .events
+                    .first()
+                    .map(|event| event.handler_id.to_string())
+                    .unwrap_or_else(|| format_remote_node_path(node_path));
+                let div_id = remote_host_element_id(
+                    dispatcher.remote_div_id_prefix(),
+                    dispatcher.remote_panel_instance_id(),
+                    node,
+                    fallback_div_identity,
+                );
                 let element = if node.events.is_empty() {
-                    element.into_any_element()
+                    if remote_node_element_id(node).is_some() {
+                        element.id(div_id).into_any_element()
+                    } else {
+                        element.into_any_element()
+                    }
                 } else {
-                    apply_div_events(
-                        element.id(format!(
-                            "{}-{}-{}",
-                            dispatcher.remote_div_id_prefix(),
-                            dispatcher.remote_panel_instance_id(),
-                            node.events[0].handler_id
-                        )),
-                        node,
-                        cx,
-                    )
-                    .into_any_element()
+                    apply_div_events(element.id(div_id), node, cx).into_any_element()
                 };
                 wrap_action_bindings(element, node, cx)
             }
@@ -2520,24 +2525,23 @@ mod host {
                 label.into_any_element()
             }
             UiNodeKind::Button => {
-                let button_id = node
+                let fallback_button_identity = node
                     .events
                     .first()
-                    .map(|event| {
-                        format!(
-                            "{}-{}",
-                            dispatcher.remote_button_id_prefix(),
-                            event.handler_id
-                        )
-                    })
+                    .map(|event| event.handler_id.to_string())
                     .unwrap_or_else(|| {
                         format!(
-                            "{}-{}-{}",
-                            dispatcher.remote_button_id_prefix(),
-                            dispatcher.remote_panel_instance_id(),
-                            dispatcher.remote_entity_id()
+                            "{}-{}",
+                            dispatcher.remote_entity_id(),
+                            format_remote_node_path(node_path)
                         )
                     });
+                let button_id = remote_host_element_id(
+                    dispatcher.remote_button_id_prefix(),
+                    dispatcher.remote_panel_instance_id(),
+                    node,
+                    fallback_button_identity,
+                );
                 render_button_node(node, button_id, cx)
             }
             UiNodeKind::Divider => render_divider_node(node),
@@ -2584,17 +2588,34 @@ mod host {
         formatted
     }
 
+    fn remote_node_element_id(node: &UiNode) -> Option<&str> {
+        node.element_id.as_deref().or_else(|| {
+            node.props.get("element_id").and_then(|value| match value {
+                StyleValue::Text(value) => Some(value.as_str()),
+                _ => None,
+            })
+        })
+    }
+
+    fn remote_host_element_id(
+        prefix: &str,
+        panel_instance_id: &PanelInstanceId,
+        node: &UiNode,
+        fallback_identity: String,
+    ) -> String {
+        let identity = remote_node_element_id(node)
+            .map(ToOwned::to_owned)
+            .unwrap_or(fallback_identity);
+        format!("{prefix}-{panel_instance_id}-{identity}")
+    }
+
     fn remote_progress_bar_id(
         node: &UiNode,
         panel_instance_id: &PanelInstanceId,
         node_path: &[usize],
     ) -> String {
-        node.props
-            .get("element_id")
-            .and_then(|value| match value {
-                StyleValue::Text(value) => Some(value.clone()),
-                _ => None,
-            })
+        remote_node_element_id(node)
+            .map(ToOwned::to_owned)
             .unwrap_or_else(|| {
                 format!(
                     "plugin-progress-{}-{}",
@@ -6150,6 +6171,44 @@ mod host {
             assert!(right_id.ends_with("0-1"));
         }
 
+        #[test]
+        fn remote_node_element_id_prefers_protocol_field_over_legacy_props() {
+            let mut node = UiNode::new(UiNodeKind::Div);
+            node.element_id = Some("protocol-id".to_string());
+            node.props.insert(
+                "element_id".to_string(),
+                StyleValue::Text("legacy-prop-id".to_string()),
+            );
+
+            assert_eq!(remote_node_element_id(&node), Some("protocol-id"));
+        }
+
+        #[test]
+        fn remote_host_element_id_uses_protocol_identity_with_panel_prefix() {
+            let mut node = UiNode::new(UiNodeKind::Div);
+            node.element_id = Some("zoom-target".to_string());
+
+            let host_id = remote_host_element_id(
+                "plugin-panel-div",
+                &PanelInstanceId::new("panel-a"),
+                &node,
+                "fallback".to_string(),
+            );
+
+            assert_eq!(host_id, "plugin-panel-div-panel-a-zoom-target");
+        }
+
+        #[test]
+        fn remote_progress_bar_id_uses_protocol_element_id_when_available() {
+            let mut node = UiNode::new(UiNodeKind::ProgressBar);
+            node.element_id = Some("fixture-progress".to_string());
+
+            let progress_id =
+                remote_progress_bar_id(&node, &PanelInstanceId::new("panel-a"), &[0, 0]);
+
+            assert_eq!(progress_id, "fixture-progress");
+        }
+
         #[gpui::test]
         async fn read_bounded_line_rejects_oversized_lines(_cx: &mut TestAppContext) {
             let mut reader =
@@ -6438,8 +6497,8 @@ activation = "on_startup"
                         )
                     });
 
-                    workspace.add_panel(panel_a.clone(), window, workspace_cx);
-                    workspace.add_panel(panel_b.clone(), window, workspace_cx);
+                    workspace.add_panel(panel_a, window, workspace_cx);
+                    workspace.add_panel(panel_b, window, workspace_cx);
                     assert_eq!(workspace.right_dock().read(workspace_cx).panels_len(), 2);
 
                     sync_workspace_panels_for_workspace(
@@ -6874,6 +6933,7 @@ edition = "2021"
 
         #[cfg(target_os = "macos")]
         #[test]
+        #[allow(clippy::disallowed_methods)]
         fn sandboxed_plugin_process_cannot_write_outside_plugin_root() {
             let temp_dir = TempDir::new().expect("temp plugin dir");
             let plugin_root = temp_dir.path().join("sandboxed-plugin");

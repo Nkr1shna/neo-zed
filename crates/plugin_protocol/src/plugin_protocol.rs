@@ -212,6 +212,8 @@ pub struct UiNode {
     pub kind: UiNodeKind,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub text: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub element_id: Option<String>,
     #[serde(default, skip_serializing_if = "is_default_style_refinement")]
     pub styles: StyleRefinement,
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
@@ -227,6 +229,7 @@ impl UiNode {
         Self {
             kind,
             text: None,
+            element_id: None,
             styles: StyleRefinement::default(),
             props: BTreeMap::new(),
             events: Vec::new(),
@@ -244,6 +247,11 @@ impl UiNode {
 
     pub fn with_text(mut self, value: impl Into<String>) -> Self {
         self.text = Some(value.into());
+        self
+    }
+
+    pub fn with_element_id(mut self, value: impl Into<String>) -> Self {
+        self.element_id = Some(value.into());
         self
     }
 
@@ -295,6 +303,7 @@ fn diff_ui_trees_inner(
 ) {
     if previous.kind != current.kind
         || previous.text != current.text
+        || previous.element_id != current.element_id
         || previous.styles != current.styles
         || previous.props != current.props
         || previous.events != current.events
@@ -353,17 +362,12 @@ fn apply_ui_patch(root: &mut UiNode, patch: &UiPatch) -> Result<(), String> {
     Ok(())
 }
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum UiEventPhase {
     Capture,
+    #[default]
     Bubble,
-}
-
-impl Default for UiEventPhase {
-    fn default() -> Self {
-        Self::Bubble
-    }
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]

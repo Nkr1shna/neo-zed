@@ -218,7 +218,7 @@ fn gpui_plugin_release_callbacks_fire_when_entities_are_dropped() {
 fn gpui_plugin_exposes_window_and_app_dispatch_surface() {
     let mut app = gpui::App::new();
     let mut window = gpui::Window::default();
-    let focus_handle = gpui::FocusHandle::default();
+    let focus_handle = gpui::FocusHandle;
     let window_id = gpui::WindowId::from(7);
     let any_window = gpui::AnyWindowHandle::default();
     let typed_window = gpui::WindowHandle::<FocusableView>::new(window_id);

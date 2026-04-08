@@ -26,6 +26,20 @@ fn plugin_manifest_declares_panel_and_titlebar_widget() {
 }
 
 #[test]
+fn plugin_manifest_declares_validation_fixture_panel_and_titlebar_widget() {
+    let manifest =
+        fs::read_to_string(std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("plugin.toml"))
+            .expect("plugin manifest should exist");
+
+    assert!(manifest.contains("[[panels]]"));
+    assert!(manifest.contains("id = \"plugin-surface-fixture-panel\""));
+    assert!(manifest.contains("title = \"Plugin Surface Fixture\""));
+    assert!(manifest.contains("[[titlebar_widgets]]"));
+    assert!(manifest.contains("id = \"plugin-surface-fixture-titlebar\""));
+    assert!(manifest.contains("opens_panel_id = \"plugin-surface-fixture-panel\""));
+}
+
+#[test]
 fn parse_persisted_auth_state_reads_cached_snapshot() {
     let state = main_binary::parse_persisted_auth_state(json!({
         "auth_status": "pending",

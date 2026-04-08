@@ -152,6 +152,37 @@ fn mirror_runtime_dispatches_non_click_events() {
     );
 }
 
+struct IdentityMirrorPanel;
+
+impl Render for IdentityMirrorPanel {
+    fn render(&mut self, _window: &mut Window, _cx: &mut Context<Self>) -> impl IntoElement {
+        div().child("identity").id("validation-canvas-root")
+    }
+}
+
+#[test]
+fn mirror_runtime_serializes_element_id_for_host_visible_identity() {
+    let mut runtime = Runtime::new();
+    let panel = runtime.new_entity(|_| IdentityMirrorPanel);
+
+    let render_output = runtime.render_root(&panel).expect("render succeeds");
+    assert_eq!(
+        render_output.tree.element_id.as_deref(),
+        Some("validation-canvas-root")
+    );
+    assert_eq!(
+        render_output
+            .tree
+            .props
+            .get("element_id")
+            .and_then(|value| match value {
+                plugin_protocol::StyleValue::Text(value) => Some(value.as_str()),
+                _ => None,
+            }),
+        Some("validation-canvas-root")
+    );
+}
+
 struct ActionMirrorPanel {
     actions: usize,
 }

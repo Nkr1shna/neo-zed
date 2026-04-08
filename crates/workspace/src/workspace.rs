@@ -15490,7 +15490,7 @@ mod tests {
             let panel_b_id = panel_b.entity_id();
 
             workspace.add_panel(panel_a, window, cx);
-            workspace.add_panel(panel_b.clone(), window, cx);
+            workspace.add_panel(panel_b, window, cx);
             workspace.left_dock().update(cx, |dock, cx| {
                 dock.serialized_dock = Some(DockData {
                     visible: true,

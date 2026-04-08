@@ -3,11 +3,10 @@ use futures::{FutureExt as _, future::select, pin_mut};
 use gpui_api::{RenderContext, StyleMap, UiNode, UiNodeKind};
 use plugin_protocol::{
     HostThemeSnapshot, HostToPlugin, PanelDescriptor, PanelInstanceId, PluginId, PluginMetadata,
-    PluginToHost, SerializedActionEvent,
-    SerializedClickEvent, SerializedKeyDownEvent, SerializedKeyUpEvent,
-    SerializedModifiersChangedEvent, SerializedMouseDownEvent, SerializedMouseMoveEvent,
-    SerializedMousePressureEvent, SerializedMouseUpEvent, SerializedPinchEvent,
-    SerializedScrollWheelEvent, TitlebarWidgetDescriptor,
+    PluginToHost, SerializedActionEvent, SerializedClickEvent, SerializedKeyDownEvent,
+    SerializedKeyUpEvent, SerializedModifiersChangedEvent, SerializedMouseDownEvent,
+    SerializedMouseMoveEvent, SerializedMousePressureEvent, SerializedMouseUpEvent,
+    SerializedPinchEvent, SerializedScrollWheelEvent, TitlebarWidgetDescriptor,
     UiEventKind as ProtocolUiEventKind, diff_ui_trees,
 };
 use serde::Deserialize;
@@ -28,7 +27,6 @@ use std::{
 pub use gpui::{actions, private};
 #[cfg(any(test, feature = "test-support"))]
 pub use gpui_api::proptest;
-pub use plugin_protocol::{PluginHostRequest, PluginHostResponse};
 pub use gpui_api::{
     AbsoluteLength, Action, ActiveTheme, AlignContent, AlignItems, AlignSelf, Animation,
     AnimationElement, AnimationExt, AnyElement, AnyView, AnyWindowHandle, App, AppContext, ArcCow,
@@ -54,6 +52,7 @@ pub use gpui_api::{PriorityQueueReceiver, PriorityQueueSender};
 pub use gpui_macros::{
     AppContext, IntoElement, Render, VisualContext, property_test, register_action, test,
 };
+pub use plugin_protocol::{PluginHostRequest, PluginHostResponse};
 
 pub mod prelude {
     pub use crate::{
@@ -86,6 +85,12 @@ impl Element for Div {
         let mut node = UiNode::new(UiNodeKind::Div);
         node.styles = self.styles;
         node.styles.refine(&self.interactivity.base_style);
+        if let Some(element_id) = self.interactivity.element_id.as_ref() {
+            let element_id = element_id.to_string();
+            node.element_id = Some(element_id.clone());
+            node.props
+                .insert("element_id".to_string(), element_id.into());
+        }
         node.events = Iterator::map(self.interactivity.handlers().iter().cloned(), |handler| {
             context.register_event_handler(handler)
         })
@@ -415,7 +420,7 @@ impl PluginApp {
 
     fn from_current_directory() -> Result<Self> {
         let manifest = RuntimeManifest::load(&std::env::current_dir()?)?;
-        let metadata = PluginMetadata::from(manifest.clone());
+        let metadata = PluginMetadata::from(manifest);
         let mut remote_views = BTreeMap::new();
         for descriptor in
             Iterator::map(metadata.panels.iter().cloned(), RemoteViewDescriptor::Panel).chain(
@@ -817,7 +822,10 @@ fn write_message(writer: &mut impl std::io::Write, message: &PluginToHost) -> Re
     Ok(())
 }
 
-fn write_outbound_message(writer: &mut impl std::io::Write, message: &OutboundMessage) -> Result<()> {
+fn write_outbound_message(
+    writer: &mut impl std::io::Write,
+    message: &OutboundMessage,
+) -> Result<()> {
     match message {
         OutboundMessage::Plugin(message) => write_message(writer, message),
         OutboundMessage::HostRequest {
@@ -876,10 +884,13 @@ pub fn run(register: impl FnOnce(&mut PluginApp)) -> Result<()> {
                             response,
                             error,
                         } => {
-                            let pending_request = pending_requests
-                                .lock()
-                                .ok()
-                                .and_then(|mut pending_requests| pending_requests.remove(&request_id));
+                            let pending_request =
+                                pending_requests
+                                    .lock()
+                                    .ok()
+                                    .and_then(|mut pending_requests| {
+                                        pending_requests.remove(&request_id)
+                                    });
                             if let Some(pending_request) = pending_request {
                                 let result = match (response, error) {
                                     (Some(response), None) => Ok(response),
@@ -926,13 +937,20 @@ pub fn run(register: impl FnOnce(&mut PluginApp)) -> Result<()> {
         }))
         .map_err(|_| anyhow::anyhow!("failed to send plugin registration to host"))?;
 
+    let (tick_sender, tick_receiver) = smol::channel::unbounded::<()>();
+    thread::spawn(move || {
+        while tick_sender.send_blocking(()).is_ok() {
+            thread::sleep(Duration::from_millis(16));
+        }
+    });
+
     smol::block_on(async move {
         loop {
-            let timer = smol::Timer::after(Duration::from_millis(16)).fuse();
             let inbound = host_message_receiver.recv().fuse();
-            pin_mut!(timer, inbound);
+            let tick = tick_receiver.recv().fuse();
+            pin_mut!(inbound, tick);
 
-            match select(inbound, timer).await {
+            match select(inbound, tick).await {
                 futures::future::Either::Left((message, _)) => {
                     let message = match message {
                         Ok(message) => message,
@@ -953,13 +971,19 @@ pub fn run(register: impl FnOnce(&mut PluginApp)) -> Result<()> {
                         LoopControl::Shutdown => break,
                     }
                 }
-                futures::future::Either::Right((_, _)) => {}
+                futures::future::Either::Right((result, _)) => {
+                    if result.is_err() {
+                        break;
+                    }
+                }
             }
 
             for message in app.drain_messages()? {
                 outbound_sender
                     .send(OutboundMessage::Plugin(message))
-                    .map_err(|_| anyhow::anyhow!("failed to send plugin message to writer thread"))?;
+                    .map_err(|_| {
+                        anyhow::anyhow!("failed to send plugin message to writer thread")
+                    })?;
             }
         }
 

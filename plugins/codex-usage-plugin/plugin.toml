@@ -16,6 +16,14 @@ icon_name = "ai_open_ai"
 tooltip = "Open the Codex usage panel."
 activation = "on_startup"
 
+[[panels]]
+id = "plugin-surface-fixture-panel"
+title = "Plugin Surface Fixture"
+dock = "right"
+icon_name = "box_open"
+tooltip = "Open the plugin surface validation fixture."
+activation = "on_demand"
+
 [[titlebar_widgets]]
 id = "codex-usage-titlebar"
 title = "Codex Usage"
@@ -24,3 +32,12 @@ tooltip = "Open the Codex usage panel."
 side = "right"
 priority = 100
 opens_panel_id = "codex-usage-panel"
+
+[[titlebar_widgets]]
+id = "plugin-surface-fixture-titlebar"
+title = "Plugin Surface Fixture"
+icon_name = "box_open"
+tooltip = "Open the plugin surface validation fixture."
+side = "right"
+priority = 90
+opens_panel_id = "plugin-surface-fixture-panel"

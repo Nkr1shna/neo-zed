@@ -1125,7 +1125,7 @@ impl KeyBinding {
     }
 
     pub fn for_action_in(action: &dyn Action, focus: &FocusHandle, cx: &App) -> Self {
-        Self::new(action, Some(focus.clone()), cx)
+        Self::new(action, Some(*focus), cx)
     }
 
     pub fn has_binding(&self, _window: &Window) -> bool {
@@ -1575,8 +1575,10 @@ impl Element for ButtonLike {
             styles.size.height = Some(self.size.rems().into());
         }
         node.styles = styles;
+        let element_id = self.id.to_string();
+        node.element_id = Some(element_id.clone());
         node.props
-            .insert("element_id".to_string(), self.id.to_string().into());
+            .insert("element_id".to_string(), element_id.into());
         node.props.insert(
             "button_like_style".to_string(),
             serialize_button_style(self.style).into(),
@@ -2017,8 +2019,10 @@ impl Element for Button {
         let mut node = UiNode::new(UiNodeKind::Button);
         node.text = Some(self.text.to_string());
         node.styles = self.styles;
+        let element_id = self.id.to_string();
+        node.element_id = Some(element_id.clone());
         node.props
-            .insert("element_id".to_string(), self.id.to_string().into());
+            .insert("element_id".to_string(), element_id.into());
         if self.disabled {
             node.props.insert("disabled".to_string(), true.into());
         }
@@ -2282,8 +2286,10 @@ impl Element for ProgressBar {
     fn into_node(self, _context: &mut RenderContext) -> UiNode {
         let mut node = UiNode::new(UiNodeKind::ProgressBar);
         node.styles = self.styles;
+        let element_id = self.id.to_string();
+        node.element_id = Some(element_id.clone());
         node.props
-            .insert("element_id".to_string(), self.id.to_string().into());
+            .insert("element_id".to_string(), element_id.into());
         node.props.insert("value".to_string(), self.value.into());
         node.props
             .insert("max_value".to_string(), self.max_value.into());
@@ -2834,8 +2840,10 @@ impl Element for MenuItem {
         let mut node = UiNode::new(UiNodeKind::MenuItem);
         node.text = Some(self.text.to_string());
         node.styles = self.styles;
+        let element_id = self.id.to_string();
+        node.element_id = Some(element_id.clone());
         node.props
-            .insert("element_id".to_string(), self.id.to_string().into());
+            .insert("element_id".to_string(), element_id.into());
         if self.disabled {
             node.props.insert("disabled".to_string(), true.into());
         }
@@ -2909,7 +2917,6 @@ impl TextSize {
             Self::Ui => rems_from_px(14.),
             Self::Editor => rems_from_px(14.),
         }
-        .into()
     }
 
     pub fn pixels(self, _cx: &App) -> gpui_api::Pixels {
@@ -2967,7 +2974,7 @@ impl DynamicSpacing {
     }
 
     pub fn rems(self, _cx: &App) -> gpui_api::AbsoluteLength {
-        rems_from_px(self.px_value()).into()
+        rems_from_px(self.px_value())
     }
 }
 

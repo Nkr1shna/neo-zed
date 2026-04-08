@@ -833,7 +833,7 @@ impl DetachedAgentPanelWindow {
         subscriptions.push(cx.on_release({
             let panel = panel.clone();
             move |_, cx| {
-                let panel = panel.clone();
+                let panel = panel;
                 cx.defer(move |cx| {
                     panel
                         .update(cx, |panel, cx| {
@@ -6627,7 +6627,7 @@ mod tests {
             })
             .unwrap();
 
-        let mut visual_cx = VisualTestContext::from_window(multi_workspace.clone().into(), cx);
+        let mut visual_cx = VisualTestContext::from_window(multi_workspace.into(), cx);
 
         let panel_a = workspace_a.update_in(&mut visual_cx, |workspace, window, cx| {
             let panel = cx.new(|cx| AgentPanel::new(workspace, None, window, cx));
