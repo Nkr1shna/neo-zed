@@ -19,6 +19,7 @@ Mission-specific notes for detached agent windows and always-on-top behavior.
 - Fullscreen from detached mode must fullscreen that same detached window, not recreate or mirror the panel back into the main window.
 - Pop-in must remain available while the detached window is fullscreen.
 - Detached windows should use the same titlebar style/treatment as the main Neo Zed window for the current platform.
+- Matching titlebar treatment means reusing the same app titlebar component/path as the main workspace window; copying `WindowOptions` alone is not sufficient if native floating chrome still renders differently.
 - Detached native titlebar chrome must not overlap the agent-panel header; the panel header should start below the titlebar area.
 - Closing the detached window restores the docked panel for the same workspace.
 
