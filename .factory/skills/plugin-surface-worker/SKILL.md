@@ -13,7 +13,7 @@ Use for features that change plugin metadata/protocol/runtime/host rendering for
 
 ## Required Skills
 
-- `agent-browser` — Use for manual desktop verification against the dev plugin fixture whenever the feature changes a user-visible plugin surface or lifecycle.
+None. Native GPUI plugin-surface validation is not automatable in-session here; rely on targeted Rust validation and prepare the fixture/log/counter evidence for later manual user validation.
 
 ## Work Procedure
 
@@ -23,8 +23,8 @@ Use for features that change plugin metadata/protocol/runtime/host rendering for
 4. Implement the feature by extending existing plugin/runtime crates. Preserve existing mirrored widget behavior and existing panel/titlebar bindings.
 5. If the feature affects manual validation, update or add the dev plugin fixture so validators can observe labeled canvas regions, nested zoom targets, and startup/session/action counters.
 6. Run targeted validators relevant to the feature, then run `cargo check --workspace --all-targets` and `./script/clippy` before finishing.
-7. If the feature is user-visible, use `agent-browser` to verify the fixture flow and capture evidence-worthy observations. For same-session or no-duplicate claims, include host-log or fixture-counter evidence.
-8. Leave the tree clean of temporary logs or fixture hacks before returning.
+7. If the feature is user-visible, verify the fixture/log/counter evidence needed for later manual user validation is in place. For same-session or no-duplicate claims, include host-log or fixture-counter evidence.
+8. Leave the tree clean of temporary logs or fixture hacks before returning, and note the exact later manual validation steps in the handoff when relevant.
 
 ## Example Handoff
 

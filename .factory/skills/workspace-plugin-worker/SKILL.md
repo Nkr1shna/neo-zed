@@ -13,7 +13,7 @@ Use for features that integrate plugin surfaces with workspace zoom, child-targe
 
 ## Required Skills
 
-- `agent-browser` — Use for manual desktop verification of `Shift-Escape`, dock placement, restore flows, and child-target zoom behavior.
+None. Native GPUI zoom validation is deferred to later manual user validation; rely on targeted Rust tests plus fixture/log/counter preparation in this environment.
 
 ## Work Procedure
 
@@ -22,8 +22,8 @@ Use for features that integrate plugin surfaces with workspace zoom, child-targe
 3. Write failing tests first in `workspace` and/or `plugin_host` for the exact zoom transitions being changed.
 4. Implement the minimal host-visible identity and zoom plumbing needed for plugin surfaces or child targets.
 5. Re-run native pane and dock zoom regressions in addition to new plugin zoom tests.
-6. Use `agent-browser` with the dev plugin fixture to verify the exact user flow: focused panel zoom, child-target zoom, restore, dock move/reopen, and any session-coherence requirement tied to the feature.
-7. Before finishing, run `cargo check --workspace --all-targets` and `./script/clippy`.
+6. Ensure the dev plugin fixture and host-log/counter evidence support later manual validation of focused panel zoom, child-target zoom, restore, dock move/reopen, and any session-coherence requirement tied to the feature.
+7. Before finishing, run `cargo check --workspace --all-targets` and `./script/clippy`, and document the exact later manual validation steps in the handoff when relevant.
 
 ## Example Handoff
 

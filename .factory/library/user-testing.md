@@ -4,9 +4,9 @@ Validation surface findings and execution guidance for the plugin canvas / zoom 
 
 ## Validation Surface
 
-### 1. Desktop plugin flow validation
-- Tool: `agent-browser`
-- Surface: the local Neo Zed desktop app with a purpose-built development plugin fixture
+### 1. Manual native desktop plugin validation
+- Tool: later manual user validation in the local Neo Zed desktop app
+- Surface: the native GPUI app with a purpose-built development plugin fixture
 - Primary user-facing checks:
   - plugin canvas rendering and interaction
   - titlebar widget rendering and panel opening
@@ -62,4 +62,5 @@ Resource notes from the dry run:
 
 - No long-running services, databases, or credentials are required.
 - Validation should use a dedicated dev plugin fixture created within this mission so the canvas, zoom-target, and action/session counters are observable.
-- Prefer a single desktop validator session for all agent-browser checks in a milestone so workspace/plugin state remains coherent.
+- Prefer a single later manual validation session per milestone so workspace/plugin state remains coherent.
+- Current in-session automation cannot attach to the native GPUI panel surface; workers should rely on targeted Rust validation plus fixture/log/counter preparation for later user validation.

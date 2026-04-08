@@ -38,3 +38,7 @@ Plugin-platform facts and constraints workers should keep in mind.
 - `crates/workspace/src/workspace.rs`
 - `crates/keymap_editor/src/keymap_editor.rs`
 - `script/check-keymaps`
+
+## Validation limitation
+
+- Current automation cannot attach to the native GPUI surface in-session. Workers must keep the dev plugin fixture and host-log/session/action counters usable for later manual user validation.

@@ -13,7 +13,7 @@ Use for features that add plugin action metadata, runtime handler registration, 
 
 ## Required Skills
 
-- `agent-browser` — Use for manual desktop verification of action discovery, invocation, startup failure handling, and keybinding behavior.
+None. Native GPUI action/keybinding validation is deferred to later manual user validation here; rely on targeted Rust tests plus fixture/log/counter preparation.
 
 ## Work Procedure
 
@@ -22,9 +22,9 @@ Use for features that add plugin action metadata, runtime handler registration, 
 3. Write failing tests first in the narrowest relevant targets (`plugin_host`, `command_palette`, `keymap_editor`, `settings`, or manifest parsing) before implementing behavior.
 4. Implement metadata discovery, host proxy dispatch, and runtime handler wiring in incremental steps so discovery-before-startup and invoke-after-startup remain separable.
 5. For any feature affecting user keymaps, run `./script/check-keymaps` and verify add/edit/unbind/delete flows rather than only the happy path.
-6. Use `agent-browser` with the dev plugin fixture to verify discovery before startup, lazy-start invocation, repeated invocation behavior, startup failure handling, and keybinding dispatch.
+6. Ensure the dev plugin fixture and host-log/counter evidence support later manual validation of discovery before startup, lazy-start invocation, repeated invocation behavior, startup failure handling, and keybinding dispatch.
 7. Collect host-log or fixture-counter evidence for assertions about same session, single startup path, or exactly-once action execution.
-8. Before finishing, run `cargo check --workspace --all-targets` and `./script/clippy`.
+8. Before finishing, run `cargo check --workspace --all-targets` and `./script/clippy`, and document the exact later manual validation steps in the handoff when relevant.
 
 ## Example Handoff
 
