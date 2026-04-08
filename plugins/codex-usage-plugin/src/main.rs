@@ -63,6 +63,8 @@ const DEFAULT_TOKEN_EXPIRY_SECONDS: u64 = 3_600;
 const TOKEN_REFRESH_SKEW_MILLIS: u64 = 5 * 60 * 1_000;
 const AUTO_REFRESH_INTERVAL_MILLIS: u64 = 60 * 1_000;
 const VIEW_POLL_INTERVAL_MILLIS: u64 = 500;
+#[cfg(feature = "mirror")]
+const FIXTURE_TITLEBAR_FIRST_RENDER_DELAY_MILLIS: u64 = 650;
 const LOGIN_TIMEOUT_SECONDS: u64 = 2 * 60;
 const SUCCESS_HTML: &str =
     "<!doctype html><html><body><p>Authentication successful. Return to Zed.</p></body></html>";
@@ -2269,6 +2271,8 @@ impl PluginSurfaceFixturePanel {
 impl Render for PluginSurfaceFixturePanel {
     fn render(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let snapshot = self.snapshot;
+        let theme_name = cx.theme().name.to_string();
+        let theme_appearance = format!("{:?}", cx.theme().appearance).to_lowercase();
 
         v_flex()
             .size_full()
@@ -2286,6 +2290,9 @@ impl Render for PluginSurfaceFixturePanel {
                 snapshot.session_count
             )))
             .child(Label::new(format!("Action counter: {}", snapshot.action_count)))
+            .child(Label::new(format!(
+                "Theme: {theme_name} ({theme_appearance})"
+            )))
             .child(
                 Button::new(
                     "plugin-surface-fixture-increment-action",
@@ -2359,14 +2366,20 @@ impl Render for PluginSurfaceFixturePanel {
 struct PluginSurfaceFixtureTitlebarWidget {
     store: ValidationFixtureStore,
     snapshot: ValidationFixtureSnapshot,
+    first_render_ready: bool,
 }
 
 #[cfg(feature = "mirror")]
 impl PluginSurfaceFixtureTitlebarWidget {
     fn new(store: ValidationFixtureStore, cx: &mut Context<Self>) -> Self {
         let snapshot = store.begin_surface_session();
-        let this = Self { store, snapshot };
+        let this = Self {
+            store,
+            snapshot,
+            first_render_ready: false,
+        };
         this.spawn_sync_loop(cx);
+        this.spawn_first_render_delay(cx);
         this
     }
 
@@ -2388,6 +2401,25 @@ impl PluginSurfaceFixtureTitlebarWidget {
         .detach();
     }
 
+    #[allow(clippy::disallowed_methods)]
+    fn spawn_first_render_delay(&self, cx: &mut Context<Self>) {
+        cx.spawn(async move |this, cx| {
+            smol::Timer::after(Duration::from_millis(
+                FIXTURE_TITLEBAR_FIRST_RENDER_DELAY_MILLIS,
+            ))
+            .await;
+            if let Err(error) = this.update(cx, |this, cx| {
+                if !this.first_render_ready {
+                    this.first_render_ready = true;
+                    cx.notify();
+                }
+            }) {
+                eprintln!("failed to publish delayed fixture titlebar render: {error:#}");
+            }
+        })
+        .detach();
+    }
+
     fn sync_snapshot(&mut self, snapshot: ValidationFixtureSnapshot, cx: &mut Context<Self>) {
         if self.snapshot.serial != snapshot.serial {
             self.snapshot = snapshot;
@@ -2398,15 +2430,26 @@ impl PluginSurfaceFixtureTitlebarWidget {
 
 #[cfg(feature = "mirror")]
 impl Render for PluginSurfaceFixtureTitlebarWidget {
-    fn render(&mut self, _window: &mut Window, _cx: &mut Context<Self>) -> impl IntoElement {
+    fn render(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        if !self.first_render_ready {
+            return h_flex()
+                .id("plugin-surface-fixture-titlebar-widget")
+                .gap(px(1.0))
+                .child(Icon::new("box_open"))
+                .child(Label::new(format!(
+                    "{FIXTURE_TITLEBAR_WIDGET_TITLE} loading..."
+                )));
+        }
+
         let snapshot = self.snapshot;
+        let theme_name = cx.theme().name.to_string();
         h_flex()
             .id("plugin-surface-fixture-titlebar-widget")
             .gap(px(1.0))
             .child(Icon::new("box_open"))
             .child(Label::new(format!(
-                "{FIXTURE_TITLEBAR_WIDGET_TITLE} S{} A{}",
-                snapshot.session_count, snapshot.action_count
+                "{FIXTURE_TITLEBAR_WIDGET_TITLE} S{} A{} T:{theme_name}",
+                snapshot.session_count, snapshot.action_count,
             )))
     }
 }

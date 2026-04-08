@@ -1231,7 +1231,7 @@ mod host {
                             .widget
                             .update(cx, |widget, cx| widget.update_tree(root, cx));
                     } else {
-                        self.close_remote_view(&plugin_id, &panel_instance_id)?;
+                        self.ignore_stale_view_message(&plugin_id, &panel_instance_id, "render");
                     }
                 }
                 PluginToHost::RenderDelta {
@@ -1261,7 +1261,11 @@ mod host {
                             apply_ui_patches(&mut root, &patches).map_err(anyhow::Error::msg)?;
                             Some((root, false))
                         } else {
-                            self.close_remote_view(&plugin_id, &panel_instance_id)?;
+                            self.ignore_stale_view_message(
+                                &plugin_id,
+                                &panel_instance_id,
+                                "render_delta",
+                            );
                             None
                         };
 
@@ -1367,6 +1371,17 @@ mod host {
                 )?;
             }
             Ok(())
+        }
+
+        fn ignore_stale_view_message(
+            &self,
+            plugin_id: &PluginId,
+            panel_instance_id: &PanelInstanceId,
+            message_kind: &str,
+        ) {
+            log::debug!(
+                "ignored stale plugin {message_kind} for unattached view `{panel_instance_id}` from `{plugin_id}`"
+            );
         }
 
         fn ensure_process(
@@ -2179,8 +2194,8 @@ mod host {
                 );
             }
 
-            if let Some(tree) = self.tree.clone() {
-                body.child(render_remote_node(self, &tree, &[], cx))
+            let content = if let Some(tree) = self.tree.clone() {
+                render_remote_node(self, &tree, &[], cx)
             } else if let Some(startup_state) = self.startup_state {
                 let mut startup = v_flex()
                     .id(format!("plugin-panel-startup-{}", self.panel_instance_id))
@@ -2202,19 +2217,28 @@ mod host {
                     );
                 }
 
-                body.child(startup)
+                startup.into_any_element()
             } else if self.error_message.is_some() {
-                body.child(div().size_full())
+                div().size_full().into_any_element()
             } else {
-                body.child(
-                    div()
-                        .flex()
-                        .items_center()
-                        .justify_center()
-                        .size_full()
-                        .child(Label::new("Loading...").color(Color::Muted)),
-                )
-            }
+                div()
+                    .flex()
+                    .items_center()
+                    .justify_center()
+                    .size_full()
+                    .child(Label::new("Loading...").color(Color::Muted))
+                    .into_any_element()
+            };
+
+            body.child(
+                div()
+                    .id(format!("plugin-panel-content-{}", self.panel_instance_id))
+                    .flex_1()
+                    .min_h_0()
+                    .min_w_0()
+                    .w_full()
+                    .child(content),
+            )
         }
     }
 
@@ -6271,6 +6295,129 @@ mod host {
         }
 
         #[gpui::test]
+        async fn sync_active_theme_keeps_open_panel_and_titlebar_widget_bindings(
+            cx: &mut TestAppContext,
+        ) {
+            init_test_app(cx);
+
+            let temp_dir = TempDir::new().expect("temp plugin dir");
+            let layout = PluginStoreLayout {
+                installed_root: temp_dir.path().join("installed"),
+                development_root: temp_dir.path().join("development"),
+            };
+            let plugin_root = layout.installed_root.join("theme-plugin");
+            write_fake_plugin(
+                &plugin_root,
+                r#"
+id = "theme-plugin"
+name = "Theme Plugin"
+version = "0.1.0"
+schema_version = 1
+entry = "fake-plugin"
+
+[[panels]]
+id = "panel-a"
+title = "Panel A"
+dock = "right"
+activation = "on_demand"
+
+[[titlebar_widgets]]
+id = "usage-widget"
+title = "Usage Widget"
+side = "right"
+"#,
+            )
+            .expect("write fake plugin");
+
+            let registry = new_test_registry(layout, cx);
+            let (process_receiver, _terminate_receiver) =
+                seed_process(&registry, "theme-plugin", true, cx);
+
+            let panel = attach_test_panel(&registry, "theme-plugin", "panel-a", "Panel A", cx);
+            let panel_instance_id = cx.update(|cx| panel.read(cx).panel_instance_id.clone());
+            let panel_entity_id = panel.entity_id();
+
+            let workspace = WeakEntity::<Workspace>::new_invalid();
+            let widget_instance_id = titlebar_widget_instance_id(
+                &PluginId::new("theme-plugin"),
+                "usage-widget",
+                workspace.entity_id(),
+            );
+            let widget_entity_id = cx.update(|cx| {
+                registry
+                    .update(cx, |registry, registry_cx| {
+                        let widgets = registry.titlebar_widget_views(
+                            TitlebarStripSide::Right,
+                            workspace.clone(),
+                            registry_cx,
+                        )?;
+                        assert_eq!(widgets.len(), 1);
+                        Ok::<gpui::EntityId, anyhow::Error>(
+                            registry
+                                .titlebar_widgets
+                                .get(&widget_instance_id)
+                                .expect("titlebar binding should exist")
+                                .widget
+                                .entity_id(),
+                        )
+                    })
+                    .expect("create titlebar widget binding")
+            });
+
+            let mut opened_instances = BTreeSet::default();
+            for _ in 0..2 {
+                let message = process_receiver
+                    .recv()
+                    .await
+                    .expect("open panel message should be sent");
+                let decoded: HostToPlugin =
+                    serde_json::from_str(&message).expect("open panel message should decode");
+                match decoded {
+                    HostToPlugin::OpenPanel {
+                        panel_instance_id, ..
+                    } => {
+                        opened_instances.insert(panel_instance_id);
+                    }
+                    other => panic!("expected open panel message, got {other:?}"),
+                }
+            }
+            assert_eq!(
+                opened_instances,
+                BTreeSet::from([panel_instance_id.clone(), widget_instance_id.clone()])
+            );
+
+            cx.update(|cx| {
+                registry.update(cx, |registry, registry_cx| {
+                    registry.sync_active_theme(registry_cx)
+                })
+            })
+            .expect("sync active theme");
+
+            let message = process_receiver
+                .recv()
+                .await
+                .expect("theme message should be sent");
+            let decoded: HostToPlugin =
+                serde_json::from_str(&message).expect("theme message should decode");
+            assert!(matches!(decoded, HostToPlugin::ThemeChanged { .. }));
+
+            cx.update(|cx| {
+                let registry = registry.read(cx);
+                let panel_binding = registry
+                    .panels
+                    .get(&panel_instance_id)
+                    .expect("panel binding should persist after theme sync");
+                assert_eq!(panel_binding.panel_entity_id, panel_entity_id);
+
+                let widget_binding = registry
+                    .titlebar_widgets
+                    .get(&widget_instance_id)
+                    .expect("titlebar binding should persist after theme sync");
+                assert_eq!(widget_binding.widget.entity_id(), widget_entity_id);
+            });
+        }
+
+        #[gpui::test]
         async fn sync_workspace_panels_registers_on_startup_panels(cx: &mut TestAppContext) {
             init_test_app(cx);
 
@@ -7079,6 +7226,106 @@ side = "right"
                     .get(&panel_instance_id)
                     .and_then(|binding| binding.widget.read(cx).tree.clone());
                 assert_eq!(widget_tree, Some(root));
+            });
+        }
+
+        #[gpui::test]
+        async fn stale_titlebar_widget_render_before_binding_is_ignored(cx: &mut TestAppContext) {
+            init_test_app(cx);
+
+            let temp_dir = TempDir::new().expect("temp plugin dir");
+            let layout = PluginStoreLayout {
+                installed_root: temp_dir.path().join("installed"),
+                development_root: temp_dir.path().join("development"),
+            };
+            let plugin_root = layout.installed_root.join("test-plugin");
+            write_fake_plugin(
+                &plugin_root,
+                r#"
+id = "test-plugin"
+name = "Test Plugin"
+version = "0.1.0"
+schema_version = 1
+entry = "fake-plugin"
+
+[[titlebar_widgets]]
+id = "usage-widget"
+title = "Usage Widget"
+side = "right"
+"#,
+            )
+            .expect("write fake plugin");
+
+            let registry = new_test_registry(layout, cx);
+            let (process_receiver, _terminate_receiver) =
+                seed_process(&registry, "test-plugin", true, cx);
+
+            let workspace = WeakEntity::<Workspace>::new_invalid();
+            let panel_instance_id = titlebar_widget_instance_id(
+                &PluginId::new("test-plugin"),
+                "usage-widget",
+                workspace.entity_id(),
+            );
+            let stale_root =
+                UiNode::new(UiNodeKind::Div).with_child(UiNode::text("stale render payload"));
+
+            cx.update(|cx| {
+                registry
+                    .update(cx, |registry, registry_cx| {
+                        registry.apply_message(
+                            PluginId::new("test-plugin"),
+                            PluginToHost::Render {
+                                panel_id: String::from("usage-widget"),
+                                panel_instance_id: panel_instance_id.clone(),
+                                root: stale_root.clone(),
+                            },
+                            registry_cx,
+                        )
+                    })
+                    .expect("apply stale titlebar render");
+            });
+
+            assert!(
+                process_receiver.try_recv().is_err(),
+                "stale pre-bind render should not close titlebar widget session"
+            );
+
+            let rendered_root =
+                UiNode::new(UiNodeKind::Div).with_child(UiNode::text("render after binding"));
+
+            cx.update(|cx| {
+                registry
+                    .update(cx, |registry, registry_cx| {
+                        let widgets = registry.titlebar_widget_views(
+                            TitlebarStripSide::Right,
+                            workspace.clone(),
+                            registry_cx,
+                        )?;
+                        assert_eq!(widgets.len(), 1);
+                        Ok::<(), anyhow::Error>(())
+                    })
+                    .expect("create titlebar widget binding");
+
+                registry
+                    .update(cx, |registry, registry_cx| {
+                        registry.apply_message(
+                            PluginId::new("test-plugin"),
+                            PluginToHost::Render {
+                                panel_id: String::from("usage-widget"),
+                                panel_instance_id: panel_instance_id.clone(),
+                                root: rendered_root.clone(),
+                            },
+                            registry_cx,
+                        )
+                    })
+                    .expect("apply titlebar widget render");
+
+                let widget_tree = registry
+                    .read(cx)
+                    .titlebar_widgets
+                    .get(&panel_instance_id)
+                    .and_then(|binding| binding.widget.read(cx).tree.clone());
+                assert_eq!(widget_tree, Some(rendered_root));
             });
         }
 
