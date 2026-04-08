@@ -1266,36 +1266,36 @@ mod host {
                     patches,
                     ..
                 } => {
-                    let updated_root =
-                        if let Some(binding) = self.panels.get(&panel_instance_id).cloned() {
-                            let Some(mut root) = binding
-                                .panel
-                                .read_with(cx, |panel, _| panel.tree_for_render_delta())
-                                .unwrap_or_default()
-                            else {
-                                self.close_remote_view(&plugin_id, &panel_instance_id)?;
-                                return Ok(());
-                            };
-                            apply_ui_patches(&mut root, &patches).map_err(anyhow::Error::msg)?;
-                            Some((root, true))
-                        } else if let Some(widget) =
-                            self.titlebar_widgets.get(&panel_instance_id).cloned()
-                        {
-                            let Some(mut root) = widget.widget.read(cx).tree_for_render_delta()
-                            else {
-                                self.close_remote_view(&plugin_id, &panel_instance_id)?;
-                                return Ok(());
-                            };
-                            apply_ui_patches(&mut root, &patches).map_err(anyhow::Error::msg)?;
-                            Some((root, false))
-                        } else {
-                            self.ignore_stale_view_message(
-                                &plugin_id,
-                                &panel_instance_id,
-                                "render_delta",
-                            );
-                            None
+                    let updated_root = if let Some(binding) =
+                        self.panels.get(&panel_instance_id).cloned()
+                    {
+                        let Some(mut root) = binding
+                            .panel
+                            .read_with(cx, |panel, _| panel.tree_for_render_delta())
+                            .unwrap_or_default()
+                        else {
+                            self.close_remote_view(&plugin_id, &panel_instance_id)?;
+                            return Ok(());
                         };
+                        apply_ui_patches(&mut root, &patches).map_err(anyhow::Error::msg)?;
+                        Some((root, true))
+                    } else if let Some(widget) =
+                        self.titlebar_widgets.get(&panel_instance_id).cloned()
+                    {
+                        let Some(mut root) = widget.widget.read(cx).tree_for_render_delta() else {
+                            self.close_remote_view(&plugin_id, &panel_instance_id)?;
+                            return Ok(());
+                        };
+                        apply_ui_patches(&mut root, &patches).map_err(anyhow::Error::msg)?;
+                        Some((root, false))
+                    } else {
+                        self.ignore_stale_view_message(
+                            &plugin_id,
+                            &panel_instance_id,
+                            "render_delta",
+                        );
+                        None
+                    };
 
                     let Some((root, is_panel_binding)) = updated_root else {
                         return Ok(());
@@ -1899,6 +1899,8 @@ mod host {
         descriptor: PanelDescriptor,
         panel_instance_id: PanelInstanceId,
         activation_priority: u32,
+        zoomed: bool,
+        zoom_target_element_id: Option<String>,
         tree: Option<UiNode>,
         tree_for_delta_recovery: Option<UiNode>,
         render_generation: Option<u64>,
@@ -1925,6 +1927,8 @@ mod host {
                 descriptor,
                 panel_instance_id,
                 activation_priority,
+                zoomed: false,
+                zoom_target_element_id: None,
                 tree: None,
                 tree_for_delta_recovery: None,
                 render_generation: None,
@@ -1938,6 +1942,9 @@ mod host {
         }
 
         fn update_tree(&mut self, tree: UiNode, generation: Option<u64>, cx: &mut Context<Self>) {
+            if self.zoomed && self.zoom_target_element_id.is_none() {
+                self.zoom_target_element_id = tree_labeled_zoom_target_element_id(&tree);
+            }
             self.tree = Some(tree);
             self.tree_for_delta_recovery = None;
             self.render_generation = generation;
@@ -2045,6 +2052,45 @@ mod host {
                 items.extend(Self::collect_menu_items(child));
             }
             items
+        }
+
+        fn tree_for_display(&self) -> Option<UiNode> {
+            let tree = self.tree.clone()?;
+            if !self.zoomed {
+                return Some(tree);
+            }
+
+            let Some(target_element_id) = self.zoom_target_element_id.as_deref() else {
+                return Some(tree);
+            };
+
+            if let Some(target_node) = remote_node_with_element_id(&tree, target_element_id) {
+                return Some(target_node.clone());
+            }
+
+            Some(tree)
+        }
+
+        fn toggle_zoom(
+            &mut self,
+            _: &workspace::ToggleZoom,
+            window: &mut Window,
+            cx: &mut Context<Self>,
+        ) {
+            if self.zoomed {
+                cx.emit(PanelEvent::ZoomOut);
+            } else {
+                if self.zoom_target_element_id.is_none() {
+                    self.zoom_target_element_id = self
+                        .tree
+                        .as_ref()
+                        .and_then(tree_labeled_zoom_target_element_id);
+                }
+                if !self.focus_handle(cx).contains_focused(window, cx) {
+                    cx.focus_self(window);
+                }
+                cx.emit(PanelEvent::ZoomIn);
+            }
         }
 
         fn render_header(&self, cx: &mut Context<Self>) -> impl gpui::IntoElement {
@@ -2215,6 +2261,25 @@ mod host {
             .boxed_clone()
         }
 
+        fn is_zoomed(&self, _window: &Window, _cx: &App) -> bool {
+            self.zoomed
+        }
+
+        fn set_zoomed(&mut self, zoomed: bool, _window: &mut Window, cx: &mut Context<Self>) {
+            self.zoomed = zoomed;
+            if zoomed {
+                if self.zoom_target_element_id.is_none() {
+                    self.zoom_target_element_id = self
+                        .tree
+                        .as_ref()
+                        .and_then(tree_labeled_zoom_target_element_id);
+                }
+            } else {
+                self.zoom_target_element_id = None;
+            }
+            cx.notify();
+        }
+
         fn activation_priority(&self) -> u32 {
             self.activation_priority
         }
@@ -2230,6 +2295,8 @@ mod host {
                 .flex()
                 .flex_col()
                 .size_full()
+                .track_focus(&self.focus_handle(cx))
+                .on_action(cx.listener(Self::toggle_zoom))
                 .on_action(cx.listener(|this, action: &DispatchPluginClick, _, cx| {
                     this.dispatch_click(EventHandlerId::new(action.handler_id.clone()), cx);
                 }))
@@ -2244,7 +2311,7 @@ mod host {
                 );
             }
 
-            let content = if let Some(tree) = self.tree.clone() {
+            let content = if let Some(tree) = self.tree_for_display() {
                 render_remote_node(self, &tree, &[], cx)
             } else if let Some(startup_state) = self.startup_state {
                 let mut startup = v_flex()
@@ -2678,6 +2745,34 @@ mod host {
         })
     }
 
+    const LABELED_ZOOM_TARGET_FRAGMENT: &str = "zoom-target";
+
+    fn tree_labeled_zoom_target_element_id(node: &UiNode) -> Option<String> {
+        if let Some(element_id) = remote_node_element_id(node)
+            && element_id.contains(LABELED_ZOOM_TARGET_FRAGMENT)
+        {
+            return Some(element_id.to_string());
+        }
+
+        for child in &node.children {
+            if let Some(element_id) = tree_labeled_zoom_target_element_id(child) {
+                return Some(element_id);
+            }
+        }
+
+        None
+    }
+
+    fn remote_node_with_element_id<'a>(node: &'a UiNode, element_id: &str) -> Option<&'a UiNode> {
+        if remote_node_element_id(node).is_some_and(|id| id == element_id) {
+            return Some(node);
+        }
+
+        node.children
+            .iter()
+            .find_map(|child| remote_node_with_element_id(child, element_id))
+    }
+
     fn remote_host_element_id(
         prefix: &str,
         panel_instance_id: &PanelInstanceId,
@@ -2805,10 +2900,7 @@ mod host {
         if style_bool(&node.props, INTERACTIVE_PROP_TAB_GROUP).unwrap_or(false) {
             element = element.tab_group();
         }
-        for tab_navigation in div_tab_navigation_interactivity(node)
-            .into_iter()
-            .flatten()
-        {
+        for tab_navigation in div_tab_navigation_interactivity(node).into_iter().flatten() {
             element = match tab_navigation {
                 DivTabNavigationInteractivity::TabIndex(tab_index) => element.tab_index(tab_index),
                 DivTabNavigationInteractivity::TabStop(tab_stop) => element.tab_stop(tab_stop),
@@ -6334,6 +6426,21 @@ mod host {
             workspace::Workspace::new(None, project, app_state, window, cx)
         }
 
+        fn remote_panel_zoom_fixture_tree() -> UiNode {
+            UiNode::new(UiNodeKind::Div)
+                .with_element_id("plugin-surface-canvas-root")
+                .with_child(
+                    UiNode::new(UiNodeKind::Div)
+                        .with_element_id("plugin-surface-nested-zoom-target")
+                        .with_child(UiNode::text("Nested Zoom Target")),
+                )
+                .with_child(
+                    UiNode::new(UiNodeKind::Div)
+                        .with_element_id("plugin-surface-zoom-sibling")
+                        .with_child(UiNode::text("Sibling Region")),
+                )
+        }
+
         #[test]
         fn validate_ui_tree_limits_rejects_excessive_node_count() {
             let mut root = UiNode::new(UiNodeKind::Div);
@@ -6386,6 +6493,199 @@ mod host {
             );
 
             assert_eq!(host_id, "plugin-panel-div-panel-a-zoom-target");
+        }
+
+        #[test]
+        fn tree_labeled_zoom_target_element_id_finds_nested_labeled_node() {
+            let root = remote_panel_zoom_fixture_tree();
+
+            assert_eq!(
+                tree_labeled_zoom_target_element_id(&root).as_deref(),
+                Some("plugin-surface-nested-zoom-target")
+            );
+            assert!(
+                remote_node_with_element_id(&root, "plugin-surface-zoom-sibling").is_some(),
+                "fixture tree should contain sibling region before zoom selection"
+            );
+        }
+
+        #[gpui::test]
+        async fn remote_plugin_panel_toggle_zoom_sets_zoom_state(cx: &mut TestAppContext) {
+            init_test_app(cx);
+
+            let fs = FakeFs::new(cx.executor());
+            let project = Project::test(fs, [], cx).await;
+            let (workspace, cx) =
+                cx.add_window_view(|window, cx| new_test_workspace(project, window, cx));
+
+            let (event_sender, _event_receiver) = channel::unbounded();
+            let panel = workspace.update_in(cx, |workspace, window, workspace_cx| {
+                let panel = workspace_cx.new(|panel_cx| {
+                    RemotePluginPanel::new(
+                        "test-plugin",
+                        PanelDescriptor {
+                            id: "panel-a".to_string(),
+                            title: "Panel A".to_string(),
+                            dock: PluginDockPosition::Right,
+                            icon_name: None,
+                            tooltip: None,
+                            activation: PanelActivation::OnDemand,
+                        },
+                        PanelInstanceId::new("test-panel-a"),
+                        10_000,
+                        WeakEntity::<PluginHostRegistry>::new_invalid(),
+                        event_sender.clone(),
+                        panel_cx,
+                    )
+                });
+                panel.update(workspace_cx, |panel, panel_cx| {
+                    panel.update_tree(remote_panel_zoom_fixture_tree(), Some(1), panel_cx);
+                });
+
+                workspace.add_panel(panel.clone(), window, workspace_cx);
+                workspace
+                    .right_dock()
+                    .update(workspace_cx, |dock, dock_cx| {
+                        dock.set_open(true, window, dock_cx);
+                        let panel_index = dock
+                            .panel_index_for_id(panel.entity_id())
+                            .expect("panel should be registered in dock");
+                        dock.activate_panel(panel_index, window, dock_cx);
+                    });
+
+                panel
+            });
+
+            panel.update_in(cx, |panel, window, panel_cx| {
+                panel.toggle_zoom(&workspace::ToggleZoom, window, panel_cx);
+            });
+
+            workspace.update_in(cx, |workspace, window, workspace_cx| {
+                assert!(
+                    panel.read(workspace_cx).is_zoomed(window, workspace_cx),
+                    "plugin panel should track zoom state after ToggleZoom"
+                );
+                assert!(
+                    workspace.zoomed_item().is_some(),
+                    "workspace should track a zoomed item after plugin panel zoom"
+                );
+                let display_tree = panel
+                    .read(workspace_cx)
+                    .tree_for_display()
+                    .expect("zoomed panel should have a display tree");
+                assert_eq!(
+                    remote_node_element_id(&display_tree),
+                    Some("plugin-surface-nested-zoom-target"),
+                    "zoomed plugin panel should render only the labeled nested zoom target"
+                );
+                assert!(
+                    remote_node_with_element_id(&display_tree, "plugin-surface-zoom-sibling")
+                        .is_none(),
+                    "zoomed child-target rendering should exclude sibling plugin content"
+                );
+            });
+
+            panel.update_in(cx, |panel, window, panel_cx| {
+                panel.toggle_zoom(&workspace::ToggleZoom, window, panel_cx);
+            });
+
+            workspace.update_in(cx, |workspace, window, workspace_cx| {
+                assert!(
+                    !panel.read(workspace_cx).is_zoomed(window, workspace_cx),
+                    "second ToggleZoom should unzoom the plugin panel"
+                );
+                assert!(
+                    workspace.zoomed_item().is_none(),
+                    "workspace should clear zoom tracking after plugin panel unzoom"
+                );
+            });
+        }
+
+        #[gpui::test]
+        async fn moving_zoomed_remote_plugin_panel_keeps_single_zoomed_instance(
+            cx: &mut TestAppContext,
+        ) {
+            init_test_app(cx);
+
+            let fs = FakeFs::new(cx.executor());
+            let project = Project::test(fs, [], cx).await;
+            let (workspace, cx) =
+                cx.add_window_view(|window, cx| new_test_workspace(project, window, cx));
+
+            let (event_sender, _event_receiver) = channel::unbounded();
+            let panel = workspace.update_in(cx, |workspace, window, workspace_cx| {
+                let panel = workspace_cx.new(|panel_cx| {
+                    RemotePluginPanel::new(
+                        "test-plugin",
+                        PanelDescriptor {
+                            id: "panel-a".to_string(),
+                            title: "Panel A".to_string(),
+                            dock: PluginDockPosition::Right,
+                            icon_name: None,
+                            tooltip: None,
+                            activation: PanelActivation::OnDemand,
+                        },
+                        PanelInstanceId::new("test-panel-a"),
+                        10_000,
+                        WeakEntity::<PluginHostRegistry>::new_invalid(),
+                        event_sender.clone(),
+                        panel_cx,
+                    )
+                });
+                panel.update(workspace_cx, |panel, panel_cx| {
+                    panel.update_tree(remote_panel_zoom_fixture_tree(), Some(1), panel_cx);
+                });
+
+                workspace.add_panel(panel.clone(), window, workspace_cx);
+                workspace
+                    .right_dock()
+                    .update(workspace_cx, |dock, dock_cx| {
+                        dock.set_open(true, window, dock_cx);
+                        let panel_index = dock
+                            .panel_index_for_id(panel.entity_id())
+                            .expect("panel should be registered in dock");
+                        dock.activate_panel(panel_index, window, dock_cx);
+                    });
+
+                panel
+            });
+
+            panel.update_in(cx, |panel, window, panel_cx| {
+                panel.toggle_zoom(&workspace::ToggleZoom, window, panel_cx);
+            });
+
+            panel.update_in(cx, |panel, window, panel_cx| {
+                panel.set_position(DockPosition::Left, window, panel_cx);
+            });
+            cx.run_until_parked();
+
+            workspace.update_in(cx, |workspace, window, workspace_cx| {
+                assert_eq!(
+                    panel.read(workspace_cx).position(window, workspace_cx),
+                    DockPosition::Left,
+                    "moving focused panel should update plugin dock position"
+                );
+                let total_panel_count: usize = [
+                    workspace.left_dock(),
+                    workspace.right_dock(),
+                    workspace.bottom_dock(),
+                ]
+                .into_iter()
+                .map(|dock| dock.read(workspace_cx).panels_len())
+                .sum();
+                assert_eq!(
+                    total_panel_count, 1,
+                    "moving a zoomed plugin panel should keep exactly one panel instance"
+                );
+                assert!(
+                    workspace
+                        .left_dock()
+                        .read(workspace_cx)
+                        .zoomed_panel(window, workspace_cx)
+                        .is_some(),
+                    "moved plugin panel should remain zoomed in its new dock"
+                );
+            });
         }
 
         #[test]

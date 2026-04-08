@@ -592,6 +592,75 @@ impl Dock {
         }
     }
 
+    fn sync_panel_position<T: Panel>(
+        &mut self,
+        panel: &Entity<T>,
+        workspace: WeakEntity<Workspace>,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let new_position = panel.read(cx).position(window, cx);
+        if new_position == self.position {
+            return;
+        }
+
+        let Ok(new_dock) = workspace.update(cx, |workspace, cx| {
+            if panel.is_zoomed(window, cx) {
+                workspace.zoomed_position = Some(new_position);
+            }
+            match new_position {
+                DockPosition::Left => &workspace.left_dock,
+                DockPosition::Bottom => &workspace.bottom_dock,
+                DockPosition::Right => &workspace.right_dock,
+            }
+            .clone()
+        }) else {
+            return;
+        };
+
+        let panel_id = Entity::entity_id(panel);
+        let was_visible = self.is_open()
+            && self
+                .visible_panel(cx)
+                .is_some_and(|active_panel| active_panel.panel_id() == panel_id);
+        let size_state = self
+            .panel_entries
+            .iter()
+            .find(|entry| entry.panel.panel_id() == panel_id)
+            .map(|entry| entry.size_state)
+            .unwrap_or_default();
+
+        let previous_axis = self.position.axis();
+        let next_axis = new_position.axis();
+        let size_state = if previous_axis == next_axis {
+            size_state
+        } else {
+            PanelSizeState::default()
+        };
+
+        if !self.remove_panel(panel, window, cx) {
+            // Panel was already moved from this dock.
+            return;
+        }
+
+        new_dock.update(cx, |new_dock, cx| {
+            let index = new_dock.add_panel(panel.clone(), workspace.clone(), window, cx);
+            if let Some(added_panel) = new_dock.panel_for_id(panel_id).cloned() {
+                new_dock.set_panel_size_state(added_panel.as_ref(), size_state, cx);
+            }
+            if was_visible {
+                new_dock.set_open(true, window, cx);
+                new_dock.activate_panel(index, window, cx);
+            }
+        });
+
+        workspace
+            .update(cx, |workspace, cx| {
+                workspace.serialize_workspace(window, cx);
+            })
+            .ok();
+    }
+
     pub(crate) fn add_panel<T: Panel>(
         &mut self,
         panel: Entity<T>,
@@ -600,73 +669,20 @@ impl Dock {
         cx: &mut Context<Self>,
     ) -> usize {
         let subscriptions = [
-            cx.observe(&panel, |_, _, cx| cx.notify()),
+            cx.observe_in(&panel, window, {
+                let workspace = workspace.clone();
+                let panel = panel.clone();
+                move |this, _panel, window, cx| {
+                    this.sync_panel_position(&panel, workspace.clone(), window, cx);
+                    cx.notify();
+                }
+            }),
             cx.observe_global_in::<SettingsStore>(window, {
                 let workspace = workspace.clone();
                 let panel = panel.clone();
 
                 move |this, window, cx| {
-                    let new_position = panel.read(cx).position(window, cx);
-                    if new_position == this.position {
-                        return;
-                    }
-
-                    let Ok(new_dock) = workspace.update(cx, |workspace, cx| {
-                        if panel.is_zoomed(window, cx) {
-                            workspace.zoomed_position = Some(new_position);
-                        }
-                        match new_position {
-                            DockPosition::Left => &workspace.left_dock,
-                            DockPosition::Bottom => &workspace.bottom_dock,
-                            DockPosition::Right => &workspace.right_dock,
-                        }
-                        .clone()
-                    }) else {
-                        return;
-                    };
-
-                    let panel_id = Entity::entity_id(&panel);
-                    let was_visible = this.is_open()
-                        && this
-                            .visible_panel(cx)
-                            .is_some_and(|active_panel| active_panel.panel_id() == panel_id);
-                    let size_state = this
-                        .panel_entries
-                        .iter()
-                        .find(|entry| entry.panel.panel_id() == panel_id)
-                        .map(|entry| entry.size_state)
-                        .unwrap_or_default();
-
-                    let previous_axis = this.position.axis();
-                    let next_axis = new_position.axis();
-                    let size_state = if previous_axis == next_axis {
-                        size_state
-                    } else {
-                        PanelSizeState::default()
-                    };
-
-                    if !this.remove_panel(&panel, window, cx) {
-                        // Panel was already moved from this dock
-                        return;
-                    }
-
-                    new_dock.update(cx, |new_dock, cx| {
-                        let index =
-                            new_dock.add_panel(panel.clone(), workspace.clone(), window, cx);
-                        if let Some(added_panel) = new_dock.panel_for_id(panel_id).cloned() {
-                            new_dock.set_panel_size_state(added_panel.as_ref(), size_state, cx);
-                        }
-                        if was_visible {
-                            new_dock.set_open(true, window, cx);
-                            new_dock.activate_panel(index, window, cx);
-                        }
-                    });
-
-                    workspace
-                        .update(cx, |workspace, cx| {
-                            workspace.serialize_workspace(window, cx);
-                        })
-                        .ok();
+                    this.sync_panel_position(&panel, workspace.clone(), window, cx);
                 }
             }),
             cx.subscribe_in(
