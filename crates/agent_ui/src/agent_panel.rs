@@ -1489,6 +1489,21 @@ impl AgentPanel {
         });
     }
 
+    fn pop_in_panel(&mut self, cx: &mut Context<Self>) {
+        let Some(detached_window) = self.detached_window_handle else {
+            return;
+        };
+
+        if detached_window
+            .update(cx, |_root, window, _| {
+                window.remove_window();
+            })
+            .is_err()
+        {
+            self.set_detached_window_handle(None, cx);
+        }
+    }
+
     pub fn new_thread(&mut self, _action: &NewThread, window: &mut Window, cx: &mut Context<Self>) {
         self.reset_start_thread_in_to_default(cx);
         let initial_content = self.take_active_draft_initial_content(cx);
@@ -3886,6 +3901,27 @@ impl AgentPanel {
             }))
     }
 
+    fn render_pop_in_button(&self, cx: &mut Context<Self>) -> impl IntoElement {
+        IconButton::new("pop-in-agent-panel", IconName::ArrowDownRight)
+            .icon_size(IconSize::Small)
+            .tooltip(Tooltip::text("Pop In Agent Panel"))
+            .on_click(cx.listener(|this, _, _, cx| {
+                this.pop_in_panel(cx);
+            }))
+    }
+
+    fn show_pop_in_control(&self) -> bool {
+        self.detached_window_handle.is_some()
+    }
+
+    fn render_pop_toggle_button(&self, cx: &mut Context<Self>) -> AnyElement {
+        if self.show_pop_in_control() {
+            self.render_pop_in_button(cx).into_any_element()
+        } else {
+            self.render_pop_out_button(cx).into_any_element()
+        }
+    }
+
     fn project_has_git_repository(&self, cx: &App) -> bool {
         !self.project.read(cx).repositories(cx).is_empty()
     }
@@ -4360,7 +4396,7 @@ impl AgentPanel {
                         .gap_1()
                         .pl_1()
                         .pr_1()
-                        .child(self.render_pop_out_button(cx))
+                        .child(self.render_pop_toggle_button(cx))
                         .when(show_history_menu && !has_v2_flag, |this| {
                             this.child(self.render_recent_entries_menu(
                                 IconName::MenuAltTemp,
@@ -4413,7 +4449,7 @@ impl AgentPanel {
                         .gap_1()
                         .pl_1()
                         .pr_1()
-                        .child(self.render_pop_out_button(cx))
+                        .child(self.render_pop_toggle_button(cx))
                         .child(new_thread_menu)
                         .child(full_screen_button)
                         .child(self.render_panel_options_menu(window, cx)),
@@ -4971,9 +5007,19 @@ impl AgentPanel {
         self.pop_out_panel(window, cx);
     }
 
+    /// Restores the detached panel back into the workspace dock.
+    pub fn pop_in_panel_for_tests(&mut self, cx: &mut Context<Self>) {
+        self.pop_in_panel(cx);
+    }
+
     /// Returns the current detached window handle, if one exists.
     pub fn detached_window_handle_for_tests(&self) -> Option<gpui::AnyWindowHandle> {
         self.detached_window_handle.map(gpui::AnyWindowHandle::from)
+    }
+
+    /// Returns whether the panel should render pop-in control instead of pop-out.
+    pub fn show_pop_in_control_for_tests(&self) -> bool {
+        self.show_pop_in_control()
     }
 
     /// Returns the remembered detached window bounds for this workspace.
@@ -5687,6 +5733,76 @@ mod tests {
                 visible_panel_id,
                 Some(panel_id),
                 "closing the detached window should restore the docked panel"
+            );
+        });
+    }
+
+    #[gpui::test]
+    async fn test_detached_toolbar_uses_pop_in_and_pop_in_restores_dock(cx: &mut TestAppContext) {
+        let (workspace, panel, mut visual_cx) = setup_workspace_with_visible_panel(cx).await;
+        let panel_id = panel.entity_id();
+        let initial_window_count = cx.windows().len();
+
+        panel.read_with(&visual_cx, |panel, _| {
+            assert!(
+                !panel.show_pop_in_control_for_tests(),
+                "docked panel toolbar should offer pop-out, not pop-in"
+            );
+        });
+
+        panel.update_in(&mut visual_cx, |panel, window, cx| {
+            panel.open_detached_window_for_tests(window, cx);
+        });
+        visual_cx.run_until_parked();
+
+        panel.read_with(&visual_cx, |panel, _| {
+            assert!(
+                panel.show_pop_in_control_for_tests(),
+                "detached panel toolbar should offer pop-in instead of pop-out"
+            );
+        });
+
+        assert_eq!(
+            cx.windows().len(),
+            initial_window_count + 1,
+            "detaching should still produce exactly one detached window"
+        );
+
+        panel.update(&mut visual_cx, |panel, cx| {
+            panel.pop_in_panel_for_tests(cx);
+        });
+        visual_cx.run_until_parked();
+
+        assert_eq!(
+            cx.windows().len(),
+            initial_window_count,
+            "pop-in should close the detached window instead of opening additional pop-outs"
+        );
+
+        panel.read_with(&visual_cx, |panel, _| {
+            assert!(
+                panel.detached_window_handle_for_tests().is_none(),
+                "pop-in should clear detached window tracking state"
+            );
+            assert!(
+                !panel.show_pop_in_control_for_tests(),
+                "after pop-in, the docked toolbar should return to the pop-out control"
+            );
+        });
+
+        workspace.read_with(&visual_cx, |workspace, cx| {
+            let panel_position = workspace
+                .agent_panel_position(cx)
+                .expect("agent panel should still be tracked by workspace");
+            let visible_panel_id = workspace
+                .dock_at_position(panel_position)
+                .read(cx)
+                .visible_panel(cx)
+                .map(|panel| panel.panel_id());
+            assert_eq!(
+                visible_panel_id,
+                Some(panel_id),
+                "pop-in should restore the panel into its owning workspace dock"
             );
         });
     }
