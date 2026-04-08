@@ -1,0 +1,60 @@
+{
+  "milestone": "plugin-canvas",
+  "round": 1,
+  "status": "fail",
+  "validatorsRun": {
+    "test": {
+      "passed": true,
+      "command": "cargo test -p gpui_plugin --tests -- --test-threads=6 && cargo test -p ui_plugin --tests -- --test-threads=6 && cargo test -p plugin_host --tests -- --test-threads=6 && cargo test -p command_palette --lib --tests -- --test-threads=6 && cargo test -p keymap_editor --lib --tests -- --test-threads=6 && cargo test -p workspace --lib --tests -- --test-threads=6 && ./script/check-keymaps",
+      "exitCode": 0
+    },
+    "typecheck": {
+      "passed": true,
+      "command": "cargo check --workspace --all-targets",
+      "exitCode": 0
+    },
+    "lint": {
+      "passed": true,
+      "command": "./script/clippy",
+      "exitCode": 0
+    }
+  },
+  "reviewsSummary": {
+    "total": 4,
+    "passed": 2,
+    "failed": 2,
+    "failedFeatures": [
+      "plugin-canvas-input-focus-and-rerender",
+      "plugin-canvas-lifecycle-and-regression-guards"
+    ]
+  },
+  "blockingIssues": [
+    {
+      "featureId": "plugin-canvas-input-focus-and-rerender",
+      "severity": "blocking",
+      "description": "serialize_interactivity_props only serializes `tab_stop` when true, so explicit `tab_stop(false)` overrides are dropped. Host reconstruction applies `tab_index` first, making the surface focusable when it should not be."
+    },
+    {
+      "featureId": "plugin-canvas-lifecycle-and-regression-guards",
+      "severity": "blocking",
+      "description": "After error-state tree clearing, subsequent `RenderDelta` messages can trigger remote view close instead of recovery because delta handling treats missing trees as closed views."
+    }
+  ],
+  "appliedUpdates": [
+    {
+      "target": "services.yaml",
+      "description": "Added `test_codex_usage_plugin_mirror` command alias for codex fixture mirror tests used during plugin-canvas feature validation.",
+      "sourceFeature": "plugin-canvas-render-surfaces-and-theme"
+    }
+  ],
+  "suggestedGuidanceUpdates": [
+    {
+      "target": "plugin-surface-worker skill",
+      "suggestion": "When mirroring interactive props, serialize boolean fields with meaningful false overrides explicitly (for example, preserve `tab_stop(false)` even when `tab_index` is set).",
+      "evidence": "Review of plugin-canvas-input-focus-and-rerender found false tab-stop overrides dropped in `gpui_plugin` serialization while host applies `tab_index` before optional tab-stop override, creating focus parity regressions.",
+      "isSystemic": false
+    }
+  ],
+  "rejectedObservations": [],
+  "previousRound": null
+}

@@ -1,0 +1,28 @@
+{
+  "featureId": "plugin-canvas-input-focus-and-rerender",
+  "reviewedAt": "2026-04-08T21:31:57Z",
+  "commitId": "1aaf35a5ef",
+  "transcriptSkeletonReviewed": true,
+  "diffReviewed": true,
+  "status": "fail",
+  "codeReview": {
+    "summary": "The feature correctly routes interactive div metadata through gpui_plugin, plugin_protocol, and plugin_host, and adds targeted session-isolation coverage, but it drops explicit tab_stop(false) semantics during serialization.",
+    "issues": [
+      {
+        "file": "crates/gpui_plugin/src/gpui_plugin.rs",
+        "line": 119,
+        "severity": "blocking",
+        "description": "serialize_interactivity_props only emits INTERACTIVE_PROP_TAB_STOP when interactivity.tab_stop is true. If plugin code sets tab_index(...) and then tab_stop(false), that false override is not serialized. On host reconstruction, apply_div_interactivity applies tab_index first (crates/plugin_host/src/plugin_host.rs:2764), which enables tab-stop behavior, and the missing false prop means it is never disabled again. This breaks native parity for focus/tab routing and can cause unexpected shortcut interception."
+      }
+    ]
+  },
+  "sharedStateObservations": [
+    {
+      "area": "conventions",
+      "observation": "Shared guidance does not explicitly call out that mirrored boolean interactivity fields with meaningful false overrides (like tab_stop(false) after tab_index) must be serialized as false to preserve host/runtime parity.",
+      "evidence": "crates/gpui_plugin/src/gpui_plugin.rs:119 only serializes tab_stop when true; crates/plugin_host/src/plugin_host.rs:2764-2768 applies tab_index before optional tab_stop override."
+    }
+  ],
+  "addressesFailureFrom": null,
+  "summary": "Reviewed the feature transcript skeleton, handoff, skill, and commit 1aaf35a5ef. Found one blocking bug: explicit tab_stop(false) overrides are lost across protocol serialization, which can make host-rendered plugin surfaces incorrectly focusable and alter shortcut routing."
+}

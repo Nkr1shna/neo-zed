@@ -10,6 +10,7 @@ commands:
   test_command_palette: cargo test -p command_palette --lib --tests -- --test-threads=6
   test_keymap_editor: cargo test -p keymap_editor --lib --tests -- --test-threads=6
   test_workspace: cargo test -p workspace --lib --tests -- --test-threads=6
+  test_codex_usage_plugin_mirror: cargo test -p codex-usage-plugin --features mirror --tests
   check_keymaps: ./script/check-keymaps
   build_visual_test_runner: cargo build -p zed --bin zed_visual_test_runner --features visual-tests
   build: cargo build --workspace --bins --examples

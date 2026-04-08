@@ -1,0 +1,22 @@
+{
+  "featureId": "plugin-canvas-lifecycle-and-regression-guards",
+  "reviewedAt": "2026-04-08T21:31:27Z",
+  "commitId": "59c17f2813effc65f9c1160780e41a16be6fce60",
+  "transcriptSkeletonReviewed": true,
+  "diffReviewed": true,
+  "status": "fail",
+  "codeReview": {
+    "summary": "Generation-aware stale-event filtering and lifecycle tree clearing are implemented, but a blocking recovery regression was introduced for error-state panels/widgets.",
+    "issues": [
+      {
+        "file": "crates/plugin_host/src/plugin_host.rs",
+        "line": 1262,
+        "severity": "blocking",
+        "description": "Error-state recovery can now close live views: `set_error` clears `tree` (e.g. lines 477-479 and 1932-1934), but `RenderDelta` handling closes the remote view when no tree is present (line 1262+). `gpui_plugin` continues to emit `RenderDelta` after initial render whenever dirty (`collect_messages` at `crates/gpui_plugin/src/gpui_plugin.rs:293-303`), so a plugin that reports an error and then rerenders can be force-closed instead of recovering."
+      }
+    ]
+  },
+  "sharedStateObservations": [],
+  "addressesFailureFrom": null,
+  "summary": "Reviewed transcript skeleton, skill usage, and commit 59c17f2813effc65f9c1160780e41a16be6fce60. The feature mostly matches lifecycle hardening goals, but introduced a blocking error-recovery regression where post-error rerenders can close the remote view."
+}
