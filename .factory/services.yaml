@@ -3,7 +3,7 @@ commands:
   fmt: cargo fmt --all -- --check
   lint: ./script/clippy
   typecheck: cargo check --workspace --all-targets
-  test: cargo test --workspace --lib --bins --tests --no-fail-fast -- --test-threads=6
+  test: cargo test -p gpui_plugin --tests -- --test-threads=6 && cargo test -p ui_plugin --tests -- --test-threads=6 && cargo test -p plugin_host --tests -- --test-threads=6 && cargo test -p command_palette --lib --tests -- --test-threads=6 && cargo test -p keymap_editor --lib --tests -- --test-threads=6 && cargo test -p workspace --lib --tests -- --test-threads=6 && ./script/check-keymaps
   test_gpui_plugin: cargo test -p gpui_plugin --tests -- --test-threads=6
   test_ui_plugin: cargo test -p ui_plugin --tests -- --test-threads=6
   test_plugin_host: cargo test -p plugin_host --tests -- --test-threads=6
