@@ -2,12 +2,16 @@ use anyhow::Context as _;
 use futures::{FutureExt as _, future::select, pin_mut};
 use gpui_api::{RenderContext, StyleMap, UiNode, UiNodeKind};
 use plugin_protocol::{
-    HostThemeSnapshot, HostToPlugin, PanelDescriptor, PanelInstanceId, PluginId, PluginMetadata,
-    PluginToHost, SerializedActionEvent, SerializedClickEvent, SerializedKeyDownEvent,
-    SerializedKeyUpEvent, SerializedModifiersChangedEvent, SerializedMouseDownEvent,
-    SerializedMouseMoveEvent, SerializedMousePressureEvent, SerializedMouseUpEvent,
-    SerializedPinchEvent, SerializedScrollWheelEvent, TitlebarWidgetDescriptor,
-    UiEventKind as ProtocolUiEventKind, diff_ui_trees,
+    HostThemeSnapshot, HostToPlugin, INTERACTIVE_PROP_BLOCK_MOUSE_EXCEPT_SCROLL,
+    INTERACTIVE_PROP_FOCUSABLE, INTERACTIVE_PROP_GROUP, INTERACTIVE_PROP_KEY_CONTEXT,
+    INTERACTIVE_PROP_OCCLUDE, INTERACTIVE_PROP_TAB_GROUP, INTERACTIVE_PROP_TAB_INDEX,
+    INTERACTIVE_PROP_TAB_STOP, INTERACTIVE_PROP_WINDOW_CONTROL_AREA, PanelDescriptor,
+    PanelInstanceId, PluginId, PluginMetadata, PluginToHost, SerializedActionEvent,
+    SerializedClickEvent, SerializedKeyDownEvent, SerializedKeyUpEvent,
+    SerializedModifiersChangedEvent, SerializedMouseDownEvent, SerializedMouseMoveEvent,
+    SerializedMousePressureEvent, SerializedMouseUpEvent, SerializedPinchEvent,
+    SerializedScrollWheelEvent, TitlebarWidgetDescriptor, UiEventKind as ProtocolUiEventKind,
+    diff_ui_trees,
 };
 use serde::Deserialize;
 use std::{
@@ -91,6 +95,7 @@ impl Element for Div {
             node.props
                 .insert("element_id".to_string(), element_id.into());
         }
+        serialize_interactivity_props(&mut node.props, &self.interactivity);
         node.events = Iterator::map(self.interactivity.handlers().iter().cloned(), |handler| {
             context.register_event_handler(handler)
         })
@@ -98,6 +103,65 @@ impl Element for Div {
         node.children =
             Iterator::map(self.children.into_iter(), |child| child.into_node(context)).collect();
         node
+    }
+}
+
+fn serialize_interactivity_props(
+    props: &mut BTreeMap<String, plugin_protocol::StyleValue>,
+    interactivity: &Interactivity,
+) {
+    if let Some(group_name) = interactivity.group.as_ref() {
+        props.insert(
+            INTERACTIVE_PROP_GROUP.to_string(),
+            group_name.to_string().into(),
+        );
+    }
+    if interactivity.tab_stop {
+        props.insert(INTERACTIVE_PROP_TAB_STOP.to_string(), true.into());
+    }
+    if let Some(tab_index) = interactivity.tab_index {
+        props.insert(
+            INTERACTIVE_PROP_TAB_INDEX.to_string(),
+            (tab_index as f32).into(),
+        );
+    }
+    if interactivity.tab_group {
+        props.insert(INTERACTIVE_PROP_TAB_GROUP.to_string(), true.into());
+    }
+    if interactivity.focusable {
+        props.insert(INTERACTIVE_PROP_FOCUSABLE.to_string(), true.into());
+    }
+    if let Some(key_context) = interactivity.key_context.as_ref() {
+        props.insert(
+            INTERACTIVE_PROP_KEY_CONTEXT.to_string(),
+            key_context.clone().into(),
+        );
+    }
+    if let Some(window_control_area) = interactivity.window_control_area {
+        props.insert(
+            INTERACTIVE_PROP_WINDOW_CONTROL_AREA.to_string(),
+            window_control_area_name(window_control_area)
+                .to_string()
+                .into(),
+        );
+    }
+    if interactivity.occlude {
+        props.insert(INTERACTIVE_PROP_OCCLUDE.to_string(), true.into());
+    }
+    if interactivity.block_mouse_except_scroll {
+        props.insert(
+            INTERACTIVE_PROP_BLOCK_MOUSE_EXCEPT_SCROLL.to_string(),
+            true.into(),
+        );
+    }
+}
+
+fn window_control_area_name(window_control_area: WindowControlArea) -> &'static str {
+    match window_control_area {
+        WindowControlArea::Drag => "drag",
+        WindowControlArea::Close => "close",
+        WindowControlArea::Max => "max",
+        WindowControlArea::Min => "min",
     }
 }
 

@@ -65,6 +65,8 @@ const AUTO_REFRESH_INTERVAL_MILLIS: u64 = 60 * 1_000;
 const VIEW_POLL_INTERVAL_MILLIS: u64 = 500;
 #[cfg(feature = "mirror")]
 const FIXTURE_TITLEBAR_FIRST_RENDER_DELAY_MILLIS: u64 = 650;
+#[cfg(feature = "mirror")]
+const FIXTURE_ASYNC_RERENDER_DELAY_MILLIS: u64 = 150;
 const LOGIN_TIMEOUT_SECONDS: u64 = 2 * 60;
 const SUCCESS_HTML: &str =
     "<!doctype html><html><body><p>Authentication successful. Return to Zed.</p></body></html>";
@@ -2225,13 +2227,30 @@ impl Render for CodexUsageTitlebarWidget {
 struct PluginSurfaceFixturePanel {
     store: ValidationFixtureStore,
     snapshot: ValidationFixtureSnapshot,
+    canvas_focus_handle: gpui_plugin::FocusHandle,
+    pointer_event_count: u64,
+    scroll_event_count: u64,
+    pinch_event_count: u64,
+    keyboard_event_count: u64,
+    async_rerender_count: u64,
+    last_keyboard_event: String,
 }
 
 #[cfg(feature = "mirror")]
 impl PluginSurfaceFixturePanel {
     fn new(store: ValidationFixtureStore, cx: &mut Context<Self>) -> Self {
         let snapshot = store.begin_surface_session();
-        let this = Self { store, snapshot };
+        let this = Self {
+            store,
+            snapshot,
+            canvas_focus_handle: gpui_plugin::FocusHandle,
+            pointer_event_count: 0,
+            scroll_event_count: 0,
+            pinch_event_count: 0,
+            keyboard_event_count: 0,
+            async_rerender_count: 0,
+            last_keyboard_event: "none".to_string(),
+        };
         this.spawn_sync_loop(cx);
         this
     }
@@ -2265,6 +2284,49 @@ impl PluginSurfaceFixturePanel {
         let snapshot = self.store.record_action();
         self.sync_snapshot(snapshot, cx);
     }
+
+    fn focus_canvas(&self, window: &mut Window, cx: &mut Context<Self>) {
+        window.focus(&self.canvas_focus_handle, cx);
+    }
+
+    fn record_pointer_event(&mut self, cx: &mut Context<Self>) {
+        self.pointer_event_count = self.pointer_event_count.saturating_add(1);
+        cx.notify();
+    }
+
+    fn record_scroll_event(&mut self, cx: &mut Context<Self>) {
+        self.scroll_event_count = self.scroll_event_count.saturating_add(1);
+        cx.notify();
+    }
+
+    fn record_pinch_event(&mut self, cx: &mut Context<Self>) {
+        self.pinch_event_count = self.pinch_event_count.saturating_add(1);
+        cx.notify();
+    }
+
+    fn record_keyboard_event(
+        &mut self,
+        keyboard_event: &gpui_plugin::KeyDownEvent,
+        cx: &mut Context<Self>,
+    ) {
+        self.keyboard_event_count = self.keyboard_event_count.saturating_add(1);
+        self.last_keyboard_event = keyboard_event.keystroke.key.clone();
+        cx.notify();
+    }
+
+    #[allow(clippy::disallowed_methods)]
+    fn trigger_async_rerender(&mut self, cx: &mut Context<Self>) {
+        cx.spawn(async move |this, cx| {
+            smol::Timer::after(Duration::from_millis(FIXTURE_ASYNC_RERENDER_DELAY_MILLIS)).await;
+            if let Err(error) = this.update(cx, |this, cx| {
+                this.async_rerender_count = this.async_rerender_count.saturating_add(1);
+                cx.notify();
+            }) {
+                eprintln!("failed to apply async fixture rerender update: {error:#}");
+            }
+        })
+        .detach();
+    }
 }
 
 #[cfg(feature = "mirror")]
@@ -2293,6 +2355,26 @@ impl Render for PluginSurfaceFixturePanel {
             .child(Label::new(format!(
                 "Theme: {theme_name} ({theme_appearance})"
             )))
+            .child(Label::new(format!(
+                "Canvas pointer events: {}",
+                self.pointer_event_count
+            )))
+            .child(Label::new(format!(
+                "Canvas scroll events: {}",
+                self.scroll_event_count
+            )))
+            .child(Label::new(format!(
+                "Canvas pinch events: {}",
+                self.pinch_event_count
+            )))
+            .child(Label::new(format!(
+                "Canvas keyboard events: {} (last key: {})",
+                self.keyboard_event_count, self.last_keyboard_event
+            )))
+            .child(Label::new(format!(
+                "Canvas async rerenders: {}",
+                self.async_rerender_count
+            )))
             .child(
                 Button::new(
                     "plugin-surface-fixture-increment-action",
@@ -2303,8 +2385,24 @@ impl Render for PluginSurfaceFixturePanel {
                 })),
             )
             .child(
+                Button::new(
+                    "plugin-surface-fixture-trigger-async-rerender",
+                    "Trigger async rerender",
+                )
+                .on_click(cx.listener(|this, _: &ClickEvent, _window, cx| {
+                    this.trigger_async_rerender(cx);
+                })),
+            )
+            .child(
                 div()
                     .id("plugin-surface-canvas-root")
+                    .track_focus(&self.canvas_focus_handle)
+                    .tab_stop(true)
+                    .tab_index(0)
+                    .tab_group()
+                    .focusable()
+                    .key_context("Workspace")
+                    .block_mouse_except_scroll()
                     .w_full()
                     .flex()
                     .flex_col()
@@ -2314,6 +2412,38 @@ impl Render for PluginSurfaceFixturePanel {
                     .border_1()
                     .border_color(cx.theme().colors().border)
                     .bg(cx.theme().colors().editor_background)
+                    .on_click(cx.listener(|this, _: &ClickEvent, window, cx| {
+                        this.focus_canvas(window, cx);
+                        this.record_pointer_event(cx);
+                    }))
+                    .on_mouse_down(gpui_plugin::MouseButton::Left, cx.listener(
+                        |this, _: &gpui_plugin::MouseDownEvent, _window, cx| {
+                            this.record_pointer_event(cx);
+                        },
+                    ))
+                    .on_mouse_up(gpui_plugin::MouseButton::Left, cx.listener(
+                        |this, _: &gpui_plugin::MouseUpEvent, _window, cx| {
+                            this.record_pointer_event(cx);
+                        },
+                    ))
+                    .on_mouse_move(cx.listener(
+                        |this, _: &gpui_plugin::MouseMoveEvent, _window, cx| {
+                            this.record_pointer_event(cx);
+                        },
+                    ))
+                    .on_scroll_wheel(cx.listener(
+                        |this, _: &gpui_plugin::ScrollWheelEvent, _window, cx| {
+                            this.record_scroll_event(cx);
+                        },
+                    ))
+                    .on_pinch(cx.listener(
+                        |this, _: &gpui_plugin::PinchEvent, _window, cx| {
+                            this.record_pinch_event(cx);
+                        },
+                    ))
+                    .on_key_down(cx.listener(|this, keyboard_event, _window, cx| {
+                        this.record_keyboard_event(keyboard_event, cx);
+                    }))
                     .child(
                         Label::new("Canvas Surface (fixture)")
                             .weight(gpui_plugin::FontWeight(600.0)),

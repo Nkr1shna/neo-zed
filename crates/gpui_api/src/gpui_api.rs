@@ -410,7 +410,7 @@ pub struct Interactivity {
     pub tab_index: Option<isize>,
     pub tab_group: bool,
     pub focusable: bool,
-    pub key_context: bool,
+    pub key_context: Option<String>,
     pub window_control_area: Option<WindowControlArea>,
     pub tracked_scroll_handle: Option<ScrollHandle>,
     pub scroll_anchor: Option<ScrollAnchor>,
@@ -1955,8 +1955,8 @@ pub trait InteractiveElement: Sized {
         C: TryInto<KeyContext, Error = E>,
         E: fmt::Debug,
     {
-        if key_context.try_into().is_ok() {
-            self.interactivity().key_context = true;
+        if let Ok(parsed_key_context) = key_context.try_into() {
+            self.interactivity().key_context = Some(format!("{parsed_key_context:?}"));
         }
         self
     }

@@ -3,8 +3,8 @@ use gpui_api::{
     Window,
 };
 use gpui_plugin::{
-    InteractiveElement, IntoElement, RenderOutput, RenderRoot, StatefulInteractiveElement, Styled,
-    div, h_flex, v_flex,
+    InteractiveElement, IntoElement, ParentElement, RenderOutput, RenderRoot,
+    StatefulInteractiveElement, Styled, div, h_flex, v_flex,
 };
 use ui_plugin::{Button, Divider, Label};
 
@@ -233,5 +233,72 @@ fn mirror_runtime_dispatches_action_events() {
     assert_eq!(
         rerendered.tree.children[0].text.as_deref(),
         Some("actions=1")
+    );
+}
+
+struct InteractivityMirrorPanel;
+
+impl Render for InteractivityMirrorPanel {
+    fn render(&mut self, _window: &mut Window, _cx: &mut Context<Self>) -> impl IntoElement {
+        div()
+            .group("plugin-surface-fixture")
+            .id("interactivity-root")
+            .tab_stop(true)
+            .tab_index(3)
+            .tab_group()
+            .focusable()
+            .key_context("Workspace")
+            .window_control_area(gpui_plugin::WindowControlArea::Drag)
+            .occlude()
+            .block_mouse_except_scroll()
+            .child(Label::new("interactivity"))
+    }
+}
+
+#[test]
+fn mirror_runtime_serializes_div_interactivity_props_for_host_dispatch() {
+    let mut runtime = Runtime::new();
+    let panel = runtime.new_entity(|_| InteractivityMirrorPanel);
+
+    let render_output = runtime.render_root(&panel).expect("render succeeds");
+    let props = &render_output.tree.props;
+
+    assert_eq!(
+        props.get(plugin_protocol::INTERACTIVE_PROP_GROUP),
+        Some(&plugin_protocol::StyleValue::Text(
+            "plugin-surface-fixture".to_string()
+        ))
+    );
+    assert_eq!(
+        props.get(plugin_protocol::INTERACTIVE_PROP_TAB_STOP),
+        Some(&plugin_protocol::StyleValue::Bool(true))
+    );
+    assert_eq!(
+        props.get(plugin_protocol::INTERACTIVE_PROP_TAB_INDEX),
+        Some(&plugin_protocol::StyleValue::Number(3.0))
+    );
+    assert_eq!(
+        props.get(plugin_protocol::INTERACTIVE_PROP_TAB_GROUP),
+        Some(&plugin_protocol::StyleValue::Bool(true))
+    );
+    assert_eq!(
+        props.get(plugin_protocol::INTERACTIVE_PROP_FOCUSABLE),
+        Some(&plugin_protocol::StyleValue::Bool(true))
+    );
+    assert_eq!(
+        props.get(plugin_protocol::INTERACTIVE_PROP_KEY_CONTEXT),
+        Some(&plugin_protocol::StyleValue::Text("Workspace".to_string()))
+    );
+    assert_eq!(
+        props.get(plugin_protocol::INTERACTIVE_PROP_WINDOW_CONTROL_AREA),
+        Some(&plugin_protocol::StyleValue::Text("drag".to_string()))
+    );
+    assert_eq!(
+        props.get(plugin_protocol::INTERACTIVE_PROP_OCCLUDE),
+        Some(&plugin_protocol::StyleValue::Bool(true))
+    );
+    assert_eq!(
+        props.get(plugin_protocol::INTERACTIVE_PROP_BLOCK_MOUSE_EXCEPT_SCROLL),
+        Some(&plugin_protocol::StyleValue::Bool(true))
     );
 }

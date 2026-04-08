@@ -224,6 +224,17 @@ pub struct UiNode {
     pub children: Vec<UiNode>,
 }
 
+pub const INTERACTIVE_PROP_GROUP: &str = "interactive_group";
+pub const INTERACTIVE_PROP_TAB_STOP: &str = "interactive_tab_stop";
+pub const INTERACTIVE_PROP_TAB_INDEX: &str = "interactive_tab_index";
+pub const INTERACTIVE_PROP_TAB_GROUP: &str = "interactive_tab_group";
+pub const INTERACTIVE_PROP_FOCUSABLE: &str = "interactive_focusable";
+pub const INTERACTIVE_PROP_KEY_CONTEXT: &str = "interactive_key_context";
+pub const INTERACTIVE_PROP_WINDOW_CONTROL_AREA: &str = "interactive_window_control_area";
+pub const INTERACTIVE_PROP_OCCLUDE: &str = "interactive_occlude";
+pub const INTERACTIVE_PROP_BLOCK_MOUSE_EXCEPT_SCROLL: &str =
+    "interactive_block_mouse_except_scroll";
+
 impl UiNode {
     pub fn new(kind: UiNodeKind) -> Self {
         Self {

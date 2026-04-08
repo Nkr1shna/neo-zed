@@ -192,3 +192,114 @@ fn action_dispatch_roundtrips_through_the_plugin_session() {
     };
     assert_eq!(tree.children[0].text.as_deref(), Some("Actions: 1"));
 }
+
+#[test]
+fn two_plugin_sessions_do_not_cross_talk_during_dispatch_or_rerender() {
+    let mut first_runtime = Runtime::new();
+    let first_panel = first_runtime.new_entity(|_| SessionPanel {
+        count: 0,
+        status: "idle".to_string(),
+    });
+    let mut first_session = PanelSession::new(first_runtime, first_panel);
+
+    let mut second_runtime = Runtime::new();
+    let second_panel = second_runtime.new_entity(|_| SessionPanel {
+        count: 0,
+        status: "idle".to_string(),
+    });
+    let mut second_session = PanelSession::new(second_runtime, second_panel);
+
+    let first_render = first_session
+        .initial_render()
+        .expect("first initial render");
+    let second_render = second_session
+        .initial_render()
+        .expect("second initial render");
+    let first_increment_handler_id = extract_button_handler_id(&first_render, "Increment");
+    let second_increment_handler_id = extract_button_handler_id(&second_render, "Increment");
+
+    let first_rerender = first_session
+        .handle_message(HostToPluginMessage::DispatchEvent {
+            handler_id: first_increment_handler_id.clone(),
+            event: UiEvent::Click(ClickEvent::default()),
+        })
+        .expect("first dispatch succeeds")
+        .expect("first rerender returned");
+    assert!(matches!(
+        first_rerender,
+        PluginToHostMessage::RerenderRequested { .. }
+    ));
+    assert!(
+        second_session
+            .handle_message(HostToPluginMessage::DispatchEvent {
+                handler_id: second_increment_handler_id,
+                event: UiEvent::Click(ClickEvent::default()),
+            })
+            .expect("second dispatch succeeds")
+            .is_some()
+    );
+
+    let first_rendered = first_session
+        .render_if_dirty()
+        .expect("first rerender succeeds");
+    let second_rendered = second_session
+        .render_if_dirty()
+        .expect("second rerender succeeds");
+
+    let PluginToHostMessage::Rendered {
+        tree: first_tree, ..
+    } = first_rendered
+    else {
+        panic!("expected first rendered tree");
+    };
+    let PluginToHostMessage::Rendered {
+        tree: second_tree, ..
+    } = second_rendered
+    else {
+        panic!("expected second rendered tree");
+    };
+
+    assert_eq!(first_tree.children[0].text.as_deref(), Some("Count: 1"));
+    assert_eq!(second_tree.children[0].text.as_deref(), Some("Count: 1"));
+
+    let first_second_dispatch = first_session
+        .handle_message(HostToPluginMessage::DispatchEvent {
+            handler_id: first_increment_handler_id,
+            event: UiEvent::Click(ClickEvent::default()),
+        })
+        .expect("first second dispatch succeeds")
+        .expect("first second rerender returned");
+    assert!(matches!(
+        first_second_dispatch,
+        PluginToHostMessage::RerenderRequested { .. }
+    ));
+    let first_second_rendered = first_session
+        .render_if_dirty()
+        .expect("first second rerender succeeds");
+    let PluginToHostMessage::Rendered {
+        tree: first_second_tree,
+        ..
+    } = first_second_rendered
+    else {
+        panic!("expected first second rendered tree");
+    };
+    assert_eq!(
+        first_second_tree.children[0].text.as_deref(),
+        Some("Count: 2")
+    );
+
+    let second_final_rendered = second_session
+        .render_if_dirty()
+        .expect("second final render succeeds");
+    let PluginToHostMessage::Rendered {
+        tree: second_final_tree,
+        ..
+    } = second_final_rendered
+    else {
+        panic!("expected second final rendered tree");
+    };
+    assert_eq!(
+        second_final_tree.children[0].text.as_deref(),
+        Some("Count: 1")
+    );
+}

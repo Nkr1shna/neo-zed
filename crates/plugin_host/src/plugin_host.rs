@@ -127,13 +127,16 @@ mod host {
     use plugin::{InstalledPlugin, PluginStore, PluginStoreLayout};
     use plugin_protocol::{
         DockPosition as PluginDockPosition, EventHandlerId, HostThemeSnapshot, HostToPlugin,
-        PanelActivation, PanelDescriptor, PanelInstanceId, PluginHostRequest, PluginHostResponse,
-        PluginId, PluginToHost, SerializedActionEvent, SerializedClickEvent,
-        SerializedKeyDownEvent, SerializedKeyUpEvent, SerializedModifiersChangedEvent,
-        SerializedMouseDownEvent, SerializedMouseMoveEvent, SerializedMousePressureEvent,
-        SerializedMouseUpEvent, SerializedPinchEvent, SerializedScrollWheelEvent, StyleValue,
-        TitlebarWidgetDescriptor, TitlebarWidgetSide, UiEvent, UiEventKind, UiEventPhase, UiNode,
-        UiNodeKind, apply_ui_patches,
+        INTERACTIVE_PROP_BLOCK_MOUSE_EXCEPT_SCROLL, INTERACTIVE_PROP_FOCUSABLE,
+        INTERACTIVE_PROP_GROUP, INTERACTIVE_PROP_KEY_CONTEXT, INTERACTIVE_PROP_OCCLUDE,
+        INTERACTIVE_PROP_TAB_GROUP, INTERACTIVE_PROP_TAB_INDEX, INTERACTIVE_PROP_TAB_STOP,
+        INTERACTIVE_PROP_WINDOW_CONTROL_AREA, PanelActivation, PanelDescriptor, PanelInstanceId,
+        PluginHostRequest, PluginHostResponse, PluginId, PluginToHost, SerializedActionEvent,
+        SerializedClickEvent, SerializedKeyDownEvent, SerializedKeyUpEvent,
+        SerializedModifiersChangedEvent, SerializedMouseDownEvent, SerializedMouseMoveEvent,
+        SerializedMousePressureEvent, SerializedMouseUpEvent, SerializedPinchEvent,
+        SerializedScrollWheelEvent, StyleValue, TitlebarWidgetDescriptor, TitlebarWidgetSide,
+        UiEvent, UiEventKind, UiEventPhase, UiNode, UiNodeKind, apply_ui_patches,
     };
     use serde::Deserialize;
     #[cfg(target_os = "windows")]
@@ -2496,14 +2499,21 @@ mod host {
                     node,
                     fallback_div_identity,
                 );
-                let element = if node.events.is_empty() {
+                let has_interactivity_props = node_has_div_interactivity_props(node);
+                let element = if node.events.is_empty() && !has_interactivity_props {
                     if remote_node_element_id(node).is_some() {
                         element.id(div_id).into_any_element()
                     } else {
                         element.into_any_element()
                     }
                 } else {
-                    apply_div_events(element.id(div_id), node, cx).into_any_element()
+                    let element = apply_div_interactivity(element.id(div_id), node);
+                    let element = if node.events.is_empty() {
+                        element
+                    } else {
+                        apply_div_events(element, node, cx)
+                    };
+                    element.into_any_element()
                 };
                 wrap_action_bindings(element, node, cx)
             }
@@ -2693,6 +2703,76 @@ mod host {
             )),
             _ => None,
         }
+    }
+
+    fn node_has_div_interactivity_props(node: &UiNode) -> bool {
+        node.props.contains_key(INTERACTIVE_PROP_GROUP)
+            || node.props.contains_key(INTERACTIVE_PROP_TAB_STOP)
+            || node.props.contains_key(INTERACTIVE_PROP_TAB_INDEX)
+            || node.props.contains_key(INTERACTIVE_PROP_TAB_GROUP)
+            || node.props.contains_key(INTERACTIVE_PROP_FOCUSABLE)
+            || node.props.contains_key(INTERACTIVE_PROP_KEY_CONTEXT)
+            || node
+                .props
+                .contains_key(INTERACTIVE_PROP_WINDOW_CONTROL_AREA)
+            || node.props.contains_key(INTERACTIVE_PROP_OCCLUDE)
+            || node
+                .props
+                .contains_key(INTERACTIVE_PROP_BLOCK_MOUSE_EXCEPT_SCROLL)
+    }
+
+    fn window_control_area_from_prop(value: &str) -> Option<gpui::WindowControlArea> {
+        match value {
+            "drag" => Some(gpui::WindowControlArea::Drag),
+            "close" => Some(gpui::WindowControlArea::Close),
+            "max" => Some(gpui::WindowControlArea::Max),
+            "min" => Some(gpui::WindowControlArea::Min),
+            _ => None,
+        }
+    }
+
+    fn apply_div_interactivity(
+        mut element: gpui::Stateful<gpui::Div>,
+        node: &UiNode,
+    ) -> gpui::Stateful<gpui::Div> {
+        if let Some(group_name) = style_text(&node.props, INTERACTIVE_PROP_GROUP) {
+            element = element.group(group_name);
+        }
+        if style_bool(&node.props, INTERACTIVE_PROP_TAB_GROUP).unwrap_or(false) {
+            element = element.tab_group();
+        }
+        if let Some(tab_index) = style_isize(&node.props, INTERACTIVE_PROP_TAB_INDEX) {
+            element = element.tab_index(tab_index);
+        }
+        if let Some(tab_stop) = style_bool(&node.props, INTERACTIVE_PROP_TAB_STOP) {
+            element = element.tab_stop(tab_stop);
+        }
+        if style_bool(&node.props, INTERACTIVE_PROP_FOCUSABLE).unwrap_or(false) {
+            element = element.focusable();
+        }
+        if let Some(key_context) =
+            style_text(&node.props, INTERACTIVE_PROP_KEY_CONTEXT).or_else(|| {
+                style_bool(&node.props, INTERACTIVE_PROP_KEY_CONTEXT)
+                    .filter(|enabled| *enabled)
+                    .map(|_| "Workspace".to_string())
+            })
+        {
+            element = element.key_context(key_context.as_str());
+        }
+        if let Some(window_control_area) =
+            style_text(&node.props, INTERACTIVE_PROP_WINDOW_CONTROL_AREA)
+                .as_deref()
+                .and_then(window_control_area_from_prop)
+        {
+            element = element.window_control_area(window_control_area);
+        }
+        if style_bool(&node.props, INTERACTIVE_PROP_OCCLUDE).unwrap_or(false) {
+            element = element.occlude();
+        }
+        if style_bool(&node.props, INTERACTIVE_PROP_BLOCK_MOUSE_EXCEPT_SCROLL).unwrap_or(false) {
+            element = element.block_mouse_except_scroll();
+        }
+        element
     }
 
     fn apply_div_events<T: RemoteEventDispatcher + 'static>(
@@ -3387,6 +3467,25 @@ mod host {
     fn style_number(props: &BTreeMap<String, StyleValue>, key: &str) -> Option<f32> {
         props.get(key).and_then(|value| match value {
             StyleValue::Number(value) => Some(*value),
+            _ => None,
+        })
+    }
+
+    fn style_isize(props: &BTreeMap<String, StyleValue>, key: &str) -> Option<isize> {
+        let value = style_number(props, key)?;
+        if !value.is_finite() {
+            return None;
+        }
+        let rounded = value.round();
+        if (rounded - value).abs() > f32::EPSILON {
+            return None;
+        }
+        isize::try_from(rounded as i64).ok()
+    }
+
+    fn style_bool(props: &BTreeMap<String, StyleValue>, key: &str) -> Option<bool> {
+        props.get(key).and_then(|value| match value {
+            StyleValue::Bool(value) => Some(*value),
             _ => None,
         })
     }
@@ -6220,6 +6319,39 @@ mod host {
             );
 
             assert_eq!(host_id, "plugin-panel-div-panel-a-zoom-target");
+        }
+
+        #[test]
+        fn node_has_div_interactivity_props_detects_serialized_canvas_flags() {
+            let mut node = UiNode::new(UiNodeKind::Div);
+            assert!(!node_has_div_interactivity_props(&node));
+
+            node.props.insert(
+                INTERACTIVE_PROP_TAB_STOP.to_string(),
+                StyleValue::Bool(true),
+            );
+            assert!(node_has_div_interactivity_props(&node));
+        }
+
+        #[test]
+        fn window_control_area_from_prop_parses_protocol_values() {
+            assert_eq!(
+                window_control_area_from_prop("drag"),
+                Some(gpui::WindowControlArea::Drag)
+            );
+            assert_eq!(
+                window_control_area_from_prop("close"),
+                Some(gpui::WindowControlArea::Close)
+            );
+            assert_eq!(
+                window_control_area_from_prop("max"),
+                Some(gpui::WindowControlArea::Max)
+            );
+            assert_eq!(
+                window_control_area_from_prop("min"),
+                Some(gpui::WindowControlArea::Min)
+            );
+            assert_eq!(window_control_area_from_prop("unknown"), None);
         }
 
         #[test]
