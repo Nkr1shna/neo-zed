@@ -58,11 +58,12 @@ use fs::Fs;
 use gpui::{
     Action, Animation, AnimationExt, AnyElement, App, AsyncWindowContext, Bounds, ClipboardItem,
     Corner, DismissEvent, Entity, EntityId, EventEmitter, ExternalPaths, FocusHandle, Focusable,
-    KeyContext, Pixels, Size, Subscription, Task, UpdateGlobal, WeakEntity, WindowBounds,
-    WindowHandle, WindowKind, WindowOptions, point, prelude::*, pulsating_between, size,
+    Pixels, Size, Subscription, Task, Tiling, UpdateGlobal, WeakEntity, WindowBounds, WindowHandle,
+    WindowKind, WindowOptions, point, prelude::*, pulsating_between, size,
 };
 use language::LanguageRegistry;
 use language_model::LanguageModelRegistry;
+use platform_title_bar::PlatformTitleBar;
 use project::git_store::{GitStoreEvent, RepositoryEvent};
 use project::project_settings::ProjectSettings;
 use project::{Project, ProjectPath, Worktree, linked_worktree_short_name};
@@ -81,8 +82,9 @@ use ui::{
 };
 use util::{ResultExt as _, debug_panic};
 use workspace::{
-    CollaboratorId, DraggedSelection, DraggedTab, PathList, SerializedPathList,
-    ToggleWorkspaceSidebar, ToggleZoom, Workspace, WorkspaceId,
+    CollaboratorId, DraggedSelection, DraggedTab, OpenMode, OpenResult, PathList,
+    SerializedPathList, ToggleWorkspaceSidebar, ToggleZoom, Workspace, WorkspaceId,
+    client_side_decorations,
     dock::{DockPosition, Panel, PanelEvent},
 };
 use zed_actions::{
@@ -797,12 +799,19 @@ impl ActiveView {
 
 struct DetachedAgentPanelWindow {
     panel: WeakEntity<AgentPanel>,
+    title_bar: Entity<PlatformTitleBar>,
+    uses_workspace_titlebar_treatment: bool,
     show_panel: bool,
     _subscriptions: Vec<Subscription>,
 }
 
 impl DetachedAgentPanelWindow {
-    fn new(panel: Entity<AgentPanel>, window: &mut Window, cx: &mut Context<Self>) -> Self {
+    fn new(
+        panel: Entity<AgentPanel>,
+        uses_workspace_titlebar_treatment: bool,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> Self {
         let panel = panel.downgrade();
         let mut subscriptions = Vec::with_capacity(2);
 
@@ -844,8 +853,12 @@ impl DetachedAgentPanelWindow {
             .log_err();
         });
 
+        let title_bar = cx.new(|cx| PlatformTitleBar::new("detached-agent-title-bar", cx));
+
         Self {
             panel,
+            title_bar,
+            uses_workspace_titlebar_treatment,
             show_panel: false,
             _subscriptions: subscriptions,
         }
@@ -853,15 +866,47 @@ impl DetachedAgentPanelWindow {
 }
 
 impl Render for DetachedAgentPanelWindow {
-    fn render(&mut self, _window: &mut Window, _cx: &mut Context<Self>) -> impl IntoElement {
-        if !self.show_panel {
-            return div().size_full().into_any_element();
-        }
+    fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        let content = if !self.show_panel {
+            div().size_full().into_any_element()
+        } else {
+            self.panel
+                .upgrade()
+                .map(|panel| panel.into_any_element())
+                .unwrap_or_else(|| div().size_full().into_any_element())
+        };
 
-        self.panel
-            .upgrade()
-            .map(|panel| panel.into_any_element())
-            .unwrap_or_else(|| div().size_full().into_any_element())
+        let show_titlebar = self.uses_workspace_titlebar_treatment && !window.is_fullscreen();
+        let panel = self.panel.clone();
+
+        client_side_decorations(
+            div()
+                .relative()
+                .size_full()
+                .on_action(move |_: &workspace::CloseWindow, window, cx| {
+                    if panel
+                        .update(cx, |panel, cx| {
+                            panel.pop_in_panel(cx);
+                        })
+                        .is_err()
+                    {
+                        window.remove_window();
+                    }
+                })
+                .child(content)
+                .children(show_titlebar.then(|| {
+                    div()
+                        .absolute()
+                        .top_0()
+                        .left_0()
+                        .right_0()
+                        .child(self.title_bar.clone())
+                        .into_any_element()
+                })),
+            window,
+            cx,
+            Tiling::default(),
+        )
     }
 }
 
@@ -909,6 +954,7 @@ pub struct AgentPanel {
     _release_subscription: Subscription,
     detached_window_handle: Option<WindowHandle<DetachedAgentPanelWindow>>,
     detached_window_bounds: Option<WindowBounds>,
+    detached_window_uses_transparent_titlebar: bool,
 }
 
 impl AgentPanel {
@@ -1302,6 +1348,7 @@ impl AgentPanel {
             _release_subscription: release_subscription,
             detached_window_handle: None,
             detached_window_bounds: None,
+            detached_window_uses_transparent_titlebar: false,
         };
 
         // Initial sync of agent servers from extensions
@@ -1418,6 +1465,9 @@ impl AgentPanel {
         cx: &mut Context<Self>,
     ) {
         self.detached_window_handle = detached_window_handle;
+        if self.detached_window_handle.is_none() {
+            self.detached_window_uses_transparent_titlebar = false;
+        }
         cx.notify();
         self.notify_workspace_detached_state_changed(cx);
     }
@@ -1458,6 +1508,15 @@ impl AgentPanel {
         options
     }
 
+    fn workspace_uses_transparent_titlebar(&self, cx: &mut Context<Self>) -> bool {
+        self.workspace
+            .upgrade()
+            .map(|workspace| workspace.read(cx).app_state().build_window_options)
+            .map(|build_window_options| build_window_options(None, cx))
+            .and_then(|options| options.titlebar)
+            .is_some_and(|titlebar| titlebar.appears_transparent)
+    }
+
     fn focus_existing_detached_window(&mut self, cx: &mut Context<Self>) -> bool {
         let Some(detached_window) = self.detached_window_handle else {
             return false;
@@ -1487,15 +1546,26 @@ impl AgentPanel {
             .unwrap_or_else(|| self.default_detached_window_bounds(window));
         self.detached_window_bounds = Some(detached_bounds);
 
+        let uses_workspace_titlebar_treatment = self.workspace_uses_transparent_titlebar(cx);
+        self.detached_window_uses_transparent_titlebar = uses_workspace_titlebar_treatment;
+
         let options = self.detached_window_options(detached_bounds, cx);
 
         match cx.open_window(options, move |window, cx| {
-            cx.new(|cx| DetachedAgentPanelWindow::new(panel.clone(), window, cx))
+            cx.new(|cx| {
+                DetachedAgentPanelWindow::new(
+                    panel.clone(),
+                    uses_workspace_titlebar_treatment,
+                    window,
+                    cx,
+                )
+            })
         }) {
             Ok(detached_window) => {
                 self.set_detached_window_handle(Some(detached_window), cx);
             }
             Err(error) => {
+                self.detached_window_uses_transparent_titlebar = false;
                 log::error!("failed to open detached agent panel window: {error:#}");
             }
         }
@@ -4072,7 +4142,7 @@ impl AgentPanel {
             })
     }
 
-    fn detached_content_top_padding(&self, window: &Window, cx: &mut Context<Self>) -> Pixels {
+    fn detached_content_top_padding(&self, window: &Window, _cx: &mut Context<Self>) -> Pixels {
         let Some(detached_window) = self.detached_window_handle else {
             return px(0.);
         };
@@ -4083,15 +4153,7 @@ impl AgentPanel {
             return px(0.);
         }
 
-        let uses_transparent_titlebar = self
-            .workspace
-            .upgrade()
-            .map(|workspace| workspace.read(cx).app_state().build_window_options)
-            .map(|build_window_options| build_window_options(None, cx))
-            .and_then(|options| options.titlebar)
-            .is_some_and(|titlebar| titlebar.appears_transparent);
-
-        if uses_transparent_titlebar {
+        if self.detached_window_uses_transparent_titlebar {
             platform_title_bar_height(window)
         } else {
             px(0.)
@@ -5082,6 +5144,22 @@ impl AgentPanel {
         self.detached_window_handle.map(gpui::AnyWindowHandle::from)
     }
 
+    /// Returns whether the detached shell is using the shared platform titlebar component path.
+    pub fn detached_window_uses_workspace_titlebar_component_path_for_tests(
+        &self,
+        cx: &App,
+    ) -> bool {
+        self.detached_window_handle
+            .and_then(|detached_window| {
+                detached_window
+                    .read_with(cx, |root, cx| {
+                        root.title_bar.read_with(cx, |_title_bar, _| true)
+                    })
+                    .ok()
+            })
+            .unwrap_or(false)
+    }
+
     /// Returns whether the panel should render pop-in control instead of pop-out.
     pub fn show_pop_in_control_for_tests(&self) -> bool {
         self.show_pop_in_control()
@@ -5808,6 +5886,17 @@ mod tests {
         let panel_id = panel.entity_id();
         let initial_window_count = cx.windows().len();
 
+        panel.update_in(&mut visual_cx, |panel, window, cx| {
+            panel.open_external_thread_with_server(
+                Rc::new(StubAgentServer::default_response()),
+                window,
+                cx,
+            );
+        });
+        visual_cx.run_until_parked();
+
+        let active_session_before_detach = active_session_id(&panel, &visual_cx);
+
         panel.read_with(&visual_cx, |panel, _| {
             assert!(
                 !panel.show_pop_in_control_for_tests(),
@@ -5870,6 +5959,96 @@ mod tests {
                 "pop-in should restore the panel into its owning workspace dock"
             );
         });
+
+        let active_session_after_pop_in = active_session_id(&panel, &visual_cx);
+        assert_eq!(
+            active_session_after_pop_in, active_session_before_detach,
+            "pop-in should restore the docked panel with the same active conversation state"
+        );
+    }
+
+    #[gpui::test]
+    async fn test_close_shortcut_on_detached_window_restores_current_docked_panel_state(
+        cx: &mut TestAppContext,
+    ) {
+        let (workspace, panel, mut visual_cx) = setup_workspace_with_visible_panel(cx).await;
+        let panel_id = panel.entity_id();
+        let initial_window_count = cx.windows().len();
+
+        panel.update_in(&mut visual_cx, |panel, window, cx| {
+            panel.open_external_thread_with_server(
+                Rc::new(StubAgentServer::default_response()),
+                window,
+                cx,
+            );
+        });
+        visual_cx.run_until_parked();
+
+        let active_session_before_detach = active_session_id(&panel, &visual_cx);
+
+        panel.update_in(&mut visual_cx, |panel, window, cx| {
+            panel.open_detached_window_for_tests(window, cx);
+        });
+        visual_cx.run_until_parked();
+
+        let detached_window = panel
+            .read_with(&visual_cx, |panel, _| {
+                panel.detached_window_handle_for_tests()
+            })
+            .expect("detached window should exist after detaching");
+
+        detached_window
+            .update(&mut visual_cx, |_, window: &mut Window, _| {
+                window.remove_window();
+            })
+            .expect("detached window should close through the standard window-close path");
+        visual_cx.run_until_parked();
+
+        assert_eq!(
+            cx.windows().len(),
+            initial_window_count,
+            "close shortcut should close only the detached surface"
+        );
+
+        panel.read_with(&visual_cx, |panel, _| {
+            assert!(
+                panel.detached_window_handle_for_tests().is_none(),
+                "close shortcut should clear detached window tracking state"
+            );
+        });
+
+        workspace.read_with(&visual_cx, |workspace, cx| {
+            let panel_position = workspace
+                .agent_panel_position(cx)
+                .expect("agent panel should still be tracked by workspace");
+            let visible_panel_id = workspace
+                .dock_at_position(panel_position)
+                .read(cx)
+                .visible_panel(cx)
+                .map(|panel| panel.panel_id());
+            assert_eq!(
+                visible_panel_id,
+                Some(panel_id),
+                "close shortcut should restore exactly one docked panel in the owning workspace"
+            );
+        });
+
+        let active_session_after_restore = active_session_id(&panel, &visual_cx);
+        assert_eq!(
+            active_session_after_restore, active_session_before_detach,
+            "close shortcut restore should keep the current detached conversation state"
+        );
+
+        panel.update_in(&mut visual_cx, |panel, window, cx| {
+            panel.open_detached_window_for_tests(window, cx);
+        });
+        visual_cx.run_until_parked();
+
+        assert_eq!(
+            cx.windows().len(),
+            initial_window_count + 1,
+            "after close-shortcut restore, re-detach should still create only one detached window"
+        );
     }
 
     #[gpui::test]
@@ -6100,6 +6279,27 @@ mod tests {
         assert_eq!(
             detached_titlebar.traffic_light_position, expected_titlebar.traffic_light_position,
             "detached titlebar button layout should match main window options"
+        );
+
+        panel.update_in(&mut visual_cx, |panel, window, cx| {
+            panel.open_detached_window_for_tests(window, cx);
+        });
+        visual_cx.run_until_parked();
+
+        panel.read_with(&visual_cx, |panel, _| {
+            assert!(
+                panel.detached_window_handle_for_tests().is_some(),
+                "detached window should open for titlebar parity validation"
+            );
+        });
+
+        let uses_workspace_titlebar_component_path = panel.read_with(&visual_cx, |panel, cx| {
+            panel.detached_window_uses_workspace_titlebar_component_path_for_tests(cx)
+        });
+
+        assert!(
+            uses_workspace_titlebar_component_path,
+            "detached window should reuse the platform titlebar component path used by main windows"
         );
     }
 
