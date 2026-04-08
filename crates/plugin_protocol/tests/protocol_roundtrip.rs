@@ -40,6 +40,7 @@ fn host_to_plugin_action_event_roundtrips_through_serde() {
     let message = HostToPlugin::DispatchEvent {
         event: UiEvent {
             panel_instance_id: PanelInstanceId::new("panel-42"),
+            generation: Some(9),
             handler_id: EventHandlerId::new("handler-42"),
             kind: UiEventKind::Action,
             payload: Some(json!(SerializedActionEvent {
@@ -117,6 +118,7 @@ fn render_delta_roundtrips_and_applies_to_existing_tree() {
     let message = PluginToHost::RenderDelta {
         panel_id: "usage-widget".to_string(),
         panel_instance_id: PanelInstanceId::new("panel-9"),
+        generation: Some(3),
         patches: patches.clone(),
     };
 

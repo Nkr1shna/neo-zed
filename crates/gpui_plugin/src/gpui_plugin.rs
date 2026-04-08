@@ -270,16 +270,19 @@ impl<T: Render + 'static> RenderSession<T> {
 
     fn render_message(&mut self) -> Result<PluginToHost> {
         let render = self.runtime.render_root(&self.root)?;
+        let generation = Some(render.generation());
         let message = if let Some(previous_render) = self.last_render.as_ref() {
             PluginToHost::RenderDelta {
                 panel_id: self.view_id.clone(),
                 panel_instance_id: self.view_instance_id.clone(),
+                generation,
                 patches: diff_ui_trees(&previous_render.tree, &render.tree),
             }
         } else {
             PluginToHost::Render {
                 panel_id: self.view_id.clone(),
                 panel_instance_id: self.view_instance_id.clone(),
+                generation,
                 root: render.tree.clone(),
             }
         };
@@ -327,6 +330,12 @@ impl<T: Render + 'static> ActiveRemoteViewSession for RenderSession<T> {
         let Some(render) = self.last_render.as_ref() else {
             anyhow::bail!("view {} has not been rendered yet", self.view_id);
         };
+        if event
+            .generation
+            .is_some_and(|generation| generation != render.generation())
+        {
+            return Ok(Vec::new());
+        }
 
         let runtime_event = match event.kind {
             ProtocolUiEventKind::Click => UiEvent::Click(
@@ -733,6 +742,113 @@ mod tests {
         ) -> impl gpui_api::IntoElement {
             div()
         }
+    }
+
+    struct StaleGenerationPanel {
+        initial_click_count: usize,
+        replacement_click_count: usize,
+        show_initial_handler: bool,
+    }
+
+    impl Render for StaleGenerationPanel {
+        fn render(
+            &mut self,
+            _window: &mut Window,
+            cx: &mut Context<Self>,
+        ) -> impl gpui_api::IntoElement {
+            if self.show_initial_handler {
+                div()
+                    .on_click(cx.listener(|this, _: &ClickEvent, _window, cx| {
+                        this.initial_click_count = this.initial_click_count.saturating_add(1);
+                        this.show_initial_handler = false;
+                        cx.notify();
+                    }))
+                    .child("initial-handler")
+            } else {
+                div()
+                    .on_click(cx.listener(|this, _: &ClickEvent, _window, cx| {
+                        this.replacement_click_count =
+                            this.replacement_click_count.saturating_add(1);
+                        cx.notify();
+                    }))
+                    .child("replacement-handler")
+            }
+        }
+    }
+
+    #[::core::prelude::v1::test]
+    fn stale_generation_events_do_not_invoke_replacement_handlers() {
+        let panel_instance_id = PanelInstanceId::new("stale-generation-panel");
+        let mut session = RenderSession::new(
+            "stale-generation-panel".to_string(),
+            panel_instance_id.clone(),
+            |_cx| StaleGenerationPanel {
+                initial_click_count: 0,
+                replacement_click_count: 0,
+                show_initial_handler: true,
+            },
+        );
+
+        let initial_message = session
+            .initial_messages()
+            .expect("initial render should succeed")
+            .into_iter()
+            .next()
+            .expect("initial render should emit one message");
+        let (initial_generation, initial_handler_id) = match initial_message {
+            PluginToHost::Render {
+                generation, root, ..
+            } => (
+                generation.expect("render message should include generation"),
+                root.events
+                    .first()
+                    .expect("initial root should include click handler")
+                    .handler_id
+                    .clone(),
+            ),
+            other => panic!("expected initial render message, got {other:?}"),
+        };
+
+        let click_payload = Some(
+            serde_json::to_value(SerializedClickEvent::from(&ClickEvent::default()))
+                .expect("click payload should serialize"),
+        );
+
+        let rerender_messages = session
+            .handle_event(&plugin_protocol::UiEvent {
+                panel_instance_id: panel_instance_id.clone(),
+                generation: Some(initial_generation),
+                handler_id: initial_handler_id.clone(),
+                kind: ProtocolUiEventKind::Click,
+                payload: click_payload.clone(),
+            })
+            .expect("initial click dispatch should succeed");
+        assert!(
+            rerender_messages
+                .iter()
+                .any(|message| matches!(message, PluginToHost::RenderDelta { .. })),
+            "initial handler should trigger a rerender"
+        );
+
+        let stale_dispatch_messages = session
+            .handle_event(&plugin_protocol::UiEvent {
+                panel_instance_id,
+                generation: Some(initial_generation),
+                handler_id: initial_handler_id,
+                kind: ProtocolUiEventKind::Click,
+                payload: click_payload,
+            })
+            .expect("stale click dispatch should not crash");
+
+        assert!(
+            stale_dispatch_messages.is_empty(),
+            "stale handler dispatch should be ignored"
+        );
+
+        session.root.read(|panel| {
+            assert_eq!(panel.initial_click_count, 1);
+            assert_eq!(panel.replacement_click_count, 0);
+        });
     }
 
     #[::core::prelude::v1::test]

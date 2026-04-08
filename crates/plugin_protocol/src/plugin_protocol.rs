@@ -402,6 +402,8 @@ pub enum UiEventKind {
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct UiEvent {
     pub panel_instance_id: PanelInstanceId,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub generation: Option<u64>,
     pub handler_id: EventHandlerId,
     pub kind: UiEventKind,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -967,11 +969,15 @@ pub enum PluginToHost {
     Render {
         panel_id: String,
         panel_instance_id: PanelInstanceId,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        generation: Option<u64>,
         root: UiNode,
     },
     RenderDelta {
         panel_id: String,
         panel_instance_id: PanelInstanceId,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        generation: Option<u64>,
         patches: Vec<UiPatch>,
     },
     ClosePanel {

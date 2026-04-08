@@ -432,6 +432,7 @@ mod host {
         descriptor: TitlebarWidgetDescriptor,
         panel_instance_id: PanelInstanceId,
         tree: Option<UiNode>,
+        render_generation: Option<u64>,
         startup_state: Option<RemotePluginStartupState>,
         error_message: Option<SharedString>,
         event_sender: channel::Sender<PluginHostEvent>,
@@ -455,6 +456,7 @@ mod host {
                 descriptor,
                 panel_instance_id,
                 tree: None,
+                render_generation: None,
                 startup_state: None,
                 error_message: None,
                 event_sender,
@@ -464,14 +466,17 @@ mod host {
             }
         }
 
-        fn update_tree(&mut self, tree: UiNode, cx: &mut Context<Self>) {
+        fn update_tree(&mut self, tree: UiNode, generation: Option<u64>, cx: &mut Context<Self>) {
             self.tree = Some(tree);
+            self.render_generation = generation;
             self.startup_state = None;
             self.error_message = None;
             cx.notify();
         }
 
         fn set_error(&mut self, message: impl Into<String>, cx: &mut Context<Self>) {
+            self.tree = None;
+            self.render_generation = None;
             self.startup_state = None;
             self.error_message = Some(message.into().into());
             cx.notify();
@@ -483,6 +488,7 @@ mod host {
             cx: &mut Context<Self>,
         ) {
             self.tree = None;
+            self.render_generation = None;
             self.startup_state = startup_state;
             self.error_message = None;
             cx.notify();
@@ -495,6 +501,8 @@ mod host {
         ) {
             self.startup_state = startup_state;
             if startup_state.is_some() {
+                self.tree = None;
+                self.render_generation = None;
                 self.error_message = None;
             }
             cx.notify();
@@ -509,6 +517,7 @@ mod host {
         ) {
             let event = UiEvent {
                 panel_instance_id: self.panel_instance_id.clone(),
+                generation: self.render_generation,
                 handler_id,
                 kind,
                 payload,
@@ -1197,6 +1206,7 @@ mod host {
                 }
                 PluginToHost::Render {
                     panel_instance_id,
+                    generation,
                     root,
                     ..
                 } => {
@@ -1220,7 +1230,7 @@ mod host {
                     if let Some(binding) = self.panels.get(&panel_instance_id).cloned() {
                         match binding
                             .panel
-                            .update(cx, |panel, cx| panel.update_tree(root, cx))
+                            .update(cx, |panel, cx| panel.update_tree(root, generation, cx))
                         {
                             Ok(()) => {}
                             Err(_) => {
@@ -1232,13 +1242,14 @@ mod host {
                     {
                         widget
                             .widget
-                            .update(cx, |widget, cx| widget.update_tree(root, cx));
+                            .update(cx, |widget, cx| widget.update_tree(root, generation, cx));
                     } else {
                         self.ignore_stale_view_message(&plugin_id, &panel_instance_id, "render");
                     }
                 }
                 PluginToHost::RenderDelta {
                     panel_instance_id,
+                    generation,
                     patches,
                     ..
                 } => {
@@ -1299,7 +1310,7 @@ mod host {
                         if let Some(binding) = self.panels.get(&panel_instance_id).cloned() {
                             match binding
                                 .panel
-                                .update(cx, |panel, cx| panel.update_tree(root, cx))
+                                .update(cx, |panel, cx| panel.update_tree(root, generation, cx))
                             {
                                 Ok(()) => {}
                                 Err(_) => {
@@ -1312,7 +1323,7 @@ mod host {
                     {
                         widget
                             .widget
-                            .update(cx, |widget, cx| widget.update_tree(root, cx));
+                            .update(cx, |widget, cx| widget.update_tree(root, generation, cx));
                     }
                 }
                 PluginToHost::ClosePanel { panel_instance_id } => {
@@ -1875,6 +1886,7 @@ mod host {
         panel_instance_id: PanelInstanceId,
         activation_priority: u32,
         tree: Option<UiNode>,
+        render_generation: Option<u64>,
         startup_state: Option<RemotePluginStartupState>,
         error_message: Option<SharedString>,
         event_sender: channel::Sender<PluginHostEvent>,
@@ -1899,6 +1911,7 @@ mod host {
                 panel_instance_id,
                 activation_priority,
                 tree: None,
+                render_generation: None,
                 startup_state: None,
                 error_message: None,
                 event_sender,
@@ -1908,14 +1921,17 @@ mod host {
             }
         }
 
-        fn update_tree(&mut self, tree: UiNode, cx: &mut Context<Self>) {
+        fn update_tree(&mut self, tree: UiNode, generation: Option<u64>, cx: &mut Context<Self>) {
             self.tree = Some(tree);
+            self.render_generation = generation;
             self.startup_state = None;
             self.error_message = None;
             cx.notify();
         }
 
         fn set_error(&mut self, message: impl Into<String>, cx: &mut Context<Self>) {
+            self.tree = None;
+            self.render_generation = None;
             self.startup_state = None;
             self.error_message = Some(message.into().into());
             cx.notify();
@@ -1927,6 +1943,7 @@ mod host {
             cx: &mut Context<Self>,
         ) {
             self.tree = None;
+            self.render_generation = None;
             self.startup_state = startup_state;
             self.error_message = None;
             cx.notify();
@@ -1939,6 +1956,8 @@ mod host {
         ) {
             self.startup_state = startup_state;
             if startup_state.is_some() {
+                self.tree = None;
+                self.render_generation = None;
                 self.error_message = None;
             }
             cx.notify();
@@ -1967,6 +1986,7 @@ mod host {
         ) {
             let event = UiEvent {
                 panel_instance_id: self.panel_instance_id.clone(),
+                generation: self.render_generation,
                 handler_id,
                 kind,
                 payload,
@@ -7345,6 +7365,7 @@ side = "right"
                             PluginToHost::Render {
                                 panel_id: String::from("usage-widget"),
                                 panel_instance_id: panel_instance_id.clone(),
+                                generation: Some(1),
                                 root: root.clone(),
                             },
                             registry_cx,
@@ -7409,6 +7430,7 @@ side = "right"
                             PluginToHost::Render {
                                 panel_id: String::from("usage-widget"),
                                 panel_instance_id: panel_instance_id.clone(),
+                                generation: Some(1),
                                 root: stale_root.clone(),
                             },
                             registry_cx,
@@ -7445,6 +7467,7 @@ side = "right"
                             PluginToHost::Render {
                                 panel_id: String::from("usage-widget"),
                                 panel_instance_id: panel_instance_id.clone(),
+                                generation: Some(2),
                                 root: rendered_root.clone(),
                             },
                             registry_cx,
@@ -7534,6 +7557,7 @@ activation = "on_demand"
                             PluginToHost::Render {
                                 panel_id: String::from("panel-a"),
                                 panel_instance_id: panel_instance_id.clone(),
+                                generation: Some(1),
                                 root: initial_root.clone(),
                             },
                             registry_cx,
@@ -7543,6 +7567,7 @@ activation = "on_demand"
                             PluginToHost::RenderDelta {
                                 panel_id: String::from("panel-a"),
                                 panel_instance_id: panel_instance_id.clone(),
+                                generation: Some(2),
                                 patches: patches.clone(),
                             },
                             registry_cx,
@@ -7557,6 +7582,236 @@ activation = "on_demand"
                     .and_then(|binding| binding.panel.upgrade())
                     .and_then(|panel| panel.read(cx).tree.clone());
                 assert_eq!(tree, Some(updated_root));
+            });
+        }
+
+        #[gpui::test]
+        async fn close_panel_clears_tree_for_closed_state(cx: &mut TestAppContext) {
+            init_test_app(cx);
+
+            let temp_dir = TempDir::new().expect("temp plugin dir");
+            let layout = PluginStoreLayout {
+                installed_root: temp_dir.path().join("installed"),
+                development_root: temp_dir.path().join("development"),
+            };
+            let plugin_root = layout.installed_root.join("test-plugin");
+            write_fake_plugin(
+                &plugin_root,
+                r#"
+id = "test-plugin"
+name = "Test Plugin"
+version = "0.1.0"
+schema_version = 1
+entry = "fake-plugin"
+
+[[panels]]
+id = "panel-a"
+title = "Panel A"
+dock = "right"
+activation = "on_demand"
+"#,
+            )
+            .expect("write fake plugin");
+
+            let registry = new_test_registry(layout, cx);
+            let (_process_receiver, _terminate_receiver) =
+                seed_process(&registry, "test-plugin", true, cx);
+
+            let fs = FakeFs::new(cx.executor());
+            let project = Project::test(fs, [], cx).await;
+            let (workspace, cx) =
+                cx.add_window_view(|window, cx| new_test_workspace(project, window, cx));
+
+            let panel = workspace
+                .update_in(cx, |workspace, window, workspace_cx| {
+                    open_panel_in_workspace(
+                        "test-plugin",
+                        "panel-a",
+                        workspace,
+                        window,
+                        workspace_cx,
+                    )
+                })
+                .expect("open panel");
+
+            let panel_instance_id = cx.update(|_window, cx| {
+                registry
+                    .read(cx)
+                    .panels
+                    .keys()
+                    .next()
+                    .cloned()
+                    .expect("panel binding should exist")
+            });
+
+            let initial_root = UiNode::new(UiNodeKind::Div).with_child(
+                UiNode::new(UiNodeKind::Button)
+                    .with_text("before close")
+                    .with_event(UiEventKind::Click, EventHandlerId::new("h_close")),
+            );
+
+            cx.update(|_window, cx| {
+                registry
+                    .update(cx, |registry, registry_cx| {
+                        registry.apply_message(
+                            PluginId::new("test-plugin"),
+                            PluginToHost::Render {
+                                panel_id: String::from("panel-a"),
+                                panel_instance_id: panel_instance_id.clone(),
+                                generation: Some(1),
+                                root: initial_root.clone(),
+                            },
+                            registry_cx,
+                        )
+                    })
+                    .expect("apply panel render");
+
+                assert!(
+                    panel.read(cx).tree.is_some(),
+                    "panel should have rendered tree"
+                );
+            });
+
+            cx.update(|_window, cx| {
+                registry
+                    .update(cx, |registry, registry_cx| {
+                        registry.apply_message(
+                            PluginId::new("test-plugin"),
+                            PluginToHost::ClosePanel {
+                                panel_instance_id: panel_instance_id.clone(),
+                            },
+                            registry_cx,
+                        )
+                    })
+                    .expect("apply close panel message");
+
+                assert!(
+                    panel.read(cx).error_message.is_some(),
+                    "panel should show closed-state error message"
+                );
+                assert!(
+                    panel.read(cx).tree.is_none(),
+                    "closed state should not keep stale interactive tree"
+                );
+                assert!(
+                    !registry.read(cx).panels.contains_key(&panel_instance_id),
+                    "closed panel binding should be detached"
+                );
+            });
+        }
+
+        #[gpui::test]
+        async fn report_error_clears_tree_for_error_state(cx: &mut TestAppContext) {
+            init_test_app(cx);
+
+            let temp_dir = TempDir::new().expect("temp plugin dir");
+            let layout = PluginStoreLayout {
+                installed_root: temp_dir.path().join("installed"),
+                development_root: temp_dir.path().join("development"),
+            };
+            let plugin_root = layout.installed_root.join("test-plugin");
+            write_fake_plugin(
+                &plugin_root,
+                r#"
+id = "test-plugin"
+name = "Test Plugin"
+version = "0.1.0"
+schema_version = 1
+entry = "fake-plugin"
+
+[[panels]]
+id = "panel-a"
+title = "Panel A"
+dock = "right"
+activation = "on_demand"
+"#,
+            )
+            .expect("write fake plugin");
+
+            let registry = new_test_registry(layout, cx);
+            let (_process_receiver, _terminate_receiver) =
+                seed_process(&registry, "test-plugin", true, cx);
+
+            let fs = FakeFs::new(cx.executor());
+            let project = Project::test(fs, [], cx).await;
+            let (workspace, cx) =
+                cx.add_window_view(|window, cx| new_test_workspace(project, window, cx));
+
+            let panel = workspace
+                .update_in(cx, |workspace, window, workspace_cx| {
+                    open_panel_in_workspace(
+                        "test-plugin",
+                        "panel-a",
+                        workspace,
+                        window,
+                        workspace_cx,
+                    )
+                })
+                .expect("open panel");
+
+            let panel_instance_id = cx.update(|_window, cx| {
+                registry
+                    .read(cx)
+                    .panels
+                    .keys()
+                    .next()
+                    .cloned()
+                    .expect("panel binding should exist")
+            });
+
+            let initial_root = UiNode::new(UiNodeKind::Div).with_child(
+                UiNode::new(UiNodeKind::Button)
+                    .with_text("before error")
+                    .with_event(UiEventKind::Click, EventHandlerId::new("h_error")),
+            );
+
+            cx.update(|_window, cx| {
+                registry
+                    .update(cx, |registry, registry_cx| {
+                        registry.apply_message(
+                            PluginId::new("test-plugin"),
+                            PluginToHost::Render {
+                                panel_id: String::from("panel-a"),
+                                panel_instance_id: panel_instance_id.clone(),
+                                generation: Some(1),
+                                root: initial_root.clone(),
+                            },
+                            registry_cx,
+                        )
+                    })
+                    .expect("apply panel render");
+                assert!(
+                    panel.read(cx).tree.is_some(),
+                    "panel should have rendered tree"
+                );
+            });
+
+            cx.update(|_window, cx| {
+                registry
+                    .update(cx, |registry, registry_cx| {
+                        registry.apply_message(
+                            PluginId::new("test-plugin"),
+                            PluginToHost::ReportError {
+                                panel_instance_id: Some(panel_instance_id.clone()),
+                                message: String::from("render pipeline failed"),
+                            },
+                            registry_cx,
+                        )
+                    })
+                    .expect("apply panel error");
+
+                assert!(
+                    panel.read(cx).error_message.is_some(),
+                    "panel should show error-state message"
+                );
+                assert!(
+                    panel.read(cx).tree.is_none(),
+                    "error state should not keep stale interactive tree"
+                );
+                assert!(
+                    registry.read(cx).panels.contains_key(&panel_instance_id),
+                    "error state should keep panel binding attached"
+                );
             });
         }
 
@@ -7737,6 +7992,7 @@ activation = "on_demand"
                             message: PluginToHost::Render {
                                 panel_id: "panel-a".to_string(),
                                 panel_instance_id: PanelInstanceId::new("panel-instance"),
+                                generation: Some(1),
                                 root: UiNode::new(UiNodeKind::Div),
                             },
                         },
