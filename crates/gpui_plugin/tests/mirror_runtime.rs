@@ -302,3 +302,33 @@ fn mirror_runtime_serializes_div_interactivity_props_for_host_dispatch() {
         Some(&plugin_protocol::StyleValue::Bool(true))
     );
 }
+
+struct InteractivityOverrideMirrorPanel;
+
+impl Render for InteractivityOverrideMirrorPanel {
+    fn render(&mut self, _window: &mut Window, _cx: &mut Context<Self>) -> impl IntoElement {
+        div()
+            .id("interactivity-override-root")
+            .tab_index(7)
+            .tab_stop(false)
+            .child(Label::new("override"))
+    }
+}
+
+#[test]
+fn mirror_runtime_serializes_explicit_false_tab_stop_override_with_tab_index() {
+    let mut runtime = Runtime::new();
+    let panel = runtime.new_entity(|_| InteractivityOverrideMirrorPanel);
+
+    let render_output = runtime.render_root(&panel).expect("render succeeds");
+    let props = &render_output.tree.props;
+
+    assert_eq!(
+        props.get(plugin_protocol::INTERACTIVE_PROP_TAB_INDEX),
+        Some(&plugin_protocol::StyleValue::Number(7.0))
+    );
+    assert_eq!(
+        props.get(plugin_protocol::INTERACTIVE_PROP_TAB_STOP),
+        Some(&plugin_protocol::StyleValue::Bool(false))
+    );
+}

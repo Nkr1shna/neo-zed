@@ -116,8 +116,11 @@ fn serialize_interactivity_props(
             group_name.to_string().into(),
         );
     }
-    if interactivity.tab_stop {
-        props.insert(INTERACTIVE_PROP_TAB_STOP.to_string(), true.into());
+    if interactivity.tab_stop || interactivity.tab_index.is_some() {
+        props.insert(
+            INTERACTIVE_PROP_TAB_STOP.to_string(),
+            interactivity.tab_stop.into(),
+        );
     }
     if let Some(tab_index) = interactivity.tab_index {
         props.insert(

@@ -432,6 +432,7 @@ mod host {
         descriptor: TitlebarWidgetDescriptor,
         panel_instance_id: PanelInstanceId,
         tree: Option<UiNode>,
+        tree_for_delta_recovery: Option<UiNode>,
         render_generation: Option<u64>,
         startup_state: Option<RemotePluginStartupState>,
         error_message: Option<SharedString>,
@@ -456,6 +457,7 @@ mod host {
                 descriptor,
                 panel_instance_id,
                 tree: None,
+                tree_for_delta_recovery: None,
                 render_generation: None,
                 startup_state: None,
                 error_message: None,
@@ -468,6 +470,7 @@ mod host {
 
         fn update_tree(&mut self, tree: UiNode, generation: Option<u64>, cx: &mut Context<Self>) {
             self.tree = Some(tree);
+            self.tree_for_delta_recovery = None;
             self.render_generation = generation;
             self.startup_state = None;
             self.error_message = None;
@@ -475,7 +478,9 @@ mod host {
         }
 
         fn set_error(&mut self, message: impl Into<String>, cx: &mut Context<Self>) {
-            self.tree = None;
+            if let Some(tree) = self.tree.take() {
+                self.tree_for_delta_recovery = Some(tree);
+            }
             self.render_generation = None;
             self.startup_state = None;
             self.error_message = Some(message.into().into());
@@ -488,6 +493,7 @@ mod host {
             cx: &mut Context<Self>,
         ) {
             self.tree = None;
+            self.tree_for_delta_recovery = None;
             self.render_generation = None;
             self.startup_state = startup_state;
             self.error_message = None;
@@ -502,10 +508,17 @@ mod host {
             self.startup_state = startup_state;
             if startup_state.is_some() {
                 self.tree = None;
+                self.tree_for_delta_recovery = None;
                 self.render_generation = None;
                 self.error_message = None;
             }
             cx.notify();
+        }
+
+        fn tree_for_render_delta(&self) -> Option<UiNode> {
+            self.tree
+                .clone()
+                .or_else(|| self.tree_for_delta_recovery.clone())
         }
 
         fn dispatch_event(
@@ -1255,11 +1268,11 @@ mod host {
                 } => {
                     let updated_root =
                         if let Some(binding) = self.panels.get(&panel_instance_id).cloned() {
-                            let mut root: Option<UiNode> = binding
+                            let Some(mut root) = binding
                                 .panel
-                                .read_with(cx, |panel, _| panel.tree.clone())
-                                .unwrap_or_default();
-                            let Some(mut root) = root.take() else {
+                                .read_with(cx, |panel, _| panel.tree_for_render_delta())
+                                .unwrap_or_default()
+                            else {
                                 self.close_remote_view(&plugin_id, &panel_instance_id)?;
                                 return Ok(());
                             };
@@ -1268,7 +1281,8 @@ mod host {
                         } else if let Some(widget) =
                             self.titlebar_widgets.get(&panel_instance_id).cloned()
                         {
-                            let Some(mut root) = widget.widget.read(cx).tree.clone() else {
+                            let Some(mut root) = widget.widget.read(cx).tree_for_render_delta()
+                            else {
                                 self.close_remote_view(&plugin_id, &panel_instance_id)?;
                                 return Ok(());
                             };
@@ -1886,6 +1900,7 @@ mod host {
         panel_instance_id: PanelInstanceId,
         activation_priority: u32,
         tree: Option<UiNode>,
+        tree_for_delta_recovery: Option<UiNode>,
         render_generation: Option<u64>,
         startup_state: Option<RemotePluginStartupState>,
         error_message: Option<SharedString>,
@@ -1911,6 +1926,7 @@ mod host {
                 panel_instance_id,
                 activation_priority,
                 tree: None,
+                tree_for_delta_recovery: None,
                 render_generation: None,
                 startup_state: None,
                 error_message: None,
@@ -1923,6 +1939,7 @@ mod host {
 
         fn update_tree(&mut self, tree: UiNode, generation: Option<u64>, cx: &mut Context<Self>) {
             self.tree = Some(tree);
+            self.tree_for_delta_recovery = None;
             self.render_generation = generation;
             self.startup_state = None;
             self.error_message = None;
@@ -1930,7 +1947,9 @@ mod host {
         }
 
         fn set_error(&mut self, message: impl Into<String>, cx: &mut Context<Self>) {
-            self.tree = None;
+            if let Some(tree) = self.tree.take() {
+                self.tree_for_delta_recovery = Some(tree);
+            }
             self.render_generation = None;
             self.startup_state = None;
             self.error_message = Some(message.into().into());
@@ -1943,6 +1962,7 @@ mod host {
             cx: &mut Context<Self>,
         ) {
             self.tree = None;
+            self.tree_for_delta_recovery = None;
             self.render_generation = None;
             self.startup_state = startup_state;
             self.error_message = None;
@@ -1957,10 +1977,17 @@ mod host {
             self.startup_state = startup_state;
             if startup_state.is_some() {
                 self.tree = None;
+                self.tree_for_delta_recovery = None;
                 self.render_generation = None;
                 self.error_message = None;
             }
             cx.notify();
+        }
+
+        fn tree_for_render_delta(&self) -> Option<UiNode> {
+            self.tree
+                .clone()
+                .or_else(|| self.tree_for_delta_recovery.clone())
         }
 
         fn cancel_startup(&mut self, cx: &mut Context<Self>) {
@@ -2751,6 +2778,23 @@ mod host {
         }
     }
 
+    #[derive(Clone, Copy, Debug, PartialEq, Eq)]
+    enum DivTabNavigationInteractivity {
+        TabIndex(isize),
+        TabStop(bool),
+    }
+
+    fn div_tab_navigation_interactivity(
+        node: &UiNode,
+    ) -> [Option<DivTabNavigationInteractivity>; 2] {
+        [
+            style_isize(&node.props, INTERACTIVE_PROP_TAB_INDEX)
+                .map(DivTabNavigationInteractivity::TabIndex),
+            style_bool(&node.props, INTERACTIVE_PROP_TAB_STOP)
+                .map(DivTabNavigationInteractivity::TabStop),
+        ]
+    }
+
     fn apply_div_interactivity(
         mut element: gpui::Stateful<gpui::Div>,
         node: &UiNode,
@@ -2761,11 +2805,14 @@ mod host {
         if style_bool(&node.props, INTERACTIVE_PROP_TAB_GROUP).unwrap_or(false) {
             element = element.tab_group();
         }
-        if let Some(tab_index) = style_isize(&node.props, INTERACTIVE_PROP_TAB_INDEX) {
-            element = element.tab_index(tab_index);
-        }
-        if let Some(tab_stop) = style_bool(&node.props, INTERACTIVE_PROP_TAB_STOP) {
-            element = element.tab_stop(tab_stop);
+        for tab_navigation in div_tab_navigation_interactivity(node)
+            .into_iter()
+            .flatten()
+        {
+            element = match tab_navigation {
+                DivTabNavigationInteractivity::TabIndex(tab_index) => element.tab_index(tab_index),
+                DivTabNavigationInteractivity::TabStop(tab_stop) => element.tab_stop(tab_stop),
+            };
         }
         if style_bool(&node.props, INTERACTIVE_PROP_FOCUSABLE).unwrap_or(false) {
             element = element.focusable();
@@ -6354,6 +6401,27 @@ mod host {
         }
 
         #[test]
+        fn div_tab_navigation_interactivity_preserves_tab_stop_override_order() {
+            let mut node = UiNode::new(UiNodeKind::Div);
+            node.props.insert(
+                INTERACTIVE_PROP_TAB_INDEX.to_string(),
+                StyleValue::Number(7.0),
+            );
+            node.props.insert(
+                INTERACTIVE_PROP_TAB_STOP.to_string(),
+                StyleValue::Bool(false),
+            );
+
+            assert_eq!(
+                div_tab_navigation_interactivity(&node),
+                [
+                    Some(DivTabNavigationInteractivity::TabIndex(7)),
+                    Some(DivTabNavigationInteractivity::TabStop(false)),
+                ],
+            );
+        }
+
+        #[test]
         fn window_control_area_from_prop_parses_protocol_values() {
             assert_eq!(
                 window_control_area_from_prop("drag"),
@@ -7813,6 +7881,154 @@ activation = "on_demand"
                     "error state should keep panel binding attached"
                 );
             });
+        }
+
+        #[gpui::test]
+        async fn render_delta_after_error_recovers_panel_without_closing_view(
+            cx: &mut TestAppContext,
+        ) {
+            init_test_app(cx);
+
+            let temp_dir = TempDir::new().expect("temp plugin dir");
+            let layout = PluginStoreLayout {
+                installed_root: temp_dir.path().join("installed"),
+                development_root: temp_dir.path().join("development"),
+            };
+            let plugin_root = layout.installed_root.join("test-plugin");
+            write_fake_plugin(
+                &plugin_root,
+                r#"
+id = "test-plugin"
+name = "Test Plugin"
+version = "0.1.0"
+schema_version = 1
+entry = "fake-plugin"
+
+[[panels]]
+id = "panel-a"
+title = "Panel A"
+dock = "right"
+activation = "on_demand"
+"#,
+            )
+            .expect("write fake plugin");
+
+            let registry = new_test_registry(layout, cx);
+            let (process_receiver, _terminate_receiver) =
+                seed_process(&registry, "test-plugin", true, cx);
+
+            let fs = FakeFs::new(cx.executor());
+            let project = Project::test(fs, [], cx).await;
+            let (workspace, cx) =
+                cx.add_window_view(|window, cx| new_test_workspace(project, window, cx));
+
+            let panel = workspace
+                .update_in(cx, |workspace, window, workspace_cx| {
+                    open_panel_in_workspace(
+                        "test-plugin",
+                        "panel-a",
+                        workspace,
+                        window,
+                        workspace_cx,
+                    )
+                })
+                .expect("open panel");
+
+            let panel_instance_id = cx.update(|_window, cx| {
+                registry
+                    .read(cx)
+                    .panels
+                    .keys()
+                    .next()
+                    .cloned()
+                    .expect("panel binding should exist")
+            });
+
+            let open_message = process_receiver
+                .recv()
+                .await
+                .expect("open panel message should be sent");
+            let open_decoded: HostToPlugin =
+                serde_json::from_str(&open_message).expect("open panel message should decode");
+            assert!(matches!(
+                open_decoded,
+                HostToPlugin::OpenPanel {
+                    panel_instance_id: message_panel_instance_id,
+                    ..
+                } if message_panel_instance_id == panel_instance_id
+            ));
+
+            let initial_root = UiNode::new(UiNodeKind::Div)
+                .with_child(UiNode::new(UiNodeKind::Label).with_text("before error"));
+            let recovered_root = UiNode::new(UiNodeKind::Div)
+                .with_child(UiNode::new(UiNodeKind::Label).with_text("after recovery"));
+            let patches = plugin_protocol::diff_ui_trees(&initial_root, &recovered_root);
+
+            cx.update(|_window, cx| {
+                registry
+                    .update(cx, |registry, registry_cx| {
+                        registry.apply_message(
+                            PluginId::new("test-plugin"),
+                            PluginToHost::Render {
+                                panel_id: String::from("panel-a"),
+                                panel_instance_id: panel_instance_id.clone(),
+                                generation: Some(1),
+                                root: initial_root.clone(),
+                            },
+                            registry_cx,
+                        )?;
+                        registry.apply_message(
+                            PluginId::new("test-plugin"),
+                            PluginToHost::ReportError {
+                                panel_instance_id: Some(panel_instance_id.clone()),
+                                message: String::from("render pipeline failed"),
+                            },
+                            registry_cx,
+                        )
+                    })
+                    .expect("apply panel render and error");
+
+                assert!(
+                    panel.read(cx).tree.is_none(),
+                    "error state should clear panel tree before recovery"
+                );
+            });
+
+            cx.update(|_window, cx| {
+                registry
+                    .update(cx, |registry, registry_cx| {
+                        registry.apply_message(
+                            PluginId::new("test-plugin"),
+                            PluginToHost::RenderDelta {
+                                panel_id: String::from("panel-a"),
+                                panel_instance_id: panel_instance_id.clone(),
+                                generation: Some(2),
+                                patches: patches.clone(),
+                            },
+                            registry_cx,
+                        )
+                    })
+                    .expect("apply panel render delta after error");
+
+                assert_eq!(
+                    panel.read(cx).tree,
+                    Some(recovered_root.clone()),
+                    "render delta after error should recover the panel tree"
+                );
+                assert!(
+                    panel.read(cx).error_message.is_none(),
+                    "recovered render should clear the error state"
+                );
+                assert!(
+                    registry.read(cx).panels.contains_key(&panel_instance_id),
+                    "recovery should keep panel binding attached"
+                );
+            });
+
+            assert!(
+                process_receiver.try_recv().is_err(),
+                "error-state render delta recovery must not send close panel"
+            );
         }
 
         #[gpui::test]
