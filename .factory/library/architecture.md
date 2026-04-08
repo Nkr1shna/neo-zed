@@ -1,110 +1,88 @@
 # Architecture
 
-How the detached agent panel PiP feature should fit into Neo Zed.
+How plugin canvas, plugin zoom, and plugin actions should fit into Neo Zed.
 
 ## What belongs here
 
-- Workspace, dock, and detached-window ownership rules
-- High-level relationships between `Workspace`, `AgentPanel`, detached presentation, and GPUI windowing
-- Platform invariants for always-on-top support
+- High-level relationships between plugin manifests, plugin runtime mirroring, plugin host rendering, workspace zoom, and action/keymap systems
+- Behavioral invariants that workers must preserve while extending the plugin platform
+- Likely ownership boundaries across crates
 
-## Core model
+## System model
 
-### 1. One agent experience per workspace
-- `AgentPanel` remains the single source of truth for agent UI state for a workspace.
-- The feature must not create a second independent agent session or duplicate conversation model when detaching.
-- Existing per-workspace thread and panel state should continue to flow through the same workspace-owned panel entity.
+### 1. Plugin surfaces are host-rendered remote views
+- Plugin UI is authored in plugin code through `gpui_plugin` and `ui_plugin`.
+- The plugin runtime mirrors its UI into serializable data in `gpui_api` and `plugin_protocol`.
+- `plugin_host` owns process lifecycle, panel/titlebar bindings, event routing, and host-side rendering.
+- Today the mirrored surface is a constrained remote widget tree; this mission extends that model without regressing current mirrored controls.
+- Remote surface nodes that participate in input routing, zoom targeting, or action dispatch must expose stable host-recognized identity across rerender and restore; behavior must not depend on transient tree order alone.
 
-### 2. Two presentations of the same workspace-owned panel
-- **Docked presentation:** the existing panel rendered inside the workspace dock.
-- **Detached presentation:** a floating native window with a window-local shell that wraps the same workspace-owned agent experience.
-- Only one presentation is visible at a time for a given workspace.
-- Preferred pattern: keep `AgentPanel` as the state owner and add a detached shell/root view around it rather than creating a second agent view model.
+### 2. Manifest metadata and runtime behavior are separate concerns
+- `plugin.toml` / `PluginManifest` describe discoverable user-facing metadata.
+- Runtime registration in the plugin process provides executable handlers and live UI behavior.
+- This separation is required for plugin actions: metadata must be visible before startup, but handlers only exist once the plugin process is ready.
 
-### 3. Workspace-owned detach controller
-- Detached-window lifecycle state should be owned by the workspace layer, not by a second agent view model.
-- The controller should track:
-  - whether the workspace is currently detached
-  - the detached window handle/identity
-  - most recently used detached bounds
-  - requested always-on-top state for the current app session
-- Closing the detached window must restore the docked presentation for that same workspace.
+### 3. Canvas parity requires extending the remote-surface protocol, not bypassing it
+- Native GPUI canvas is callback-driven drawing tied to host `Window` rendering.
+- Plugins cannot receive direct host `Window` access; instead they need a mirrored canvas abstraction that can round-trip rendering intent and input through the existing plugin/runtime boundary.
+- The host must remain the renderer of record for plugin surfaces.
+- Existing mirrored widget nodes and event semantics must continue to work beside the new canvas surface.
 
-## Dock and routing rules
+### 4. Zoom remains workspace-owned
+- The `workspace` crate owns zoom state and the `Shift-Escape` flow.
+- Native behavior today zooms whole panes or whole dock panels.
+- Plugin zoom support must integrate with that same workspace-owned zoom state rather than introducing a plugin-local fullscreen mode.
+- Child-target zoom therefore needs a stable protocol-visible host-understood target identity inside the plugin-rendered surface, not only a plugin-private reference.
 
-### Dock suppression
-- While detached, the workspace must continue to own `AgentPanel`, but the docked presentation must be suppressed.
-- Suppression means:
-  - no visible agent panel body in the dock
-  - no duplicate docked agent content
-  - no empty reserved dock space or ghost shell attributable to the agent panel
-- Detach is a presentation-mode switch, not panel deletion.
+### 5. Plugin actions should use a host proxy layer
+- GPUI actions are statically registered Rust action types and drive command-palette and keymap discovery.
+- Plugin-defined actions should not mutate the static action registry dynamically per action type.
+- Preferred shape: host-owned proxy action plumbing plus plugin metadata for discoverability and runtime handler registration for execution.
+- Plugin action execution must remain compatible with GPUI's static action registry, keymap parsing/building, and command discovery infrastructure rather than inventing a parallel dispatch path.
+- Lazy startup belongs in `plugin_host`; discovery must not start the plugin, but invocation may.
 
-### Focus and reveal routing
-- Normal agent focus/reveal/toggle flows should resolve to the detached window when that workspace is detached.
-- After reattachment, those same flows must resolve back to the docked panel.
-- Routing must be keyed to the owning workspace, not to the most recently active app window or to project-name similarity.
+## Core invariants
 
-### Multi-workspace behavior
-- Each workspace may have at most one detached agent window.
-- Multiple workspaces may each detach independently.
-- Actions for workspace A must never focus, mutate, or steal workspace B’s detached agent surface.
+1. Existing plugin panels and titlebar widgets keep working while new canvas capability is added.
+2. Plugin canvases remain host-rendered remote surfaces; plugin code does not take direct ownership of native windows.
+3. A plugin surface may have one zoomed target at a time, coordinated by workspace zoom state.
+4. Pane zoom and plugin zoom are mutually exclusive under the existing workspace zoom model.
+5. Plugin actions are discoverable before plugin startup but only executable once a runtime handler is available.
+6. Action discovery must not start the plugin process.
+7. Titlebar, panel, command-palette, keybinding, and restore entry paths must reattach to the same live plugin session and surface bindings when possible rather than spawning duplicate processes or duplicate panel instances.
+8. Workspace restore, dock reopen, and rerender paths must not duplicate remote plugin panels or leave stale handlers behind.
 
-## Detached window behavior
+## Likely code ownership
 
-### Floating shell
-- The detached presentation should be a native floating window that can coexist visibly with the owning workspace window.
-- The detached shell should reuse the same visible thread, transcript, and draft state the user had before detaching.
-- Once detached, the shell should swap the toolbar affordance from pop-out to pop-in so the user can restore directly to the owning workspace without exposing another duplicate-detach path.
-- Pop-in must close the detached window and restore exactly one docked panel in the owning workspace rather than leaving both presentations visible.
-- All restore paths, including pop-in and standard detached-window close shortcuts, must route through the same restore logic so they restore the current workspace-owned panel state rather than an older stale presentation.
-- Detached fullscreen should apply to the same detached shell instead of recreating a mirrored docked panel in the main window, and pop-in should remain available while fullscreen.
-- The detached shell should use the same titlebar style/treatment as the main Neo Zed window for the current platform, while still surfacing detached-specific controls.
-- Titlebar parity requires the detached window to use the same custom titlebar treatment/component path as the main workspace window rather than only copying window options or padding under native floating chrome.
-- The detached panel header/content must render below the native titlebar with no overlap or conflicting chrome.
-- Detached bounds are remembered per workspace within the current app session only.
-- Relaunch returns to docked mode; detached presentation itself is not restored across app restart.
+### Plugin metadata and protocol
+- `crates/plugin/src/plugin.rs`
+- `crates/plugin_protocol/src/plugin_protocol.rs`
+- `crates/gpui_api/src/gpui_api.rs`
+- `crates/gpui_plugin/src/gpui_plugin.rs`
+- `crates/ui_plugin/src/ui_plugin.rs`
 
-## Likely code ownership / entry points
+### Host rendering and process/session lifecycle
+- `crates/plugin_host/src/plugin_host.rs`
+- `crates/plugin_host/tests/plugin_host.rs`
 
-- `crates/agent_ui/src/agent_panel.rs`
-  - existing panel actions, toolbar/menu affordances, active-thread handling, panel serialization
-- `crates/agent_ui/src/conversation_view.rs`
-  - existing focus/reveal and notification-driven panel routing
+### Workspace zoom integration
 - `crates/workspace/src/workspace.rs`
-  - dock/panel ownership, focus routing, panel lifecycle
-- `crates/workspace/src/multi_workspace.rs`
-  - workspace/window lifecycle edge cases
-- `crates/gpui/src/platform.rs` and `crates/gpui/src/window.rs`
-  - shared runtime always-on-top API surface
-- `crates/gpui_macos/src/window.rs`, `crates/gpui_windows/src/window.rs`, `crates/gpui_linux/src/linux/x11/window.rs`, `crates/gpui_linux/src/linux/wayland/window.rs`
-  - backend behavior for runtime always-on-top and Wayland degradation
+- `crates/workspace/src/dock.rs`
+- `crates/workspace/src/pane.rs`
 
-### Cleanup
-- Closing the detached window restores the docked presentation.
-- Closing the owning workspace removes its detached window cleanly.
-- No stale focus target, orphaned floating window, or dead reveal path should remain after teardown.
+### Actions, command palette, and keymaps
+- `crates/gpui/src/action.rs`
+- `crates/gpui/src/app.rs`
+- `crates/gpui/src/window.rs`
+- `crates/command_palette/src/command_palette.rs`
+- `crates/command_palette_hooks/src/command_palette_hooks.rs`
+- `crates/settings/src/keymap_file.rs`
+- `crates/keymap_editor/src/keymap_editor.rs`
+- `script/check-keymaps`
 
-## Always-on-top architecture
+## Worker guidance
 
-### GPUI abstraction
-- GPUI needs an explicit runtime always-on-top capability exposed on `Window` / `PlatformWindow`.
-- Creation-time floating behavior is not sufficient because the lock must toggle at runtime.
-- The detached window should use that API rather than backend-specific logic from agent UI code.
-
-### Platform expectations
-- Supported for the lock toggle:
-  - macOS
-  - Windows
-  - Linux/X11
-- Graceful degradation:
-  - Linux/Wayland supports detach itself, but the lock control should be absent or visibly disabled and must never imply success.
-
-## Required invariants
-
-1. A workspace has one logical agent panel state, regardless of whether it is docked or detached.
-2. A workspace has at most one detached agent window at a time.
-3. Detaching must never create duplicate visible agent surfaces for the same workspace.
-4. Reattaching must preserve visible thread and draft state.
-5. Relaunch always returns to docked mode.
-6. Always-on-top is runtime-toggleable on supported platforms and explicitly unavailable on Wayland.
+- Treat the plugin protocol boundary as the hardest seam in this mission.
+- Prefer small, explicit protocol and metadata changes that preserve backward compatibility for existing plugin surfaces.
+- Whenever a feature claims “same plugin session” or “no duplicate panel”, verify it through host lifecycle evidence, not only visible UI.
+- For manual validation, use a purpose-built dev plugin fixture with labeled nested zoom targets and observable session/action counters so cross-area assertions are actually testable.

@@ -1,36 +1,31 @@
 # Environment
 
-Environment and setup notes for the detached agent panel PiP mission.
+Environment variables, external dependencies, and setup notes for the plugin platform mission.
 
 ## External dependencies
 
-- No new credentials, accounts, databases, or external APIs are required for this mission.
-- No long-running local services need to be started for implementation or validation.
+- No new credentials, accounts, databases, or external APIs are required.
+- No long-running local services or ports are needed for implementation or validation.
 
 ## Local tooling findings
 
-- `cargo`, `cargo fmt`, `python3`, and `rg` are available locally.
-- `cargo nextest` is not installed locally; workers should use `cargo test` for local verification unless a feature explicitly installs or requires something else.
-- The repo-standard lint command is `./script/clippy`.
+- `cargo`, `cargo fmt`, `python3`, `rg`, and repo scripts are available locally.
+- `cargo nextest` is not installed locally; workers should use `cargo test` for local verification.
+- Repo-standard linting is `./script/clippy`.
+- Repo-standard keymap validation is `./script/check-keymaps`.
+
+## Local repo constraints
+
+- Preserve unrelated local edits in `assets/settings/default.json` and `crates/agent_ui/src/agent_panel.rs` unless a mission feature explicitly requires overlap.
+- Do not introduce new local services, background daemons, or port allocations.
 
 ## Machine/resource notes
 
-- The planning dry run observed a 12-core machine with ample memory.
-- Repo-wide Rust test commands should still use conservative test parallelism because this workspace is large and shares one target directory.
-- `.factory/services.yaml` therefore caps test threads at 6 for the baseline `cargo test` commands.
-
-## Platform scope
-
-- In scope:
-  - macOS
-  - Windows
-  - Linux/X11
-  - Linux/Wayland
-- Expected degradation:
-  - Wayland supports detach/restore
-  - Wayland does not promise always-on-top; the lock control must be disabled or unavailable there
+- Planning dry run observed a 12-core machine with roughly 51.5 GB RAM.
+- This Rust workspace is large and shares one target directory; use conservative test parallelism.
+- Baseline `cargo test` commands in `.factory/services.yaml` should stay capped at 6 test threads.
 
 ## What does not belong here
 
-- Service ports or start/stop commands (use `.factory/services.yaml`)
-- Architectural behavior or invariants (use `architecture.md`)
+- Service start/stop commands or ports (use `.factory/services.yaml`)
+- Behavioral invariants or crate ownership (use `architecture.md` or topic files)
