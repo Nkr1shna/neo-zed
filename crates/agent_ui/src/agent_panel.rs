@@ -1434,6 +1434,29 @@ impl AgentPanel {
         ))
     }
 
+    fn detached_window_options(
+        &self,
+        detached_bounds: WindowBounds,
+        cx: &mut Context<Self>,
+    ) -> WindowOptions {
+        let build_window_options = self.workspace.upgrade().map(|workspace| {
+            workspace.read_with(cx, |workspace, _| {
+                workspace.app_state().build_window_options
+            })
+        });
+
+        let mut options = build_window_options
+            .map(|build_window_options| build_window_options(None, cx))
+            .unwrap_or_default();
+        options.kind = WindowKind::Floating;
+        options.window_bounds = Some(detached_bounds);
+        options.window_min_size = Some(detached_agent_window_min_size());
+        options.window_background = cx.theme().window_background_appearance();
+        options.focus = true;
+        options.show = true;
+        options
+    }
+
     fn focus_existing_detached_window(&mut self, cx: &mut Context<Self>) -> bool {
         let Some(detached_window) = self.detached_window_handle else {
             return false;
@@ -1463,13 +1486,7 @@ impl AgentPanel {
             .unwrap_or_else(|| self.default_detached_window_bounds(window));
         self.detached_window_bounds = Some(detached_bounds);
 
-        let options = WindowOptions {
-            kind: WindowKind::Floating,
-            window_bounds: Some(detached_bounds),
-            window_min_size: Some(detached_agent_window_min_size()),
-            window_background: cx.theme().window_background_appearance(),
-            ..WindowOptions::default()
-        };
+        let options = self.detached_window_options(detached_bounds, cx);
 
         match cx.open_window(options, move |window, cx| {
             cx.new(|cx| DetachedAgentPanelWindow::new(panel.clone(), window, cx))
@@ -1840,6 +1857,21 @@ impl AgentPanel {
     }
 
     pub fn toggle_zoom(&mut self, _: &ToggleZoom, window: &mut Window, cx: &mut Context<Self>) {
+        if let Some(detached_window) = self.detached_window_handle {
+            if detached_window.window_id() == window.window_handle().window_id() {
+                window.toggle_fullscreen();
+            } else if detached_window
+                .update(cx, |_root, detached_window, _| {
+                    detached_window.activate_window();
+                    detached_window.toggle_fullscreen();
+                })
+                .is_err()
+            {
+                self.set_detached_window_handle(None, cx);
+            }
+            return;
+        }
+
         if self.zoomed {
             cx.emit(PanelEvent::ZoomOut);
         } else {
@@ -3692,8 +3724,12 @@ impl Panel for AgentPanel {
         self.focus_existing_detached_window(cx)
     }
 
-    fn is_zoomed(&self, _window: &Window, _cx: &App) -> bool {
-        self.zoomed
+    fn is_zoomed(&self, window: &Window, _cx: &App) -> bool {
+        if self.detached_window_handle.is_some() {
+            window.is_fullscreen()
+        } else {
+            self.zoomed
+        }
     }
 
     fn set_zoomed(&mut self, zoomed: bool, _window: &mut Window, cx: &mut Context<Self>) {
@@ -5908,6 +5944,134 @@ mod tests {
                 "reattached routing should target the restored docked panel"
             );
         });
+    }
+
+    #[gpui::test]
+    async fn test_detached_fullscreen_targets_detached_window_and_keeps_pop_in(
+        cx: &mut TestAppContext,
+    ) {
+        let (workspace, panel, mut visual_cx) = setup_workspace_with_visible_panel(cx).await;
+
+        panel.update_in(&mut visual_cx, |panel, window, cx| {
+            panel.open_detached_window_for_tests(window, cx);
+        });
+        visual_cx.run_until_parked();
+
+        let detached_window = panel
+            .read_with(&visual_cx, |panel, _| {
+                panel.detached_window_handle_for_tests()
+            })
+            .expect("detached window should exist after detaching");
+
+        let panel_for_fullscreen_on = panel.clone();
+        detached_window
+            .update(&mut visual_cx, |_, window: &mut Window, cx| {
+                panel_for_fullscreen_on.update(cx, |panel, cx| {
+                    panel.toggle_zoom(&ToggleZoom, window, cx);
+                });
+            })
+            .expect("detached fullscreen toggle should succeed");
+        visual_cx.run_until_parked();
+
+        detached_window
+            .update(&mut visual_cx, |_, window: &mut Window, _| {
+                assert!(
+                    window.is_fullscreen(),
+                    "fullscreen from detached mode should apply to the detached window itself"
+                );
+            })
+            .expect("detached window should remain readable");
+
+        workspace.read_with(&visual_cx, |workspace, cx| {
+            let panel_position = workspace
+                .agent_panel_position(cx)
+                .expect("agent panel should still belong to the workspace");
+            assert!(
+                workspace
+                    .dock_at_position(panel_position)
+                    .read(cx)
+                    .visible_panel(cx)
+                    .is_none(),
+                "detached fullscreen should not recreate or mirror a docked panel"
+            );
+            assert!(
+                workspace.zoomed_item().is_none(),
+                "detached fullscreen should not mark the workspace dock as zoomed"
+            );
+        });
+
+        panel.read_with(&visual_cx, |panel, _| {
+            assert!(
+                panel.show_pop_in_control_for_tests(),
+                "pop-in should remain available while detached fullscreen is active"
+            );
+        });
+
+        let panel_for_fullscreen_off = panel.clone();
+        detached_window
+            .update(&mut visual_cx, |_, window: &mut Window, cx| {
+                panel_for_fullscreen_off.update(cx, |panel, cx| {
+                    panel.toggle_zoom(&ToggleZoom, window, cx);
+                });
+            })
+            .expect("detached fullscreen exit should succeed");
+        visual_cx.run_until_parked();
+
+        detached_window
+            .update(&mut visual_cx, |_, window: &mut Window, _| {
+                assert!(
+                    !window.is_fullscreen(),
+                    "second detached fullscreen toggle should restore windowed mode"
+                );
+            })
+            .expect("detached window should remain readable after fullscreen exit");
+    }
+
+    #[gpui::test]
+    async fn test_detached_window_uses_workspace_titlebar_treatment(cx: &mut TestAppContext) {
+        let (workspace, panel, mut visual_cx) = setup_workspace_with_visible_panel(cx).await;
+
+        let build_window_options = workspace.read_with(&visual_cx, |workspace, _| {
+            workspace.app_state().build_window_options
+        });
+        let expected_main_window_options =
+            panel.update(&mut visual_cx, |_panel, cx| build_window_options(None, cx));
+
+        let detached_window_options = panel.update_in(&mut visual_cx, |panel, window, cx| {
+            let detached_bounds = panel.default_detached_window_bounds(window);
+            panel.detached_window_options(detached_bounds, cx)
+        });
+
+        assert_eq!(
+            detached_window_options.kind,
+            WindowKind::Floating,
+            "detached window should still open as a floating companion window"
+        );
+        assert_eq!(
+            detached_window_options.window_decorations,
+            expected_main_window_options.window_decorations,
+            "detached window should match main-window decoration treatment"
+        );
+        assert_eq!(
+            detached_window_options.app_id, expected_main_window_options.app_id,
+            "detached window should use the same app id grouping as main windows"
+        );
+
+        let detached_titlebar = detached_window_options
+            .titlebar
+            .expect("detached window should configure a titlebar");
+        let expected_titlebar = expected_main_window_options
+            .titlebar
+            .expect("main window options should configure a titlebar");
+
+        assert_eq!(
+            detached_titlebar.appears_transparent, expected_titlebar.appears_transparent,
+            "detached titlebar transparency treatment should match main window options"
+        );
+        assert_eq!(
+            detached_titlebar.traffic_light_position, expected_titlebar.traffic_light_position,
+            "detached titlebar button layout should match main window options"
+        );
     }
 
     #[gpui::test]
