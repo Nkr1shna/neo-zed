@@ -16,6 +16,8 @@ Mission-specific notes for detached agent windows and always-on-top behavior.
 - While detached, the window must expose a pop-in restore affordance instead of another pop-out affordance.
 - Activating pop-in restores the panel to the owning workspace window instead of closing into an ambiguous state.
 - Activating pop-in must also close the detached window itself and leave exactly one restored docked panel instance.
+- Standard detached-window close paths (for example Cmd+W on macOS) must use the same restore behavior as pop-in.
+- Restore must reveal the current corrected docked panel state, not an older stale snapshot of the panel shell.
 - Fullscreen from detached mode must fullscreen that same detached window, not recreate or mirror the panel back into the main window.
 - Pop-in must remain available while the detached window is fullscreen.
 - Detached windows should use the same titlebar style/treatment as the main Neo Zed window for the current platform.

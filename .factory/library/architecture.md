@@ -57,6 +57,7 @@ How the detached agent panel PiP feature should fit into Neo Zed.
 - The detached shell should reuse the same visible thread, transcript, and draft state the user had before detaching.
 - Once detached, the shell should swap the toolbar affordance from pop-out to pop-in so the user can restore directly to the owning workspace without exposing another duplicate-detach path.
 - Pop-in must close the detached window and restore exactly one docked panel in the owning workspace rather than leaving both presentations visible.
+- All restore paths, including pop-in and standard detached-window close shortcuts, must route through the same restore logic so they restore the current workspace-owned panel state rather than an older stale presentation.
 - Detached fullscreen should apply to the same detached shell instead of recreating a mirrored docked panel in the main window, and pop-in should remain available while fullscreen.
 - The detached shell should use the same titlebar style/treatment as the main Neo Zed window for the current platform, while still surfacing detached-specific controls.
 - Titlebar parity requires the detached window to use the same custom titlebar treatment/component path as the main workspace window rather than only copying window options or padding under native floating chrome.
