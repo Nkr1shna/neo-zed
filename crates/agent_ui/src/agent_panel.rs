@@ -76,7 +76,8 @@ use terminal_view::{TerminalView, terminal_panel::TerminalPanel};
 use theme_settings::ThemeSettings;
 use ui::{
     Button, ButtonLike, Callout, CommonAnimationExt, ContextMenu, ContextMenuEntry, PopoverMenu,
-    PopoverMenuHandle, Tab, Tooltip, prelude::*, utils::WithRemSize,
+    PopoverMenuHandle, Tab, Tooltip, DocumentationSide, prelude::*,
+    utils::{WithRemSize, platform_title_bar_height},
 };
 use util::{ResultExt as _, debug_panic};
 use workspace::{
@@ -4071,6 +4072,32 @@ impl AgentPanel {
             })
     }
 
+    fn detached_content_top_padding(&self, window: &Window, cx: &mut Context<Self>) -> Pixels {
+        let Some(detached_window) = self.detached_window_handle else {
+            return px(0.);
+        };
+
+        if detached_window.window_id() != window.window_handle().window_id()
+            || window.is_fullscreen()
+        {
+            return px(0.);
+        }
+
+        let uses_transparent_titlebar = self
+            .workspace
+            .upgrade()
+            .map(|workspace| workspace.read(cx).app_state().build_window_options)
+            .map(|build_window_options| build_window_options(None, cx))
+            .and_then(|options| options.titlebar)
+            .is_some_and(|titlebar| titlebar.appears_transparent);
+
+        if uses_transparent_titlebar {
+            platform_title_bar_height(window)
+        } else {
+            px(0.)
+        }
+    }
+
     fn render_toolbar(&self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let agent_server_store = self.project.read(cx).agent_server_store().clone();
         let has_visible_worktrees = self.project.read(cx).visible_worktrees(cx).next().is_some();
@@ -4862,9 +4889,11 @@ impl Render for AgentPanel {
         // - Font size works as expected and can be changed with cmd-+/cmd-
         // - Scrolling in all views works as expected
         // - Files can be dropped into the panel
+        let content_top_padding = self.detached_content_top_padding(window, cx);
         let content = v_flex()
             .relative()
             .size_full()
+            .pt(content_top_padding)
             .justify_between()
             .key_context(self.key_context())
             .on_action(cx.listener(|this, action: &NewThread, window, cx| {
@@ -6072,6 +6101,42 @@ mod tests {
             detached_titlebar.traffic_light_position, expected_titlebar.traffic_light_position,
             "detached titlebar button layout should match main window options"
         );
+    }
+
+    #[gpui::test]
+    async fn test_detached_content_renders_below_titlebar(cx: &mut TestAppContext) {
+        let (_workspace, panel, mut visual_cx) = setup_workspace_with_visible_panel(cx).await;
+
+        panel.update_in(&mut visual_cx, |panel, window, cx| {
+            panel.open_detached_window_for_tests(window, cx);
+        });
+        visual_cx.run_until_parked();
+
+        let detached_window = panel
+            .read_with(&visual_cx, |panel, _| {
+                panel.detached_window_handle_for_tests()
+            })
+            .expect("detached window should exist after detaching");
+
+        let panel_for_assertion = panel.clone();
+        detached_window
+            .update(&mut visual_cx, |_, detached_window: &mut Window, cx| {
+                panel_for_assertion.update(cx, |panel, cx| {
+                    let top_padding = panel.detached_content_top_padding(detached_window, cx);
+                    let detached_window_options =
+                        panel.detached_window_options(detached_window.window_bounds(), cx);
+                    let expected_padding = detached_window_options
+                        .titlebar
+                        .is_some_and(|titlebar| titlebar.appears_transparent)
+                        .then(|| platform_title_bar_height(detached_window))
+                        .unwrap_or(px(0.));
+                    assert_eq!(
+                        top_padding, expected_padding,
+                        "detached panel header/content should be offset below the native titlebar"
+                    );
+                });
+            })
+            .expect("detached window should remain readable");
     }
 
     #[gpui::test]
