@@ -15,9 +15,9 @@ use crate::{
     ScaledPixels, Scene, Shadow, SharedString, Size, StrikethroughStyle, Style, SubpixelSprite,
     SubscriberSet, Subscription, SystemWindowTab, SystemWindowTabController, TabStopMap,
     TaffyLayoutEngine, Task, TextRenderingMode, TextStyle, TextStyleRefinement, ThermalState,
-    TransformationMatrix, Underline, UnderlineStyle, WindowAppearance, WindowBackgroundAppearance,
-    WindowBounds, WindowControls, WindowDecorations, WindowOptions, WindowParams, WindowTextSystem,
-    point, prelude::*, px, rems, size, transparent_black,
+    TransformationMatrix, Underline, UnderlineStyle, WindowAlwaysOnTop, WindowAppearance,
+    WindowBackgroundAppearance, WindowBounds, WindowControls, WindowDecorations, WindowOptions,
+    WindowParams, WindowTextSystem, point, prelude::*, px, rems, size, transparent_black,
 };
 use anyhow::{Context as _, Result, anyhow};
 use collections::{FxHashMap, FxHashSet};
@@ -1985,6 +1985,18 @@ impl Window {
     /// Returns whether or not the window is currently fullscreen
     pub fn is_fullscreen(&self) -> bool {
         self.platform_window.is_fullscreen()
+    }
+
+    /// Returns the platform-reported runtime always-on-top state for this window.
+    pub fn always_on_top(&self) -> WindowAlwaysOnTop {
+        self.platform_window.always_on_top()
+    }
+
+    /// Requests a runtime always-on-top state change for this window.
+    ///
+    /// On unsupported backends this returns [`WindowAlwaysOnTop::Unsupported`].
+    pub fn set_always_on_top(&self, always_on_top: bool) -> WindowAlwaysOnTop {
+        self.platform_window.set_always_on_top(always_on_top)
     }
 
     pub(crate) fn appearance_changed(&mut self, cx: &mut App) {

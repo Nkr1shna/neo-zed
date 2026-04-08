@@ -6,8 +6,8 @@ use gpui::{
     AnyWindowHandle, Bounds, Decorations, DevicePixels, ForegroundExecutor, GpuSpecs, Modifiers,
     Pixels, PlatformAtlas, PlatformDisplay, PlatformInput, PlatformInputHandler, PlatformWindow,
     Point, PromptButton, PromptLevel, RequestFrameOptions, ResizeEdge, ScaledPixels, Scene, Size,
-    Tiling, WindowAppearance, WindowBackgroundAppearance, WindowBounds, WindowControlArea,
-    WindowDecorations, WindowKind, WindowParams, px,
+    Tiling, WindowAlwaysOnTop, WindowAppearance, WindowBackgroundAppearance, WindowBounds,
+    WindowControlArea, WindowDecorations, WindowKind, WindowParams, px,
 };
 use gpui_wgpu::{CompositorGpuHint, WgpuRenderer, WgpuSurfaceConfig};
 
@@ -64,6 +64,7 @@ x11rb::atom_manager! {
         _NET_WM_STATE_MAXIMIZED_VERT,
         _NET_WM_STATE_MAXIMIZED_HORZ,
         _NET_WM_STATE_FULLSCREEN,
+        _NET_WM_STATE_ABOVE,
         _NET_WM_STATE_HIDDEN,
         _NET_WM_STATE_FOCUSED,
         _NET_ACTIVE_WINDOW,
@@ -279,6 +280,7 @@ pub struct X11WindowState {
     hovered: bool,
     pub(crate) force_render_after_recovery: bool,
     fullscreen: bool,
+    always_on_top: bool,
     client_side_decorations_supported: bool,
     decorations: WindowDecorations,
     edge_constraints: Option<EdgeConstraints>,
@@ -760,6 +762,7 @@ impl X11WindowState {
                 hovered: false,
                 force_render_after_recovery: false,
                 fullscreen: false,
+                always_on_top: false,
                 maximized_vertical: false,
                 maximized_horizontal: false,
                 hidden: false,
@@ -834,8 +837,8 @@ impl Drop for X11Window {
 }
 
 enum WmHintPropertyState {
-    // Remove = 0,
-    // Add = 1,
+    Remove = 0,
+    Add = 1,
     Toggle = 2,
 }
 
@@ -1043,6 +1046,7 @@ impl X11WindowStatePtr {
         state.maximized_vertical = false;
         state.maximized_horizontal = false;
         state.hidden = false;
+        state.always_on_top = false;
 
         for atom in atoms {
             if atom == state.atoms._NET_WM_STATE_FOCUSED {
@@ -1055,6 +1059,8 @@ impl X11WindowStatePtr {
                 state.maximized_horizontal = true;
             } else if atom == state.atoms._NET_WM_STATE_HIDDEN {
                 state.hidden = true;
+            } else if atom == state.atoms._NET_WM_STATE_ABOVE {
+                state.always_on_top = true;
             }
         }
 
@@ -1579,6 +1585,37 @@ impl PlatformWindow for X11Window {
 
     fn is_fullscreen(&self) -> bool {
         self.0.state.borrow().fullscreen
+    }
+
+    fn set_always_on_top(&self, always_on_top: bool) -> WindowAlwaysOnTop {
+        let atom = self.0.state.borrow().atoms._NET_WM_STATE_ABOVE;
+        self.set_wm_hints(
+            || "X11 SendEvent to change always-on-top state failed.",
+            if always_on_top {
+                WmHintPropertyState::Add
+            } else {
+                WmHintPropertyState::Remove
+            },
+            atom,
+            xproto::AtomEnum::NONE.into(),
+        )
+        .log_err();
+
+        self.0.state.borrow_mut().always_on_top = always_on_top;
+
+        if always_on_top {
+            WindowAlwaysOnTop::Enabled
+        } else {
+            WindowAlwaysOnTop::Disabled
+        }
+    }
+
+    fn always_on_top(&self) -> WindowAlwaysOnTop {
+        if self.0.state.borrow().always_on_top {
+            WindowAlwaysOnTop::Enabled
+        } else {
+            WindowAlwaysOnTop::Disabled
+        }
     }
 
     fn on_request_frame(&self, callback: Box<dyn FnMut(RequestFrameOptions)>) {

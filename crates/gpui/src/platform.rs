@@ -414,6 +414,29 @@ impl Default for WindowControls {
     }
 }
 
+/// The platform-reported always-on-top state for a window.
+#[derive(Debug, Copy, Clone, Eq, PartialEq, Hash)]
+pub enum WindowAlwaysOnTop {
+    /// Runtime always-on-top is unsupported on this platform/backend.
+    Unsupported,
+    /// Runtime always-on-top is supported and currently disabled.
+    Disabled,
+    /// Runtime always-on-top is supported and currently enabled.
+    Enabled,
+}
+
+impl WindowAlwaysOnTop {
+    /// Returns whether this platform/backend supports runtime always-on-top.
+    pub fn is_supported(self) -> bool {
+        !matches!(self, Self::Unsupported)
+    }
+
+    /// Returns whether runtime always-on-top is currently enabled.
+    pub fn is_enabled(self) -> bool {
+        matches!(self, Self::Enabled)
+    }
+}
+
 /// A window control button type used in [`WindowButtonLayout`].
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum WindowButton {
@@ -624,6 +647,12 @@ pub trait PlatformWindow: HasWindowHandle + HasDisplayHandle {
     fn zoom(&self);
     fn toggle_fullscreen(&self);
     fn is_fullscreen(&self) -> bool;
+    fn set_always_on_top(&self, _always_on_top: bool) -> WindowAlwaysOnTop {
+        WindowAlwaysOnTop::Unsupported
+    }
+    fn always_on_top(&self) -> WindowAlwaysOnTop {
+        WindowAlwaysOnTop::Unsupported
+    }
     fn on_request_frame(&self, callback: Box<dyn FnMut(RequestFrameOptions)>);
     fn on_input(&self, callback: Box<dyn FnMut(PlatformInput) -> DispatchEventResult>);
     fn on_active_status_change(&self, callback: Box<dyn FnMut(bool)>);

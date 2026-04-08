@@ -33,9 +33,9 @@ use gpui::{
     AnyWindowHandle, Bounds, Capslock, Decorations, DevicePixels, GpuSpecs, Modifiers, Pixels,
     PlatformAtlas, PlatformDisplay, PlatformInput, PlatformInputHandler, PlatformWindow, Point,
     PromptButton, PromptLevel, RequestFrameOptions, ResizeEdge, Scene, Size, Tiling,
-    WindowAppearance, WindowBackgroundAppearance, WindowBounds, WindowControlArea, WindowControls,
-    WindowDecorations, WindowKind, WindowParams, layer_shell::LayerShellNotSupportedError, px,
-    size,
+    WindowAlwaysOnTop, WindowAppearance, WindowBackgroundAppearance, WindowBounds,
+    WindowControlArea, WindowControls, WindowDecorations, WindowKind, WindowParams,
+    layer_shell::LayerShellNotSupportedError, px, size,
 };
 use gpui_wgpu::{CompositorGpuHint, WgpuRenderer, WgpuSurfaceConfig};
 
@@ -1311,6 +1311,14 @@ impl PlatformWindow for WaylandWindow {
 
     fn is_fullscreen(&self) -> bool {
         self.borrow().fullscreen
+    }
+
+    fn set_always_on_top(&self, _always_on_top: bool) -> WindowAlwaysOnTop {
+        WindowAlwaysOnTop::Unsupported
+    }
+
+    fn always_on_top(&self) -> WindowAlwaysOnTop {
+        WindowAlwaysOnTop::Unsupported
     }
 
     fn on_request_frame(&self, callback: Box<dyn FnMut(RequestFrameOptions)>) {

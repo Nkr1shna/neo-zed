@@ -2,8 +2,8 @@ use crate::{
     AnyWindowHandle, AtlasKey, AtlasTextureId, AtlasTile, Bounds, DevicePixels,
     DispatchEventResult, GpuSpecs, Pixels, PlatformAtlas, PlatformDisplay,
     PlatformHeadlessRenderer, PlatformInput, PlatformInputHandler, PlatformWindow, Point,
-    PromptButton, RequestFrameOptions, Scene, Size, TestPlatform, TileId, WindowAppearance,
-    WindowBackgroundAppearance, WindowBounds, WindowControlArea, WindowParams,
+    PromptButton, RequestFrameOptions, Scene, Size, TestPlatform, TileId, WindowAlwaysOnTop,
+    WindowAppearance, WindowBackgroundAppearance, WindowBounds, WindowControlArea, WindowParams,
 };
 use collections::HashMap;
 use image::RgbaImage;
@@ -33,6 +33,8 @@ pub(crate) struct TestWindowState {
     moved_callback: Option<Box<dyn FnMut()>>,
     input_handler: Option<PlatformInputHandler>,
     is_fullscreen: bool,
+    always_on_top_supported: bool,
+    is_always_on_top: bool,
 }
 
 #[derive(Clone)]
@@ -84,6 +86,8 @@ impl TestWindow {
             moved_callback: None,
             input_handler: None,
             is_fullscreen: false,
+            always_on_top_supported: true,
+            is_always_on_top: false,
         })))
     }
 
@@ -119,6 +123,14 @@ impl TestWindow {
         let result = callback(event);
         self.0.lock().input_callback = Some(callback);
         !result.propagate
+    }
+
+    pub fn set_always_on_top_supported(&self, supported: bool) {
+        let mut state = self.0.lock();
+        state.always_on_top_supported = supported;
+        if !supported {
+            state.is_always_on_top = false;
+        }
     }
 }
 
@@ -251,6 +263,33 @@ impl PlatformWindow for TestWindow {
         self.0.lock().is_fullscreen
     }
 
+    fn set_always_on_top(&self, always_on_top: bool) -> WindowAlwaysOnTop {
+        let mut state = self.0.lock();
+        if !state.always_on_top_supported {
+            return WindowAlwaysOnTop::Unsupported;
+        }
+
+        state.is_always_on_top = always_on_top;
+        if always_on_top {
+            WindowAlwaysOnTop::Enabled
+        } else {
+            WindowAlwaysOnTop::Disabled
+        }
+    }
+
+    fn always_on_top(&self) -> WindowAlwaysOnTop {
+        let state = self.0.lock();
+        if !state.always_on_top_supported {
+            return WindowAlwaysOnTop::Unsupported;
+        }
+
+        if state.is_always_on_top {
+            WindowAlwaysOnTop::Enabled
+        } else {
+            WindowAlwaysOnTop::Disabled
+        }
+    }
+
     fn on_request_frame(&self, _callback: Box<dyn FnMut(RequestFrameOptions)>) {}
 
     fn on_input(&self, callback: Box<dyn FnMut(crate::PlatformInput) -> DispatchEventResult>) {
@@ -325,6 +364,62 @@ impl PlatformWindow for TestWindow {
 
     fn gpu_specs(&self) -> Option<GpuSpecs> {
         None
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::{EmptyView, TestDisplay, WindowHandle, WindowId, WindowKind};
+
+    fn new_test_window() -> TestWindow {
+        let handle: AnyWindowHandle = WindowHandle::<EmptyView>::new(WindowId::from(1)).into();
+        let params = WindowParams {
+            bounds: Bounds::default(),
+            titlebar: None,
+            kind: WindowKind::Normal,
+            is_movable: true,
+            is_resizable: true,
+            is_minimizable: true,
+            focus: false,
+            show: false,
+            display_id: None,
+            window_min_size: None,
+            #[cfg(target_os = "macos")]
+            tabbing_identifier: None,
+        };
+
+        TestWindow::new(
+            handle,
+            params,
+            Weak::new(),
+            Rc::new(TestDisplay::new()),
+            None,
+        )
+    }
+
+    #[test]
+    fn always_on_top_round_trips_for_supported_test_window() {
+        let window = new_test_window();
+
+        assert_eq!(window.always_on_top(), WindowAlwaysOnTop::Disabled);
+        assert_eq!(window.set_always_on_top(true), WindowAlwaysOnTop::Enabled);
+        assert_eq!(window.always_on_top(), WindowAlwaysOnTop::Enabled);
+        assert_eq!(window.set_always_on_top(false), WindowAlwaysOnTop::Disabled);
+        assert_eq!(window.always_on_top(), WindowAlwaysOnTop::Disabled);
+    }
+
+    #[test]
+    fn always_on_top_reports_unsupported_when_disabled() {
+        let window = new_test_window();
+        window.set_always_on_top_supported(false);
+
+        assert_eq!(window.always_on_top(), WindowAlwaysOnTop::Unsupported);
+        assert_eq!(
+            window.set_always_on_top(true),
+            WindowAlwaysOnTop::Unsupported
+        );
+        assert_eq!(window.always_on_top(), WindowAlwaysOnTop::Unsupported);
     }
 }
 

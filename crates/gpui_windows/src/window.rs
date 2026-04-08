@@ -50,6 +50,7 @@ pub struct WindowsWindowState {
     pub border_offset: WindowBorderOffset,
     pub appearance: Cell<WindowAppearance>,
     pub background_appearance: Cell<WindowBackgroundAppearance>,
+    pub always_on_top: Cell<bool>,
     pub scale_factor: Cell<f32>,
     pub restore_from_minimized: Cell<Option<Box<dyn FnMut(RequestFrameOptions)>>>,
 
@@ -122,6 +123,7 @@ impl WindowsWindowState {
         };
         let border_offset = WindowBorderOffset::default();
         let restore_from_minimized = None;
+        let always_on_top = false;
         let renderer = DirectXRenderer::new(hwnd, directx_devices, disable_direct_composition)
             .context("Creating DirectX renderer")?;
         let callbacks = Callbacks::default();
@@ -145,6 +147,7 @@ impl WindowsWindowState {
             border_offset,
             appearance: Cell::new(appearance),
             background_appearance: Cell::new(WindowBackgroundAppearance::Opaque),
+            always_on_top: Cell::new(always_on_top),
             scale_factor: Cell::new(scale_factor),
             restore_from_minimized: Cell::new(restore_from_minimized),
             min_size,
@@ -863,6 +866,48 @@ impl PlatformWindow for WindowsWindow {
 
     fn is_fullscreen(&self) -> bool {
         self.state.is_fullscreen()
+    }
+
+    fn set_always_on_top(&self, always_on_top: bool) -> WindowAlwaysOnTop {
+        self.state.always_on_top.set(always_on_top);
+
+        let hwnd = self.0.hwnd;
+        self.0
+            .executor
+            .spawn(async move {
+                unsafe {
+                    SetWindowPos(
+                        hwnd,
+                        if always_on_top {
+                            Some(HWND_TOPMOST)
+                        } else {
+                            Some(HWND_NOTOPMOST)
+                        },
+                        0,
+                        0,
+                        0,
+                        0,
+                        SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE,
+                    )
+                    .context("unable to update always-on-top state")
+                    .log_err();
+                }
+            })
+            .detach();
+
+        if always_on_top {
+            WindowAlwaysOnTop::Enabled
+        } else {
+            WindowAlwaysOnTop::Disabled
+        }
+    }
+
+    fn always_on_top(&self) -> WindowAlwaysOnTop {
+        if self.state.always_on_top.get() {
+            WindowAlwaysOnTop::Enabled
+        } else {
+            WindowAlwaysOnTop::Disabled
+        }
     }
 
     fn on_request_frame(&self, callback: Box<dyn FnMut(RequestFrameOptions)>) {

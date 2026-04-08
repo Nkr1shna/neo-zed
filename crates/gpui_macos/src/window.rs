@@ -29,7 +29,7 @@ use gpui::{
     ForegroundExecutor, KeyDownEvent, Keystroke, Modifiers, ModifiersChangedEvent, MouseButton,
     MouseDownEvent, MouseMoveEvent, MouseUpEvent, Pixels, PlatformAtlas, PlatformDisplay,
     PlatformInput, PlatformInputHandler, PlatformWindow, Point, PromptButton, PromptLevel,
-    RequestFrameOptions, SharedString, Size, SystemWindowTab, WindowAppearance,
+    RequestFrameOptions, SharedString, Size, SystemWindowTab, WindowAlwaysOnTop, WindowAppearance,
     WindowBackgroundAppearance, WindowBounds, WindowControlArea, WindowKind, WindowParams, point,
     px, size,
 };
@@ -451,6 +451,7 @@ struct MacWindowState {
     // Whether the next left-mouse click is also the focusing click.
     first_mouse: bool,
     fullscreen_restore_bounds: Bounds<Pixels>,
+    always_on_top: bool,
     move_tab_to_new_window_callback: Option<Box<dyn FnMut()>>,
     merge_all_windows_callback: Option<Box<dyn FnMut()>>,
     select_next_tab_callback: Option<Box<dyn FnMut()>>,
@@ -776,6 +777,7 @@ impl MacWindow {
                 external_files_dragged: false,
                 first_mouse: false,
                 fullscreen_restore_bounds: Bounds::default(),
+                always_on_top: matches!(&kind, WindowKind::Floating | WindowKind::PopUp),
                 move_tab_to_new_window_callback: None,
                 merge_all_windows_callback: None,
                 select_next_tab_callback: None,
@@ -1492,6 +1494,42 @@ impl PlatformWindow for MacWindow {
             window
                 .styleMask()
                 .contains(NSWindowStyleMask::NSFullScreenWindowMask)
+        }
+    }
+
+    fn set_always_on_top(&self, always_on_top: bool) -> WindowAlwaysOnTop {
+        let mut state = self.0.lock();
+        state.always_on_top = always_on_top;
+
+        let window = state.native_window;
+        let closed = state.closed.clone();
+        let executor = state.foreground_executor.clone();
+        drop(state);
+
+        executor
+            .spawn(async move {
+                if_window_not_closed(closed, || unsafe {
+                    window.setLevel_(if always_on_top {
+                        NSFloatingWindowLevel
+                    } else {
+                        NSNormalWindowLevel
+                    });
+                })
+            })
+            .detach();
+
+        if always_on_top {
+            WindowAlwaysOnTop::Enabled
+        } else {
+            WindowAlwaysOnTop::Disabled
+        }
+    }
+
+    fn always_on_top(&self) -> WindowAlwaysOnTop {
+        if self.0.lock().always_on_top {
+            WindowAlwaysOnTop::Enabled
+        } else {
+            WindowAlwaysOnTop::Disabled
         }
     }
 
