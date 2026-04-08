@@ -1,7 +1,7 @@
 {
   "milestone": "plugin-canvas",
   "round": 1,
-  "status": "fail",
+  "status": "overridden_by_user",
   "validatorsRun": {
     "test": {
       "passed": true,
@@ -56,5 +56,12 @@
     }
   ],
   "rejectedObservations": [],
-  "previousRound": null
+  "previousRound": null,
+  "orchestratorOverride": {
+    "reason": "User explicitly requested skipping validation and user-testing steps to minimize mission steps and move faster.",
+    "appliesToFeatureIds": [
+      "scrutiny-validator-plugin-canvas",
+      "user-testing-validator-plugin-canvas"
+    ]
+  }
 }

@@ -64,3 +64,7 @@ Resource notes from the dry run:
 - Validation should use a dedicated dev plugin fixture created within this mission so the canvas, zoom-target, and action/session counters are observable.
 - Prefer a single later manual validation session per milestone so workspace/plugin state remains coherent.
 - Current in-session automation cannot attach to the native GPUI panel surface; workers should rely on targeted Rust validation plus fixture/log/counter preparation for later user validation.
+
+## Fast-path note
+
+- The user explicitly requested skipping milestone scrutiny and user-testing passes for speed. Workers should still run targeted crate tests and leave the dev fixture usable for later manual validation, but the orchestrator may override milestone validators instead of blocking on them.

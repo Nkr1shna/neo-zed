@@ -1,0 +1,23 @@
+{
+  "milestone": "plugin-canvas",
+  "status": "overridden_by_user",
+  "orchestratorOverride": {
+    "reason": "User explicitly requested skipping validation and user-testing steps to minimize mission steps and move faster.",
+    "deferredAssertions": [
+      "VAL-CANVAS-001",
+      "VAL-CANVAS-002",
+      "VAL-CANVAS-003",
+      "VAL-CANVAS-004",
+      "VAL-CANVAS-005",
+      "VAL-CANVAS-006",
+      "VAL-CANVAS-007",
+      "VAL-CANVAS-008",
+      "VAL-CANVAS-009",
+      "VAL-CANVAS-010",
+      "VAL-CANVAS-011",
+      "VAL-CANVAS-012",
+      "VAL-CANVAS-013",
+      "VAL-CROSS-001"
+    ]
+  }
+}
