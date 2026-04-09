@@ -1,0 +1,28 @@
+{
+  "featureId": "plugin-actions-fast-track",
+  "reviewedAt": "2026-04-09T00:24:05Z",
+  "commitId": "62b2d1ce82927c32654778c9041b7d4704a8a46c",
+  "transcriptSkeletonReviewed": true,
+  "diffReviewed": true,
+  "status": "fail",
+  "codeReview": {
+    "summary": "The feature mostly wires action metadata/discovery/dispatch correctly, but manifest action-id validation has a correctness hole that can admit malformed IDs and break deterministic runtime matching.",
+    "issues": [
+      {
+        "file": "crates/plugin/src/plugin.rs",
+        "line": 486,
+        "severity": "blocking",
+        "description": "`validate_plugin_actions` trims `action.id` before character validation and duplicate tracking, so IDs with leading/trailing whitespace are accepted even though the rule claims only ASCII alphanumeric, `-`, and `_` are allowed. Runtime registration/dispatch compares exact untrimmed IDs (`crates/gpui_plugin/src/gpui_plugin.rs:466`, `crates/plugin_host/src/plugin_host.rs:881`), so this can produce manifest actions that pass validation but fail to bind predictably. Reject IDs where `id != id.trim()` or validate the original string."
+      }
+    ]
+  },
+  "sharedStateObservations": [
+    {
+      "area": "skills",
+      "observation": "This handoff omitted `skillFeedback`, which makes procedure-adherence auditing inconsistent across the mission.",
+      "evidence": "Feature handoff `/Users/nest/.factory/missions/29030396-091d-4698-ae33-e479fc64e06b/handoffs/2026-04-09T00-09-36-780Z__plugin-actions-fast-track__26d08c7b-0e59-4ef2-b4c1-00e3ff275378.json` has no `skillFeedback`, while prior mission handoffs (for example `...__plugin-zoom-fast-track__0904007e-b426-4354-8f95-381e2f4f7fac.json`) include it."
+    }
+  ],
+  "addressesFailureFrom": null,
+  "summary": "Reviewed transcript skeleton and commit 62b2d1ce82927c32654778c9041b7d4704a8a46c. Result: fail due to a blocking action-manifest validation bug that allows whitespace-padded action IDs and can destabilize runtime action matching."
+}

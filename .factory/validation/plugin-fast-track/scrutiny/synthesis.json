@@ -1,0 +1,46 @@
+{
+  "milestone": "plugin-fast-track",
+  "round": 1,
+  "status": "fail",
+  "validatorsRun": {
+    "test": {
+      "passed": true,
+      "command": "cargo test -p gpui_plugin --tests -- --test-threads=6 && cargo test -p ui_plugin --tests -- --test-threads=6 && cargo test -p plugin_host --tests -- --test-threads=6 && cargo test -p command_palette --lib --tests -- --test-threads=6 && cargo test -p keymap_editor --lib --tests -- --test-threads=6 && cargo test -p workspace --lib --tests -- --test-threads=6 && ./script/check-keymaps",
+      "exitCode": 0
+    },
+    "typecheck": {
+      "passed": true,
+      "command": "cargo check --workspace --all-targets",
+      "exitCode": 0
+    },
+    "lint": {
+      "passed": true,
+      "command": "./script/clippy",
+      "exitCode": 0
+    }
+  },
+  "reviewsSummary": {
+    "total": 2,
+    "passed": 1,
+    "failed": 1,
+    "failedFeatures": [
+      "plugin-actions-fast-track"
+    ]
+  },
+  "blockingIssues": [
+    {
+      "featureId": "plugin-actions-fast-track",
+      "severity": "blocking",
+      "description": "validate_plugin_actions trims action.id before validation and duplicate checks, so whitespace-padded IDs pass validation while runtime registration/dispatch matches exact untrimmed IDs. This can make manifest actions discoverable but non-deterministically fail to bind dispatch handlers."
+    }
+  ],
+  "appliedUpdates": [],
+  "suggestedGuidanceUpdates": [],
+  "rejectedObservations": [
+    {
+      "observation": "Feature handoff omitted skillFeedback.",
+      "reason": "Rejected as non-actionable for guidance updates: skillFeedback is optional in EndFeatureRun schema and a single omission is not sufficient systemic evidence."
+    }
+  ],
+  "previousRound": null
+}
