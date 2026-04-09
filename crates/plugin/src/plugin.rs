@@ -1,4 +1,5 @@
 use std::collections::BTreeSet;
+use std::collections::HashSet;
 use std::fmt;
 use std::fs;
 #[cfg(unix)]
@@ -10,7 +11,9 @@ use std::path::{Path, PathBuf};
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use anyhow::{Context, Result, bail};
-use plugin_protocol::{PanelDescriptor, PluginId, PluginInstallState, TitlebarWidgetDescriptor};
+use plugin_protocol::{
+    PanelDescriptor, PluginActionDescriptor, PluginId, PluginInstallState, TitlebarWidgetDescriptor,
+};
 use serde::{Deserialize, Serialize};
 
 pub use plugin_protocol::PluginInstallState as PluginState;
@@ -283,6 +286,8 @@ pub struct PluginManifest {
     pub panels: Vec<PanelDescriptor>,
     #[serde(default)]
     pub titlebar_widgets: Vec<TitlebarWidgetDescriptor>,
+    #[serde(default)]
+    pub actions: Vec<PluginActionDescriptor>,
 }
 
 impl PluginManifest {
@@ -348,6 +353,7 @@ impl PluginManifest {
         }
 
         validate_plugin_entrypoint(plugin_directory, &self.entrypoint)?;
+        validate_plugin_actions(plugin_directory, &self.actions)?;
 
         Ok(self)
     }
@@ -466,6 +472,51 @@ fn validate_plugin_id(plugin_directory: &Path, plugin_id: &str) -> Result<()> {
             "plugin manifest {} must use an id containing only ASCII alphanumeric characters, `-`, or `_`",
             plugin_directory.join(PLUGIN_MANIFEST_NAME).display()
         );
+    }
+
+    Ok(())
+}
+
+fn validate_plugin_actions(
+    plugin_directory: &Path,
+    actions: &[PluginActionDescriptor],
+) -> Result<()> {
+    let mut seen_action_ids = HashSet::<String>::new();
+    for action in actions {
+        let action_id = action.id.trim();
+        if action_id.is_empty() {
+            bail!(
+                "plugin manifest {} must define non-empty action ids",
+                plugin_directory.join(PLUGIN_MANIFEST_NAME).display()
+            );
+        }
+
+        if !action_id
+            .chars()
+            .all(|character| character.is_ascii_alphanumeric() || matches!(character, '-' | '_'))
+        {
+            bail!(
+                "plugin manifest {} action id `{}` must use only ASCII alphanumeric characters, `-`, or `_`",
+                plugin_directory.join(PLUGIN_MANIFEST_NAME).display(),
+                action.id
+            );
+        }
+
+        if action.title.trim().is_empty() {
+            bail!(
+                "plugin manifest {} action `{}` must define a non-empty title",
+                plugin_directory.join(PLUGIN_MANIFEST_NAME).display(),
+                action.id
+            );
+        }
+
+        if !seen_action_ids.insert(action_id.to_string()) {
+            bail!(
+                "plugin manifest {} contains duplicate action id `{}`",
+                plugin_directory.join(PLUGIN_MANIFEST_NAME).display(),
+                action.id
+            );
+        }
     }
 
     Ok(())
@@ -883,6 +934,7 @@ fn installed_plugin_error(
             entrypoint: PathBuf::new(),
             panels: Vec::new(),
             titlebar_widgets: Vec::new(),
+            actions: Vec::new(),
         },
         state: PluginInstallState::Error,
         installation,

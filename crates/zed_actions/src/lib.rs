@@ -32,6 +32,10 @@ pub struct OpenZedUrl {
 #[action(namespace = zed, no_json, no_register)]
 pub struct ChangeKeybinding {
     pub action: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub action_arguments: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub action_display_name: Option<String>,
 }
 
 actions!(

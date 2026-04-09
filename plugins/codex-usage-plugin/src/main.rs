@@ -41,6 +41,7 @@ pub const FIXTURE_PANEL_ID: &str = "plugin-surface-fixture-panel";
 pub const FIXTURE_PANEL_TITLE: &str = "Plugin Surface Fixture";
 pub const FIXTURE_TITLEBAR_WIDGET_ID: &str = "plugin-surface-fixture-titlebar";
 pub const FIXTURE_TITLEBAR_WIDGET_TITLE: &str = "Plugin Surface Fixture";
+pub const FIXTURE_INCREMENT_ACTION_ID: &str = "increment-fixture-counter";
 
 const AUTH_STATE_FILENAME: &str = "codex-chatgpt-auth.json";
 #[cfg(feature = "mirror")]
@@ -2602,6 +2603,12 @@ pub fn run_plugin() -> Result<()> {
                 CodexUsageTitlebarWidget::new(titlebar_store.clone(), cx)
             },
         );
+
+        let fixture_action_store = runtime_context.fixture_store.clone();
+        app.register_action(FIXTURE_INCREMENT_ACTION_ID, move || {
+            fixture_action_store.record_action();
+            Ok(())
+        });
 
         let fixture_panel_store = runtime_context.fixture_store.clone();
         app.register_panel(

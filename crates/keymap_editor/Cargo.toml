@@ -27,6 +27,7 @@ language.workspace = true
 log.workspace = true
 menu.workspace = true
 notifications.workspace = true
+plugin_host.workspace = true
 paths.workspace = true
 project.workspace = true
 search.workspace = true

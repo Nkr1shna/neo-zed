@@ -27,6 +27,9 @@ fn discovers_plugin_manifest_from_local_directory() {
     assert_eq!(manifest.entrypoint, PathBuf::from("bin/test-panel"));
     assert_eq!(manifest.titlebar_widgets.len(), 1);
     assert_eq!(manifest.titlebar_widgets[0].id, "search-widget");
+    assert_eq!(manifest.actions.len(), 1);
+    assert_eq!(manifest.actions[0].id, "increment-counter");
+    assert_eq!(manifest.actions[0].title, "Increment Counter");
     assert_eq!(manifest.display_name(), "Test Panel");
 }
 
@@ -147,6 +150,36 @@ fn manifest_rejects_invalid_plugin_ids() {
                 .contains("must use an id containing only ASCII alphanumeric characters")
         );
     }
+}
+
+#[test]
+fn manifest_rejects_duplicate_action_ids() {
+    let fixture = PluginFixture::new("acme-test-panel");
+    let plugin_dir = fixture.plugin_dir("source-plugin");
+    fs::create_dir_all(&plugin_dir).unwrap();
+    fs::write(
+        plugin_dir.join("plugin.toml"),
+        r#"
+id = "acme-test-panel"
+name = "Test Panel"
+version = "0.1.0"
+schema_version = 1
+entry = "bin/test-panel"
+
+[[actions]]
+id = "duplicate-action"
+title = "Duplicate Action A"
+
+[[actions]]
+id = "duplicate-action"
+title = "Duplicate Action B"
+"#,
+    )
+    .unwrap();
+    fixture.write_entrypoint("source-plugin");
+
+    let error = PluginManifest::load(fixture.plugin_dir("source-plugin")).unwrap_err();
+    assert!(error.to_string().contains("duplicate action id"));
 }
 
 #[test]
@@ -442,6 +475,11 @@ tooltip = "Open search widget"
 side = "right"
 priority = 10
 opens_panel_id = "deploy-panel"
+
+[[actions]]
+id = "increment-counter"
+title = "Increment Counter"
+description = "Increment the fixture counter."
 "#,
                 plugin_id = self.plugin_id,
                 version = version,

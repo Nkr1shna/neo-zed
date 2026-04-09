@@ -25,6 +25,7 @@ fuzzy.workspace = true
 gpui.workspace = true
 menu.workspace = true
 log.workspace = true
+plugin_host.workspace = true
 picker.workspace = true
 postage.workspace = true
 serde.workspace = true

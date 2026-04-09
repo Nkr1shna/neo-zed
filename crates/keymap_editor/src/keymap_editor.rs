@@ -26,6 +26,7 @@ use gpui::{
 use language::{Language, LanguageConfig, ToOffset as _};
 
 use notifications::status_toast::{StatusToast, ToastIcon};
+use plugin_host::{DispatchPluginAction, discover_plugin_actions};
 use project::{CompletionDisplayOptions, Project};
 use settings::{
     BaseKeymap, KeybindSource, KeymapFile, Settings as _, SettingsAssets, infer_json_indent_size,
@@ -85,12 +86,19 @@ actions!(
     ]
 );
 
+#[derive(Clone)]
+struct RequestedKeybindingAction {
+    action: String,
+    action_arguments: Option<String>,
+    action_display_name: Option<String>,
+}
+
 pub fn init(cx: &mut App) {
     let keymap_event_channel = KeymapEventChannel::new();
     cx.set_global(keymap_event_channel);
 
     fn open_keymap_editor(
-        filter: Option<String>,
+        requested_action: Option<RequestedKeybindingAction>,
         workspace: &mut Workspace,
         window: &mut Window,
         cx: &mut Context<Workspace>,
@@ -116,14 +124,30 @@ pub fn init(cx: &mut App) {
             keymap_editor
         };
 
-        if let Some(filter) = filter {
+        if let Some(requested_action) = requested_action {
+            let filter = requested_action
+                .action_display_name
+                .clone()
+                .unwrap_or_else(|| requested_action.action.clone());
             keymap_editor.update(cx, |editor, cx| {
                 editor.filter_editor.update(cx, |editor, cx| {
                     editor.clear(window, cx);
                     editor.insert(&filter, window, cx);
                 });
-                if !editor.has_binding_for(&filter) {
-                    open_binding_modal_after_loading(cx)
+                let has_binding = editor.has_binding_for(
+                    requested_action.action.as_str(),
+                    requested_action.action_arguments.as_deref(),
+                );
+                if !has_binding {
+                    if requested_action.action_arguments.is_some() {
+                        open_binding_modal_after_loading_for_action(
+                            requested_action.action.clone(),
+                            requested_action.action_arguments.clone(),
+                            cx,
+                        );
+                    } else {
+                        open_binding_modal_after_loading(cx);
+                    }
                 }
             })
         }
@@ -137,7 +161,16 @@ pub fn init(cx: &mut App) {
 
     cx.observe_new(|workspace: &mut Workspace, _window, _cx| {
         workspace.register_action(|workspace, action: &ChangeKeybinding, window, cx| {
-            open_keymap_editor(Some(action.action.clone()), workspace, window, cx);
+            open_keymap_editor(
+                Some(RequestedKeybindingAction {
+                    action: action.action.clone(),
+                    action_arguments: action.action_arguments.clone(),
+                    action_display_name: action.action_display_name.clone(),
+                }),
+                workspace,
+                window,
+                cx,
+            );
         });
     })
     .detach();
@@ -158,6 +191,43 @@ fn open_binding_modal_after_loading(cx: &mut Context<KeymapEditor>) {
             }
             if !editor.matches.is_empty() {
                 editor.selected_index = Some(0);
+                cx.dispatch_action(&CreateBinding);
+                return;
+            }
+
+            *observer.borrow_mut() = subscription;
+        })
+    };
+    *observer.borrow_mut() = Some(handle);
+}
+
+fn open_binding_modal_after_loading_for_action(
+    action_name: String,
+    action_arguments: Option<String>,
+    cx: &mut Context<KeymapEditor>,
+) {
+    let started_at = Instant::now();
+    let observer = Rc::new(RefCell::new(None));
+    let handle = {
+        let observer = Rc::clone(&observer);
+        cx.observe(&cx.entity(), move |editor, _, cx| {
+            let subscription = observer.borrow_mut().take();
+
+            if started_at.elapsed().as_secs() > 10 {
+                return;
+            }
+
+            if let Some(match_index) =
+                editor.matches.iter().enumerate().find_map(|(index, item)| {
+                    binding_matches_action_request(
+                        &editor.keybindings[item.candidate_id],
+                        &action_name,
+                        action_arguments.as_deref(),
+                    )
+                    .then_some(index)
+                })
+            {
+                editor.selected_index = Some(match_index);
                 cx.dispatch_action(&CreateBinding);
                 return;
             }
@@ -474,6 +544,7 @@ enum PreviousEdit {
     Keybinding {
         action_mapping: ActionMapping,
         action_name: &'static str,
+        action_arguments: Option<SharedString>,
         /// The scrollbar position to fallback to if we don't find the keybinding during a refresh
         /// this can happen if there's a filter applied to the search and the keybinding modification
         /// filters the binding from the search results
@@ -514,6 +585,24 @@ fn disabled_binding_matches_context(
         (None, _) => true,
         (Some(_), None) => false,
         (Some(disabled_predicate), Some(predicate)) => disabled_predicate.is_superset(predicate),
+    }
+}
+
+fn binding_matches_action_request(
+    binding: &ProcessedBinding,
+    action_name: &str,
+    action_arguments: Option<&str>,
+) -> bool {
+    if binding.action().name != action_name {
+        return false;
+    }
+
+    match (action_arguments, binding.action().argument_text()) {
+        (None, _) => true,
+        (Some(_), None) => false,
+        (Some(expected_arguments), Some(binding_arguments)) => {
+            binding_arguments == expected_arguments
+        }
     }
 }
 
@@ -834,6 +923,31 @@ impl KeymapEditor {
                 .into_iter()
                 .filter_map(|(name, schema)| schema.is_some().then_some(name)),
         );
+        let discovered_plugin_actions = discover_plugin_actions(cx)
+            .into_iter()
+            .map(|action| {
+                let dispatch_action = action.dispatch_action();
+                DiscoverablePluginActionBinding {
+                    key: (
+                        dispatch_action.plugin_id.clone(),
+                        dispatch_action.action_id.clone(),
+                    ),
+                    action_arguments: dispatch_action.input_json_string().into(),
+                    humanized_name: action.display_name().into(),
+                }
+            })
+            .collect::<Vec<_>>();
+        let mut discovered_plugin_actions_by_key =
+            HashMap::<(String, String), DiscoverablePluginActionBinding>::default();
+        for action in discovered_plugin_actions.iter().cloned() {
+            discovered_plugin_actions_by_key.insert(action.key.clone(), action);
+        }
+        let mut unmapped_plugin_action_keys = HashSet::from_iter(
+            discovered_plugin_actions
+                .iter()
+                .map(|action| action.key.clone()),
+        );
+        unmapped_action_names.remove(&DispatchPluginAction::name_for_type());
 
         let mut processed_bindings = Vec::new();
         let mut string_match_candidates = Vec::new();
@@ -865,18 +979,58 @@ impl KeymapEditor {
                 .unwrap_or(KeybindContextString::Global);
 
             let action_name = key_binding.action().name();
-            unmapped_action_names.remove(&action_name);
-
-            let action_arguments = key_binding
-                .action_input()
-                .map(|arguments| SyntaxHighlightedText::new(arguments, json_language.clone()));
-            let action_information = ActionInformation::new(
+            let parsed_plugin_action = parse_dispatch_plugin_action(
                 action_name,
-                action_arguments,
-                &actions_with_schemas,
-                action_documentation,
-                humanized_action_names,
+                key_binding
+                    .action_input()
+                    .as_deref()
+                    .map(|arguments| arguments.as_ref()),
             );
+
+            let action_information = if let Some(parsed_plugin_action) = parsed_plugin_action {
+                let plugin_action_key = (
+                    parsed_plugin_action.plugin_id.clone(),
+                    parsed_plugin_action.action_id.clone(),
+                );
+                let action_arguments: SharedString =
+                    parsed_plugin_action.input_json_string().into();
+                let humanized_name = discovered_plugin_actions_by_key
+                    .get(&plugin_action_key)
+                    .map(|action| action.humanized_name.clone())
+                    .unwrap_or_else(|| {
+                        format!(
+                            "plugin: {}: {}",
+                            parsed_plugin_action.plugin_id, parsed_plugin_action.action_id
+                        )
+                        .into()
+                    });
+
+                unmapped_plugin_action_keys.remove(&plugin_action_key);
+
+                ActionInformation::with_overrides(
+                    DispatchPluginAction::name_for_type(),
+                    Some(SyntaxHighlightedText::new(
+                        action_arguments.clone(),
+                        json_language.clone(),
+                    )),
+                    humanized_name,
+                    None,
+                    false,
+                    Some(action_arguments),
+                )
+            } else {
+                unmapped_action_names.remove(&action_name);
+                let action_arguments = key_binding
+                    .action_input()
+                    .map(|arguments| SyntaxHighlightedText::new(arguments, json_language.clone()));
+                ActionInformation::new(
+                    action_name,
+                    action_arguments,
+                    &actions_with_schemas,
+                    action_documentation,
+                    humanized_action_names,
+                )
+            };
 
             let index = processed_bindings.len();
             let string_match_candidate =
@@ -901,6 +1055,30 @@ impl KeymapEditor {
                 &actions_with_schemas,
                 action_documentation,
                 humanized_action_names,
+            );
+            let string_match_candidate =
+                StringMatchCandidate::new(index, &action_information.humanized_name);
+
+            processed_bindings.push(ProcessedBinding::Unmapped(action_information));
+            string_match_candidates.push(string_match_candidate);
+        }
+
+        for discoverable_plugin_action in discovered_plugin_actions {
+            if !unmapped_plugin_action_keys.contains(&discoverable_plugin_action.key) {
+                continue;
+            }
+
+            let index = processed_bindings.len();
+            let action_information = ActionInformation::with_overrides(
+                DispatchPluginAction::name_for_type(),
+                Some(SyntaxHighlightedText::new(
+                    discoverable_plugin_action.action_arguments.clone(),
+                    json_language.clone(),
+                )),
+                discoverable_plugin_action.humanized_name,
+                None,
+                false,
+                Some(discoverable_plugin_action.action_arguments),
             );
             let string_match_candidate =
                 StringMatchCandidate::new(index, &action_information.humanized_name);
@@ -966,6 +1144,7 @@ impl KeymapEditor {
                         PreviousEdit::Keybinding {
                             action_mapping,
                             action_name,
+                            action_arguments,
                             fallback,
                         } => {
                             let scroll_position =
@@ -974,6 +1153,16 @@ impl KeymapEditor {
                                     if binding.get_action_mapping().is_some_and(|binding_mapping| {
                                         binding_mapping == action_mapping
                                     }) && binding.action().name == action_name
+                                        && match (
+                                            action_arguments
+                                                .as_ref()
+                                                .map(|arguments| arguments.as_ref()),
+                                            binding.action().argument_text(),
+                                        ) {
+                                            (None, _) => true,
+                                            (Some(_), None) => false,
+                                            (Some(expected), Some(actual)) => actual == expected,
+                                        }
                                     {
                                         Some(index)
                                     } else {
@@ -1581,11 +1770,11 @@ impl KeymapEditor {
         });
     }
 
-    fn has_binding_for(&self, action_name: &str) -> bool {
+    fn has_binding_for(&self, action_name: &str, action_arguments: Option<&str>) -> bool {
         self.keybindings
             .iter()
             .filter(|kb| kb.keystrokes().is_some())
-            .any(|kb| kb.action().name == action_name)
+            .any(|kb| binding_matches_action_request(kb, action_name, action_arguments))
     }
 
     fn render_filter_dropdown(
@@ -1774,6 +1963,7 @@ struct ActionInformation {
     arguments: Option<SyntaxHighlightedText>,
     documentation: Option<&'static str>,
     has_schema: bool,
+    fixed_arguments: Option<SharedString>,
 }
 
 impl ActionInformation {
@@ -1790,8 +1980,51 @@ impl ActionInformation {
             arguments: action_arguments,
             documentation: action_documentation.get(action_name).copied(),
             name: action_name,
+            fixed_arguments: None,
         }
     }
+
+    fn with_overrides(
+        action_name: &'static str,
+        action_arguments: Option<SyntaxHighlightedText>,
+        humanized_name: SharedString,
+        documentation: Option<&'static str>,
+        has_schema: bool,
+        fixed_arguments: Option<SharedString>,
+    ) -> Self {
+        Self {
+            name: action_name,
+            humanized_name,
+            arguments: action_arguments,
+            documentation,
+            has_schema,
+            fixed_arguments,
+        }
+    }
+
+    fn argument_text(&self) -> Option<&str> {
+        self.arguments
+            .as_ref()
+            .map(|arguments| arguments.text.as_ref())
+    }
+}
+
+#[derive(Clone)]
+struct DiscoverablePluginActionBinding {
+    key: (String, String),
+    action_arguments: SharedString,
+    humanized_name: SharedString,
+}
+
+fn parse_dispatch_plugin_action(
+    action_name: &'static str,
+    action_arguments: Option<&str>,
+) -> Option<DispatchPluginAction> {
+    if action_name != DispatchPluginAction::name_for_type() {
+        return None;
+    }
+
+    action_arguments.and_then(|arguments| serde_json::from_str(arguments).ok())
 }
 
 #[derive(Clone)]
@@ -2726,6 +2959,14 @@ impl KeybindingEditorModal {
 
     fn validate_action_arguments(&self, cx: &App) -> anyhow::Result<Option<String>> {
         let action_name = self.get_selected_action_name(cx)?;
+        if let Some(fixed_arguments) = self.editing_keybind.action().fixed_arguments.as_ref() {
+            let value = serde_json::from_str::<serde_json::Value>(fixed_arguments)
+                .context("Failed to parse action arguments as JSON")?;
+            cx.build_action(action_name, Some(value))
+                .context("Failed to validate action arguments")?;
+            return Ok(Some(fixed_arguments.to_string()));
+        }
+
         let action_arguments = self
             .action_arguments_editor
             .as_ref()
@@ -2806,7 +3047,7 @@ impl KeybindingEditorModal {
                 .read(cx)
                 .keybindings
                 .get(first_conflict_index)
-                .map(|keybind| keybind.action().name);
+                .map(|keybind| keybind.action().humanized_name.clone());
 
             let warning_message = match conflicting_action_name {
                 Some(name) => {
@@ -2843,19 +3084,25 @@ impl KeybindingEditorModal {
             .get_selected_action_name(cx)
             .map_err(InputError::error)?;
 
-        let humanized_action_name: SharedString =
-            command_palette::humanize_action_name(action_name).into();
-
-        let action_information = ActionInformation::new(
-            action_name,
-            None,
-            &HashSet::default(),
-            cx.action_documentation(),
-            &self.keymap_editor.read(cx).humanized_action_names,
-        );
+        let humanized_action_name: SharedString = if self.action_editor.is_some() {
+            command_palette::humanize_action_name(action_name).into()
+        } else {
+            existing_keybind.action().humanized_name.clone()
+        };
 
         let keybind_for_save = if create {
-            ProcessedBinding::Unmapped(action_information)
+            if self.action_editor.is_some() {
+                let action_information = ActionInformation::new(
+                    action_name,
+                    None,
+                    &HashSet::default(),
+                    cx.action_documentation(),
+                    &self.keymap_editor.read(cx).humanized_action_names,
+                );
+                ProcessedBinding::Unmapped(action_information)
+            } else {
+                existing_keybind
+            }
         } else {
             existing_keybind
         };
@@ -2877,6 +3124,7 @@ impl KeybindingEditorModal {
                             keymap.previous_edit = Some(PreviousEdit::Keybinding {
                                 action_mapping,
                                 action_name,
+                                action_arguments: new_action_args.clone().map(SharedString::from),
                                 fallback: keymap.table_interaction_state.read(cx).scroll_offset(),
                             });
                             let status_toast = StatusToast::new(

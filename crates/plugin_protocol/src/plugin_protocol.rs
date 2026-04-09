@@ -129,6 +129,14 @@ pub struct TitlebarWidgetDescriptor {
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct PluginActionDescriptor {
+    pub id: String,
+    pub title: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub description: Option<String>,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct PluginMetadata {
     pub id: PluginId,
     pub name: String,
@@ -139,6 +147,8 @@ pub struct PluginMetadata {
     pub panels: Vec<PanelDescriptor>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub titlebar_widgets: Vec<TitlebarWidgetDescriptor>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub actions: Vec<PluginActionDescriptor>,
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
@@ -1003,6 +1013,9 @@ pub enum HostToPlugin {
     },
     DispatchEvent {
         event: UiEvent,
+    },
+    InvokeAction {
+        action_id: String,
     },
     ClosePanel {
         panel_instance_id: PanelInstanceId,

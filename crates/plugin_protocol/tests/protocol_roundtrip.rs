@@ -57,6 +57,18 @@ fn host_to_plugin_action_event_roundtrips_through_serde() {
 }
 
 #[test]
+fn host_to_plugin_invoke_action_roundtrips_through_serde() {
+    let message = HostToPlugin::InvokeAction {
+        action_id: "increment-counter".to_string(),
+    };
+
+    let serialized = serde_json::to_string(&message).expect("invoke action serializes");
+    let decoded: HostToPlugin = serde_json::from_str(&serialized).expect("invoke action decodes");
+
+    assert_eq!(decoded, message);
+}
+
+#[test]
 fn host_theme_snapshot_equality_compares_color_and_status_fields() {
     let base = HostThemeSnapshot {
         id: "theme-id".to_string(),

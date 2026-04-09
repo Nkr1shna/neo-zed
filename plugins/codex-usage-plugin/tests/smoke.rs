@@ -23,6 +23,9 @@ fn plugin_manifest_declares_panel_and_titlebar_widget() {
     assert!(manifest.contains("[[titlebar_widgets]]"));
     assert!(manifest.contains("id = \"codex-usage-titlebar\""));
     assert!(manifest.contains("opens_panel_id = \"codex-usage-panel\""));
+    assert!(manifest.contains("[[actions]]"));
+    assert!(manifest.contains("id = \"increment-fixture-counter\""));
+    assert!(manifest.contains("title = \"Increment Fixture Counter\""));
 }
 
 #[test]

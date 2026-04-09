@@ -138,7 +138,9 @@ mod host {
         SerializedScrollWheelEvent, StyleValue, TitlebarWidgetDescriptor, TitlebarWidgetSide,
         UiEvent, UiEventKind, UiEventPhase, UiNode, UiNodeKind, apply_ui_patches,
     };
+    use schemars::JsonSchema;
     use serde::Deserialize;
+    use serde::Serialize;
     #[cfg(target_os = "windows")]
     use smol::Unblock;
     use smol::channel;
@@ -193,8 +195,58 @@ mod host {
         handler_id: String,
     }
 
+    /// Dispatches a manifest-declared plugin action through the plugin host.
+    #[derive(Clone, Debug, PartialEq, Eq, Deserialize, Serialize, JsonSchema, gpui::Action)]
+    #[action(namespace = plugin_host)]
+    #[serde(deny_unknown_fields)]
+    pub struct DispatchPluginAction {
+        pub plugin_id: String,
+        pub action_id: String,
+    }
+
+    impl DispatchPluginAction {
+        pub fn input_json_string(&self) -> String {
+            serde_json::to_string(self)
+                .expect("DispatchPluginAction should always serialize to JSON")
+        }
+    }
+
+    #[derive(Clone, Debug, PartialEq, Eq)]
+    pub struct DiscoverablePluginAction {
+        pub plugin_id: String,
+        pub plugin_name: String,
+        pub action_id: String,
+        pub title: String,
+        pub description: Option<String>,
+    }
+
+    impl DiscoverablePluginAction {
+        pub fn dispatch_action(&self) -> DispatchPluginAction {
+            DispatchPluginAction {
+                plugin_id: self.plugin_id.clone(),
+                action_id: self.action_id.clone(),
+            }
+        }
+
+        pub fn display_name(&self) -> String {
+            format!("plugin: {}: {}", self.plugin_name, self.title)
+        }
+    }
+
     pub fn init(cx: &mut App) {
         PluginHostRegistry::init_global(cx);
+        cx.on_action(|action: &DispatchPluginAction, cx| {
+            let registry = PluginHostRegistry::global(cx);
+            if let Err(error) = registry.update(cx, |registry, registry_cx| {
+                registry.invoke_plugin_action(action, registry_cx)
+            }) {
+                log::error!(
+                    "failed to dispatch plugin action `{}` for plugin `{}`: {error:#}",
+                    action.action_id,
+                    action.plugin_id
+                );
+            }
+        });
         cx.observe_global::<GlobalTheme>({
             move |cx| {
                 let registry = PluginHostRegistry::global(cx);
@@ -289,6 +341,21 @@ mod host {
                 }
             }
         }
+    }
+
+    pub fn discover_plugin_actions(cx: &App) -> Vec<DiscoverablePluginAction> {
+        let Some(global_registry) = cx.try_global::<GlobalPluginHost>() else {
+            return Vec::new();
+        };
+
+        global_registry.0.read_with(cx, |registry, _| {
+            registry
+                .discover_manifest_actions()
+                .unwrap_or_else(|error| {
+                    log::error!("failed to discover plugin actions: {error:#}");
+                    Vec::new()
+                })
+        })
     }
 
     pub fn open_panel_in_workspace(
@@ -775,6 +842,73 @@ mod host {
             Ok(widgets)
         }
 
+        fn discover_manifest_actions(&self) -> Result<Vec<DiscoverablePluginAction>> {
+            let mut actions = Vec::new();
+            for plugin in self.list_plugins()? {
+                let plugin_id = plugin.manifest.id.as_str().to_string();
+                let plugin_name = plugin.manifest.name.clone();
+                for action in plugin.manifest.actions {
+                    actions.push(DiscoverablePluginAction {
+                        plugin_id: plugin_id.clone(),
+                        plugin_name: plugin_name.clone(),
+                        action_id: action.id,
+                        title: action.title,
+                        description: action.description,
+                    });
+                }
+            }
+
+            actions.sort_by(|left, right| {
+                left.plugin_name
+                    .cmp(&right.plugin_name)
+                    .then_with(|| left.plugin_id.cmp(&right.plugin_id))
+                    .then_with(|| left.title.cmp(&right.title))
+                    .then_with(|| left.action_id.cmp(&right.action_id))
+            });
+            Ok(actions)
+        }
+
+        fn invoke_plugin_action(
+            &mut self,
+            action: &DispatchPluginAction,
+            cx: &mut Context<Self>,
+        ) -> Result<()> {
+            let plugin = self.installed_plugin(action.plugin_id.as_str())?;
+            let action_descriptor = plugin
+                .manifest
+                .actions
+                .iter()
+                .find(|descriptor| descriptor.id == action.action_id)
+                .with_context(|| {
+                    format!(
+                        "plugin action `{}` is not declared in plugin `{}`",
+                        action.action_id, action.plugin_id
+                    )
+                })?;
+
+            let sender = self.ensure_process(&plugin, cx)?;
+            let process = self
+                .processes
+                .get_mut(&plugin.manifest.id)
+                .context("plugin process disappeared")?;
+            if process.registered {
+                send_message(
+                    &sender,
+                    &HostToPlugin::InvokeAction {
+                        action_id: action_descriptor.id.clone(),
+                    },
+                )?;
+            } else if !process
+                .queued_actions
+                .iter()
+                .any(|queued_action| queued_action == &action_descriptor.id)
+            {
+                process.queued_actions.push(action_descriptor.id.clone());
+            }
+
+            Ok(())
+        }
+
         fn existing_panel_binding(
             &self,
             workspace: WeakEntity<Workspace>,
@@ -1186,6 +1320,7 @@ mod host {
                     if let Some(process) = self.processes.get_mut(&plugin_id) {
                         process.registered = true;
                     }
+                    self.flush_queued_plugin_actions(&plugin_id)?;
                     self.set_plugin_view_startup_state(
                         &plugin_id,
                         Some(RemotePluginStartupState::Starting),
@@ -1412,6 +1547,22 @@ mod host {
             );
         }
 
+        fn flush_queued_plugin_actions(&mut self, plugin_id: &PluginId) -> Result<()> {
+            let (sender, queued_actions) = match self.processes.get_mut(plugin_id) {
+                Some(process) => (
+                    process.sender.clone(),
+                    std::mem::take(&mut process.queued_actions),
+                ),
+                None => return Ok(()),
+            };
+
+            for action_id in queued_actions {
+                send_message(&sender, &HostToPlugin::InvokeAction { action_id })?;
+            }
+
+            Ok(())
+        }
+
         fn ensure_process(
             &mut self,
             plugin: &InstalledPlugin,
@@ -1437,6 +1588,7 @@ mod host {
                     terminate_sender: spawned.terminate_sender,
                     view_instances: BTreeSet::default(),
                     view_entity_ids: BTreeSet::default(),
+                    queued_actions: Vec::new(),
                     instance_id: process_instance_id,
                     registered: false,
                 },
@@ -1552,6 +1704,7 @@ mod host {
         terminate_sender: channel::Sender<ProcessTermination>,
         view_instances: BTreeSet<PanelInstanceId>,
         view_entity_ids: BTreeSet<gpui::EntityId>,
+        queued_actions: Vec<String>,
         instance_id: u64,
         registered: bool,
     }
@@ -6343,6 +6496,7 @@ mod host {
                             terminate_sender,
                             view_instances: BTreeSet::default(),
                             view_entity_ids: BTreeSet::default(),
+                            queued_actions: Vec::new(),
                             instance_id: 1,
                             registered,
                         },
@@ -6350,6 +6504,10 @@ mod host {
                 });
             });
             (receiver, terminate_receiver)
+        }
+
+        fn decode_host_message(message: &str) -> HostToPlugin {
+            serde_json::from_str(message).expect("host message should decode")
         }
 
         fn attach_test_panel(
@@ -7225,6 +7383,7 @@ path = "src/main.rs"
                     entrypoint: PathBuf::from("cargo-plugin"),
                     panels: Vec::new(),
                     titlebar_widgets: Vec::new(),
+                    actions: Vec::new(),
                 },
                 state: PluginInstallState::Installed,
                 installation: plugin::PluginInstallation {
@@ -7408,6 +7567,7 @@ path = "src/main.rs"
                                     description: None,
                                     panels: Vec::new(),
                                     titlebar_widgets: Vec::new(),
+                                    actions: Vec::new(),
                                 },
                             },
                         },
@@ -7428,6 +7588,204 @@ path = "src/main.rs"
                         .registered
                 );
             });
+        }
+
+        #[gpui::test]
+        async fn discovering_manifest_actions_does_not_start_plugin_process(
+            cx: &mut TestAppContext,
+        ) {
+            init_test_app(cx);
+
+            let temp_dir = TempDir::new().expect("temp plugin dir");
+            let layout = PluginStoreLayout {
+                installed_root: temp_dir.path().join("installed"),
+                development_root: temp_dir.path().join("development"),
+            };
+            let plugin_root = layout.installed_root.join("action-plugin");
+            write_fake_plugin(
+                &plugin_root,
+                r#"
+id = "action-plugin"
+name = "Action Plugin"
+version = "0.1.0"
+schema_version = 1
+entry = "fake-plugin"
+
+[[actions]]
+id = "increment-counter"
+title = "Increment Counter"
+"#,
+            )
+            .expect("write fake plugin");
+
+            let registry = new_test_registry(layout, cx);
+
+            let discovered = cx.update(|cx| {
+                registry
+                    .read(cx)
+                    .discover_manifest_actions()
+                    .expect("discover manifest actions")
+            });
+
+            assert_eq!(discovered.len(), 1);
+            assert_eq!(discovered[0].plugin_id, "action-plugin");
+            assert_eq!(discovered[0].action_id, "increment-counter");
+            assert_eq!(discovered[0].title, "Increment Counter");
+            cx.update(|cx| {
+                assert!(
+                    registry.read(cx).processes.is_empty(),
+                    "action discovery should not start any plugin process"
+                );
+            });
+        }
+
+        #[gpui::test]
+        async fn cold_plugin_action_invocation_is_queued_once_until_registration(
+            cx: &mut TestAppContext,
+        ) {
+            init_test_app(cx);
+
+            let temp_dir = TempDir::new().expect("temp plugin dir");
+            let layout = PluginStoreLayout {
+                installed_root: temp_dir.path().join("installed"),
+                development_root: temp_dir.path().join("development"),
+            };
+            let plugin_root = layout.installed_root.join("action-plugin");
+            write_fake_plugin(
+                &plugin_root,
+                r#"
+id = "action-plugin"
+name = "Action Plugin"
+version = "0.1.0"
+schema_version = 1
+entry = "fake-plugin"
+
+[[actions]]
+id = "increment-counter"
+title = "Increment Counter"
+"#,
+            )
+            .expect("write fake plugin");
+
+            let registry = new_test_registry(layout, cx);
+            let (process_receiver, _terminate_receiver) =
+                seed_process(&registry, "action-plugin", false, cx);
+
+            let dispatch_action = DispatchPluginAction {
+                plugin_id: "action-plugin".to_string(),
+                action_id: "increment-counter".to_string(),
+            };
+
+            cx.update(|cx| {
+                registry
+                    .update(cx, |registry, registry_cx| {
+                        registry.invoke_plugin_action(&dispatch_action, registry_cx)?;
+                        registry.invoke_plugin_action(&dispatch_action, registry_cx)
+                    })
+                    .expect("queue plugin action invocations");
+            });
+
+            assert!(
+                process_receiver.try_recv().is_err(),
+                "cold invocation should queue until plugin registration"
+            );
+
+            cx.update(|cx| {
+                registry.update(cx, |registry, registry_cx| {
+                    registry.handle_event(
+                        PluginHostEvent::Message {
+                            plugin_id: PluginId::new("action-plugin"),
+                            process_instance_id: 1,
+                            message: PluginToHost::Register {
+                                plugin: plugin_protocol::PluginMetadata {
+                                    id: PluginId::new("action-plugin"),
+                                    name: "Action Plugin".to_string(),
+                                    version: "0.1.0".to_string(),
+                                    description: None,
+                                    panels: Vec::new(),
+                                    titlebar_widgets: Vec::new(),
+                                    actions: Vec::new(),
+                                },
+                            },
+                        },
+                        registry_cx,
+                    );
+                });
+            });
+
+            let invoke_message = process_receiver
+                .recv()
+                .await
+                .expect("invoke action message should be sent");
+            let decoded = decode_host_message(&invoke_message);
+            assert_eq!(
+                decoded,
+                HostToPlugin::InvokeAction {
+                    action_id: "increment-counter".to_string(),
+                }
+            );
+            assert!(
+                process_receiver.try_recv().is_err(),
+                "duplicate cold invocations should collapse into one queued dispatch"
+            );
+        }
+
+        #[gpui::test]
+        async fn registered_plugin_action_invocation_dispatches_immediately(
+            cx: &mut TestAppContext,
+        ) {
+            init_test_app(cx);
+
+            let temp_dir = TempDir::new().expect("temp plugin dir");
+            let layout = PluginStoreLayout {
+                installed_root: temp_dir.path().join("installed"),
+                development_root: temp_dir.path().join("development"),
+            };
+            let plugin_root = layout.installed_root.join("action-plugin");
+            write_fake_plugin(
+                &plugin_root,
+                r#"
+id = "action-plugin"
+name = "Action Plugin"
+version = "0.1.0"
+schema_version = 1
+entry = "fake-plugin"
+
+[[actions]]
+id = "increment-counter"
+title = "Increment Counter"
+"#,
+            )
+            .expect("write fake plugin");
+
+            let registry = new_test_registry(layout, cx);
+            let (process_receiver, _terminate_receiver) =
+                seed_process(&registry, "action-plugin", true, cx);
+
+            let dispatch_action = DispatchPluginAction {
+                plugin_id: "action-plugin".to_string(),
+                action_id: "increment-counter".to_string(),
+            };
+
+            cx.update(|cx| {
+                registry
+                    .update(cx, |registry, registry_cx| {
+                        registry.invoke_plugin_action(&dispatch_action, registry_cx)
+                    })
+                    .expect("dispatch plugin action");
+            });
+
+            let invoke_message = process_receiver
+                .recv()
+                .await
+                .expect("invoke action should be sent");
+            let decoded = decode_host_message(&invoke_message);
+            assert_eq!(
+                decoded,
+                HostToPlugin::InvokeAction {
+                    action_id: "increment-counter".to_string(),
+                }
+            );
         }
 
         #[cfg(target_os = "linux")]
@@ -7493,6 +7851,7 @@ entry = "fake-plugin"
                     entrypoint: PathBuf::from("fake-plugin"),
                     panels: Vec::new(),
                     titlebar_widgets: Vec::new(),
+                    actions: Vec::new(),
                 },
                 state: PluginInstallState::Installed,
                 installation: plugin::PluginInstallation {
@@ -7550,6 +7909,7 @@ edition = "2021"
                     entrypoint: PathBuf::from("cargo-plugin"),
                     panels: Vec::new(),
                     titlebar_widgets: Vec::new(),
+                    actions: Vec::new(),
                 },
                 state: PluginInstallState::Development,
                 installation: plugin::PluginInstallation {
@@ -7638,6 +7998,7 @@ entry = "fake-plugin"
                     entrypoint: PathBuf::from("fake-plugin"),
                     panels: Vec::new(),
                     titlebar_widgets: Vec::new(),
+                    actions: Vec::new(),
                 },
                 state: PluginInstallState::Installed,
                 installation: plugin::PluginInstallation {
@@ -8459,6 +8820,7 @@ activation = "on_demand"
                                     description: None,
                                     panels: Vec::new(),
                                     titlebar_widgets: Vec::new(),
+                                    actions: Vec::new(),
                                 },
                             },
                         },
@@ -8684,6 +9046,7 @@ activation = "on_demand"
 }
 
 pub use host::{
-    PluginHostRegistry, RemotePluginPanel, ToggleRemotePluginPanel, init, open_panel_in_workspace,
+    DiscoverablePluginAction, DispatchPluginAction, PluginHostRegistry, RemotePluginPanel,
+    ToggleRemotePluginPanel, discover_plugin_actions, init, open_panel_in_workspace,
     refresh_catalog,
 };

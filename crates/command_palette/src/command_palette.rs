@@ -21,6 +21,7 @@ use gpui::{
 use persistence::CommandPaletteDB;
 use picker::Direction;
 use picker::{Picker, PickerDelegate};
+use plugin_host::{DispatchPluginAction, discover_plugin_actions};
 use postage::{sink::Sink, stream::Stream};
 use settings::Settings;
 use ui::{HighlightedLabel, KeyBinding, ListItem, ListItemSpacing, prelude::*};
@@ -106,7 +107,7 @@ impl CommandPalette {
     ) -> Self {
         let filter = CommandPaletteFilter::try_global(cx);
 
-        let commands = window
+        let mut commands = window
             .available_actions(cx)
             .into_iter()
             .filter_map(|action| {
@@ -116,10 +117,28 @@ impl CommandPalette {
 
                 Some(Command {
                     name: humanize_action_name(action.name()),
+                    keybinding_action: action.name().to_string(),
+                    keybinding_action_arguments: None,
                     action,
                 })
             })
-            .collect();
+            .collect::<Vec<_>>();
+
+        commands.extend(discover_plugin_actions(cx).into_iter().filter_map(
+            |discoverable_action| {
+                let dispatch_action = discoverable_action.dispatch_action();
+                if filter.is_some_and(|filter| filter.is_hidden(&dispatch_action)) {
+                    return None;
+                }
+
+                Some(Command {
+                    name: discoverable_action.display_name(),
+                    action: Box::new(dispatch_action.clone()),
+                    keybinding_action: DispatchPluginAction::name_for_type().to_string(),
+                    keybinding_action_arguments: Some(dispatch_action.input_json_string()),
+                })
+            },
+        ));
 
         let delegate = CommandPaletteDelegate::new(
             cx.entity().downgrade(),
@@ -178,6 +197,8 @@ pub struct CommandPaletteDelegate {
 struct Command {
     name: String,
     action: Box<dyn Action>,
+    keybinding_action: String,
+    keybinding_action_arguments: Option<String>,
 }
 
 #[derive(Default)]
@@ -270,6 +291,8 @@ impl Clone for Command {
         Self {
             name: self.name.clone(),
             action: self.action.boxed_clone(),
+            keybinding_action: self.keybinding_action.clone(),
+            keybinding_action_arguments: self.keybinding_action_arguments.clone(),
         }
     }
 }
@@ -322,6 +345,8 @@ impl CommandPaletteDelegate {
             }
             commands.push(Command {
                 name: string.clone(),
+                keybinding_action: action.name().to_string(),
+                keybinding_action_arguments: None,
                 action,
             });
             new_matches.push(StringMatch {
@@ -563,9 +588,10 @@ impl PickerDelegate for CommandPaletteDelegate {
             let Some(selected_command) = self.selected_command() else {
                 return;
             };
-            let action_name = selected_command.action.name();
             let open_keymap = Box::new(zed_actions::ChangeKeybinding {
-                action: action_name.to_string(),
+                action: selected_command.keybinding_action.clone(),
+                action_arguments: selected_command.keybinding_action_arguments.clone(),
+                action_display_name: Some(selected_command.name.clone()),
             });
             window.dispatch_action(open_keymap, cx);
             self.dismissed(window, cx);

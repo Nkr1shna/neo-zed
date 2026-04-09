@@ -6,8 +6,8 @@ use plugin_protocol::{
     INTERACTIVE_PROP_FOCUSABLE, INTERACTIVE_PROP_GROUP, INTERACTIVE_PROP_KEY_CONTEXT,
     INTERACTIVE_PROP_OCCLUDE, INTERACTIVE_PROP_TAB_GROUP, INTERACTIVE_PROP_TAB_INDEX,
     INTERACTIVE_PROP_TAB_STOP, INTERACTIVE_PROP_WINDOW_CONTROL_AREA, PanelDescriptor,
-    PanelInstanceId, PluginId, PluginMetadata, PluginToHost, SerializedActionEvent,
-    SerializedClickEvent, SerializedKeyDownEvent, SerializedKeyUpEvent,
+    PanelInstanceId, PluginActionDescriptor, PluginId, PluginMetadata, PluginToHost,
+    SerializedActionEvent, SerializedClickEvent, SerializedKeyDownEvent, SerializedKeyUpEvent,
     SerializedModifiersChangedEvent, SerializedMouseDownEvent, SerializedMouseMoveEvent,
     SerializedMousePressureEvent, SerializedMouseUpEvent, SerializedPinchEvent,
     SerializedScrollWheelEvent, TitlebarWidgetDescriptor, UiEventKind as ProtocolUiEventKind,
@@ -237,6 +237,7 @@ impl RemoteViewDescriptor {
 
 type SessionFactory =
     Box<dyn Fn(PanelInstanceId, String) -> Result<Box<dyn ActiveRemoteViewSession>>>;
+type ActionHandler = Box<dyn FnMut() -> Result<()>>;
 
 trait ActiveRemoteViewSession {
     fn initial_messages(&mut self) -> Result<Vec<PluginToHost>>;
@@ -428,7 +429,9 @@ fn decode_payload<T: for<'de> Deserialize<'de>>(
 pub struct PluginApp {
     metadata: PluginMetadata,
     remote_views: BTreeMap<String, RemoteViewDescriptor>,
+    actions: BTreeMap<String, PluginActionDescriptor>,
     factories: BTreeMap<String, SessionFactory>,
+    action_handlers: BTreeMap<String, ActionHandler>,
     sessions: BTreeMap<PanelInstanceId, Box<dyn ActiveRemoteViewSession>>,
     registration_errors: Vec<anyhow::Error>,
 }
@@ -452,6 +455,29 @@ impl PluginApp {
         T: Render,
     {
         self.register_remote_view(widget_id, RemoteViewKind::TitlebarWidget, build);
+    }
+
+    pub fn register_action(
+        &mut self,
+        action_id: impl Into<String>,
+        handler: impl FnMut() -> Result<()> + 'static,
+    ) {
+        let action_id = action_id.into();
+        if !self.actions.contains_key(&action_id) {
+            self.registration_errors.push(anyhow::anyhow!(
+                "action `{action_id}` is not declared in plugin.toml"
+            ));
+            return;
+        }
+
+        if self.action_handlers.contains_key(&action_id) {
+            self.registration_errors.push(anyhow::anyhow!(
+                "action `{action_id}` has multiple runtime handlers"
+            ));
+            return;
+        }
+
+        self.action_handlers.insert(action_id, Box::new(handler));
     }
 
     fn register_remote_view<T>(
@@ -512,10 +538,22 @@ impl PluginApp {
             }
         }
 
+        let mut actions = BTreeMap::new();
+        for descriptor in &metadata.actions {
+            if actions
+                .insert(descriptor.id.clone(), descriptor.clone())
+                .is_some()
+            {
+                anyhow::bail!("duplicate action `{}` in plugin.toml", descriptor.id);
+            }
+        }
+
         Ok(Self {
             metadata,
             remote_views,
+            actions,
             factories: BTreeMap::default(),
+            action_handlers: BTreeMap::default(),
             sessions: BTreeMap::default(),
             registration_errors: Vec::new(),
         })
@@ -537,6 +575,14 @@ impl PluginApp {
         }
 
         Ok(())
+    }
+
+    fn invoke_action(&mut self, action_id: &str) -> Result<()> {
+        let handler = self
+            .action_handlers
+            .get_mut(action_id)
+            .with_context(|| format!("action `{action_id}` has no runtime handler"))?;
+        handler()
     }
 
     fn handle_message(&mut self, message: HostToPlugin) -> Result<LoopControl> {
@@ -574,6 +620,17 @@ impl PluginApp {
                     }]));
                 };
                 Ok(LoopControl::Continue(session.handle_event(&event)?))
+            }
+            HostToPlugin::InvokeAction { action_id } => {
+                let mut messages = Vec::new();
+                if let Err(error) = self.invoke_action(&action_id) {
+                    messages.push(PluginToHost::ReportError {
+                        panel_instance_id: None,
+                        message: error.to_string(),
+                    });
+                }
+                messages.extend(self.drain_messages()?);
+                Ok(LoopControl::Continue(messages))
             }
             HostToPlugin::ClosePanel { panel_instance_id } => {
                 self.sessions.remove(&panel_instance_id);
@@ -616,6 +673,8 @@ struct RuntimeManifest {
     panels: Vec<PanelDescriptor>,
     #[serde(default)]
     titlebar_widgets: Vec<plugin_protocol::TitlebarWidgetDescriptor>,
+    #[serde(default)]
+    actions: Vec<PluginActionDescriptor>,
 }
 
 #[cfg(test)]
@@ -685,6 +744,11 @@ mod tests {
                     priority: 100,
                     opens_panel_id: Some("deploy-panel".into()),
                 }],
+                actions: vec![PluginActionDescriptor {
+                    id: "deploy-now".into(),
+                    title: "Deploy Now".into(),
+                    description: None,
+                }],
             },
             remote_views: BTreeMap::from([
                 (
@@ -713,12 +777,71 @@ mod tests {
                     ),
                 ),
             ]),
+            actions: BTreeMap::from([(
+                "deploy-now".to_string(),
+                PluginActionDescriptor {
+                    id: "deploy-now".into(),
+                    title: "Deploy Now".into(),
+                    description: None,
+                },
+            )]),
             factories,
+            action_handlers: BTreeMap::default(),
             sessions: BTreeMap::default(),
             registration_errors: Vec::new(),
         };
 
         app.validate_registrations().unwrap();
+    }
+
+    #[::core::prelude::v1::test]
+    fn invoke_action_without_runtime_handler_reports_error() {
+        let mut app = PluginApp {
+            metadata: PluginMetadata {
+                id: PluginId::new("acme.test-panel"),
+                name: "Test Panel".into(),
+                version: "0.1.0".into(),
+                description: None,
+                panels: Vec::new(),
+                titlebar_widgets: Vec::new(),
+                actions: vec![PluginActionDescriptor {
+                    id: "deploy-now".into(),
+                    title: "Deploy Now".into(),
+                    description: None,
+                }],
+            },
+            remote_views: BTreeMap::default(),
+            actions: BTreeMap::from([(
+                "deploy-now".to_string(),
+                PluginActionDescriptor {
+                    id: "deploy-now".into(),
+                    title: "Deploy Now".into(),
+                    description: None,
+                },
+            )]),
+            factories: BTreeMap::default(),
+            action_handlers: BTreeMap::default(),
+            sessions: BTreeMap::default(),
+            registration_errors: Vec::new(),
+        };
+
+        let result = app
+            .handle_message(HostToPlugin::InvokeAction {
+                action_id: "deploy-now".to_string(),
+            })
+            .expect("invoke action should not crash");
+
+        let LoopControl::Continue(messages) = result else {
+            panic!("invoke action should not request shutdown");
+        };
+        assert_eq!(messages.len(), 1);
+        assert!(matches!(
+            &messages[0],
+            PluginToHost::ReportError {
+                panel_instance_id: None,
+                message,
+            } if message.contains("deploy-now")
+        ));
     }
 
     struct ThemeAwarePanel;
@@ -947,6 +1070,7 @@ impl From<RuntimeManifest> for PluginMetadata {
             description: manifest.description,
             panels: manifest.panels,
             titlebar_widgets: manifest.titlebar_widgets,
+            actions: manifest.actions,
         }
     }
 }
