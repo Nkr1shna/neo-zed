@@ -297,10 +297,11 @@ impl GlobalWatcher {
             state.path_registrations.remove(&registration_state.path);
 
             drop(state);
-            self.watcher
-                .lock()
-                .unwatch(&registration_state.path)
-                .log_err();
+            if let Err(error) = self.watcher.lock().unwatch(&registration_state.path)
+                && !matches!(error.kind, notify::ErrorKind::WatchNotFound)
+            {
+                util::log_err(&error);
+            }
         }
     }
 }

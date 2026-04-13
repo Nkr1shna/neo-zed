@@ -19,7 +19,7 @@ use extension::{
     ExtensionGrammarProxy, ExtensionHostProxy, ExtensionLanguageProxy,
     ExtensionLanguageServerProxy, ExtensionSnippetProxy, ExtensionThemeProxy,
 };
-use fs::{Fs, RemoveOptions};
+use fs::{Fs, RemoveOptions, RenameOptions};
 use futures::future::join_all;
 use futures::{
     AsyncReadExt as _, Future, FutureExt as _, StreamExt as _,
@@ -82,6 +82,17 @@ const SUPPRESSED_EXTENSIONS: &[&str] = &["snippets", "ruff", "ty", "basedpyright
 /// Returns the [`SchemaVersion`] range that is compatible with this version of Zed.
 pub fn schema_version_range() -> RangeInclusive<SchemaVersion> {
     SchemaVersion::ZERO..=CURRENT_SCHEMA_VERSION
+}
+
+fn bundled_extension_source_path(extension_id: &str) -> Option<PathBuf> {
+    let extension_source_path = Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("../../extensions")
+        .join(extension_id);
+
+    extension_source_path
+        .join("extension.toml")
+        .is_file()
+        .then_some(extension_source_path)
 }
 
 /// Returns whether the given extension version is compatible with this version of Zed.
@@ -708,6 +719,10 @@ impl ExtensionStore {
         cx: &mut Context<Self>,
     ) -> Task<Result<()>> {
         let extension_dir = self.installed_dir.join(extension_id.as_ref());
+        let staging_extension_dir = self
+            .wasm_host
+            .work_dir
+            .join(format!("{}.downloading", extension_id.as_ref()));
         let http_client = self.http_client.clone();
         let fs = self.fs.clone();
 
@@ -731,23 +746,23 @@ impl ExtensionStore {
                 .await
                 .context("downloading extension")?;
 
-            fs.remove_dir(
-                &extension_dir,
-                RemoveOptions {
-                    recursive: true,
-                    ignore_if_not_exists: true,
-                },
-            )
-            .await?;
-
             let content_length = response
                 .headers()
                 .get(http_client::http::header::CONTENT_LENGTH)
                 .and_then(|value| value.to_str().ok()?.parse::<usize>().ok());
 
+            let status = response.status();
             let mut body = BufReader::new(response.body_mut());
             let mut tar_gz_bytes = Vec::new();
             body.read_to_end(&mut tar_gz_bytes).await?;
+
+            if !status.is_success() {
+                let response_text = String::from_utf8_lossy(tar_gz_bytes.as_slice());
+                bail!(
+                    "failed to download extension {extension_id}: status {}, response: {response_text:?}",
+                    status.as_u16()
+                );
+            }
 
             if let Some(content_length) = content_length {
                 let actual_len = tar_gz_bytes.len();
@@ -758,9 +773,59 @@ impl ExtensionStore {
                     ));
                 }
             }
+
+            fs.remove_dir(
+                &staging_extension_dir,
+                RemoveOptions {
+                    recursive: true,
+                    ignore_if_not_exists: true,
+                },
+            )
+            .await?;
+            fs.create_dir(&staging_extension_dir).await?;
+
             let decompressed_bytes = GzipDecoder::new(BufReader::new(tar_gz_bytes.as_slice()));
             let archive = Archive::new(decompressed_bytes);
-            archive.unpack(extension_dir).await?;
+            if let Err(error) = archive.unpack(&staging_extension_dir).await {
+                fs.remove_dir(
+                    &staging_extension_dir,
+                    RemoveOptions {
+                        recursive: true,
+                        ignore_if_not_exists: true,
+                    },
+                )
+                .await
+                .log_err();
+                return Err(error.into());
+            }
+
+            if let Err(error) = ExtensionManifest::load(fs.clone(), &staging_extension_dir).await {
+                fs.remove_dir(
+                    &staging_extension_dir,
+                    RemoveOptions {
+                        recursive: true,
+                        ignore_if_not_exists: true,
+                    },
+                )
+                .await
+                .log_err();
+                return Err(error);
+            }
+
+            fs.remove_dir(
+                &extension_dir,
+                RemoveOptions {
+                    recursive: true,
+                    ignore_if_not_exists: true,
+                },
+            )
+            .await?;
+            fs.rename(
+                &staging_extension_dir,
+                &extension_dir,
+                RenameOptions::default(),
+            )
+            .await?;
             this.update(cx, |this, cx| this.reload(Some(extension_id.clone()), cx))?
                 .await;
 
@@ -784,6 +849,38 @@ impl ExtensionStore {
 
     pub fn install_latest_extension(&mut self, extension_id: Arc<str>, cx: &mut Context<Self>) {
         log::info!("installing extension {extension_id} latest version");
+
+        if let Some(extension_source_path) = bundled_extension_source_path(extension_id.as_ref()) {
+            log::info!(
+                "installing bundled extension {extension_id} from {}",
+                extension_source_path.display()
+            );
+
+            let fs = self.fs.clone();
+            let installed_dir = self.installed_dir.clone();
+            cx.spawn(async move |this, cx| {
+                let installed_extension_path = installed_dir.join(extension_id.as_ref());
+                if let Some(metadata) = fs.metadata(&installed_extension_path).await?
+                    && !metadata.is_symlink
+                {
+                    fs.remove_dir(
+                        &installed_extension_path,
+                        RemoveOptions {
+                            recursive: true,
+                            ignore_if_not_exists: true,
+                        },
+                    )
+                    .await?;
+                }
+
+                this.update(cx, |this, cx| {
+                    this.install_dev_extension(extension_source_path, cx)
+                })?
+                .await
+            })
+            .detach_and_log_err(cx);
+            return;
+        }
 
         let schema_versions = schema_version_range();
         let wasm_api_versions = wasm_api_version_range(ReleaseChannel::global(cx));

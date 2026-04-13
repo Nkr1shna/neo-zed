@@ -52,17 +52,23 @@ pub struct Organization {
     pub is_personal: bool,
 }
 
-#[derive(Debug, PartialEq, Serialize, Deserialize)]
+#[derive(Debug, Default, PartialEq, Serialize, Deserialize)]
 pub struct OrganizationConfiguration {
+    #[serde(default)]
     pub is_zed_model_provider_enabled: bool,
+    #[serde(default)]
     pub is_agent_thread_feedback_enabled: bool,
+    #[serde(default)]
     pub is_collaboration_enabled: bool,
+    #[serde(default)]
     pub edit_prediction: OrganizationEditPredictionConfiguration,
 }
 
-#[derive(Debug, PartialEq, Serialize, Deserialize)]
+#[derive(Debug, Default, PartialEq, Serialize, Deserialize)]
 pub struct OrganizationEditPredictionConfiguration {
+    #[serde(default)]
     pub is_enabled: bool,
+    #[serde(default)]
     pub is_feedback_enabled: bool,
 }
 
