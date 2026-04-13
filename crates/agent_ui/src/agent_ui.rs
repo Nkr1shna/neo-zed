@@ -291,7 +291,7 @@ impl Agent {
 
     pub fn label(&self) -> SharedString {
         match self {
-            Self::NativeAgent => "Zed Agent".into(),
+            Self::NativeAgent => "Neo Zed Agent".into(),
             Self::Custom { id, .. } => id.0.clone(),
         }
     }

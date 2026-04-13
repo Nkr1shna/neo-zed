@@ -5,6 +5,12 @@
 
 Welcome to Neo Zed, a high-performance, multiplayer code editor.
 
+## Fork Attribution Notice
+
+Neo Zed is a modified version of Zed. This repository includes modifications as of 2026-04-13 and is released under the GNU Affero General Public License v3.0 or later; see [LICENSE-AGPL](./LICENSE-AGPL).
+
+If you make Neo Zed or its collaboration services available to users over a network, you must also offer those users access to the Corresponding Source of the running version at no charge, as required by AGPLv3 section 13.
+
 ---
 
 ### Installation
