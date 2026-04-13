@@ -319,7 +319,7 @@ mod host {
             let registry = registry.clone();
             let result =
                 window_handle.update(cx, |multi_workspace: &mut MultiWorkspace, window, cx| {
-                    let workspaces = multi_workspace.workspaces().to_vec();
+                    let workspaces = multi_workspace.workspaces().cloned().collect::<Vec<_>>();
                     for workspace in workspaces {
                         workspace.update(cx, |workspace, workspace_cx| {
                             sync_workspace_panels_for_workspace(
