@@ -12982,6 +12982,9 @@ name = "plugin"
 version = "0.1.0"
 dependencies = [
  "anyhow",
+ "async-compression",
+ "async-tar",
+ "futures 0.3.32",
  "plugin_protocol",
  "pretty_assertions",
  "serde",
@@ -22296,6 +22299,7 @@ dependencies = [
  "cli",
  "client",
  "clock",
+ "cloud_api_types",
  "codestral",
  "collab_ui",
  "collections",

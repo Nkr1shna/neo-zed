@@ -13,6 +13,9 @@ path = "src/plugin.rs"
 
 [dependencies]
 anyhow.workspace = true
+async-compression.workspace = true
+async-tar.workspace = true
+futures.workspace = true
 plugin_protocol.workspace = true
 serde.workspace = true
 serde_json.workspace = true

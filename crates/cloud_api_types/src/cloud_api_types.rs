@@ -1,6 +1,7 @@
 mod extension;
 mod known_or_unknown;
 mod plan;
+mod plugin;
 mod timestamp;
 pub mod websocket_protocol;
 
@@ -12,6 +13,7 @@ use serde::{Deserialize, Serialize};
 pub use crate::extension::*;
 pub use crate::known_or_unknown::*;
 pub use crate::plan::*;
+pub use crate::plugin::*;
 pub use crate::timestamp::Timestamp;
 
 pub const ZED_SYSTEM_ID_HEADER_NAME: &str = "x-zed-system-id";

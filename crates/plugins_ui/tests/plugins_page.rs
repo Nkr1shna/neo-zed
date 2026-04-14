@@ -2,7 +2,7 @@ use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
 
 use anyhow::{Result, anyhow};
-use gpui::App;
+use gpui::{App, Task};
 use plugins_ui::{
     PluginPanelRecord, PluginRecord, PluginSource, PluginStatus, PluginStoreApi, PluginsPage,
 };
@@ -50,47 +50,49 @@ impl MockPluginStore {
 }
 
 impl PluginStoreApi for MockPluginStore {
-    fn list_plugins(&self) -> Result<Vec<PluginRecord>> {
-        Ok(self
+    fn list_plugins(&self, _cx: &mut App) -> Task<Result<Vec<PluginRecord>>> {
+        Task::ready(Ok(self
             .records
             .lock()
             .expect("store records lock poisoned")
-            .clone())
+            .clone()))
     }
 
-    fn install_plugin(&self, plugin_id: &str, _cx: &mut App) -> Result<()> {
+    fn install_plugin(&self, plugin_id: &str, _cx: &mut App) -> Task<Result<()>> {
         self.calls
             .lock()
             .expect("store call log lock poisoned")
             .push(StoreCall::Install(Arc::from(plugin_id)));
         let mut records = self.records.lock().expect("store records lock poisoned");
-        let record = records
+        let result = records
             .iter_mut()
             .find(|record| record.id.as_ref() == plugin_id)
-            .ok_or_else(|| anyhow!("missing plugin: {plugin_id}"))?;
-        record.status = PluginStatus::Installed;
-        Ok(())
+            .ok_or_else(|| anyhow!("missing plugin: {plugin_id}"));
+        Task::ready(result.map(|record| {
+            record.status = PluginStatus::Installed;
+        }))
     }
 
-    fn remove_plugin(&self, plugin_id: &str, _cx: &mut App) -> Result<()> {
+    fn remove_plugin(&self, plugin_id: &str, _cx: &mut App) -> Task<Result<()>> {
         self.calls
             .lock()
             .expect("store call log lock poisoned")
             .push(StoreCall::Remove(Arc::from(plugin_id)));
         let mut records = self.records.lock().expect("store records lock poisoned");
-        let record = records
+        let result = records
             .iter_mut()
             .find(|record| record.id.as_ref() == plugin_id)
-            .ok_or_else(|| anyhow!("missing plugin: {plugin_id}"))?;
-        record.status = PluginStatus::NotInstalled;
-        Ok(())
+            .ok_or_else(|| anyhow!("missing plugin: {plugin_id}"));
+        Task::ready(result.map(|record| {
+            record.status = PluginStatus::NotInstalled;
+        }))
     }
 
     fn install_development_plugin(
         &self,
         source_directory: &std::path::Path,
         _cx: &mut App,
-    ) -> Result<()> {
+    ) -> Task<Result<()>> {
         self.calls
             .lock()
             .expect("store call log lock poisoned")
@@ -98,14 +100,15 @@ impl PluginStoreApi for MockPluginStore {
                 source_directory.to_path_buf(),
             ));
         let mut records = self.records.lock().expect("store records lock poisoned");
-        let record = records
+        let result = records
             .iter_mut()
             .find(|record| {
                 record.source.development_path().map(PathBuf::as_path) == Some(source_directory)
             })
-            .ok_or_else(|| anyhow!("missing plugin: {}", source_directory.display()))?;
-        record.status = PluginStatus::Installed;
-        Ok(())
+            .ok_or_else(|| anyhow!("missing plugin: {}", source_directory.display()));
+        Task::ready(result.map(|record| {
+            record.status = PluginStatus::Installed;
+        }))
     }
 
     fn open_panel(
@@ -189,54 +192,69 @@ fn page_refreshes_and_tracks_install_remove_transitions() {
         development_plugin("dev-beta", PluginStatus::NotInstalled),
     ]));
 
-    let mut page = PluginsPage::new(store.clone());
-    page.reload_from_store()
-        .expect("page should load plugins from the store");
     let mut app = gpui::TestApp::new();
+    let page = app.new_entity(|_| PluginsPage::new(store.clone()));
+    app.update_entity(&page, |page, cx| page.refresh(cx));
+    app.run_until_parked();
 
     assert_eq!(
-        page.plugin_records()
-            .iter()
-            .map(|record| record.action_label())
-            .collect::<Vec<_>>(),
+        app.read_entity(&page, |page, _| {
+            page.plugin_records()
+                .iter()
+                .map(|record| record.action_label())
+                .collect::<Vec<_>>()
+        }),
         vec![
             SharedString::from("Install Dev"),
             SharedString::from("Install")
         ]
     );
 
-    app.update(|cx| page.install_plugin("registry-alpha", cx))
-        .expect("registry plugin install should succeed");
+    app.update_entity(&page, |page, cx| {
+        page.install_plugin("registry-alpha", cx)
+            .expect("registry plugin install should succeed");
+    });
+    app.run_until_parked();
     assert_eq!(
         store.plugin_status("registry-alpha"),
         Some(PluginStatus::Installed)
     );
     assert_eq!(
-        page.plugin_records()
-            .iter()
-            .find(|record| record.id.as_ref() == "registry-alpha")
-            .map(|record| record.action_label()),
+        app.read_entity(&page, |page, _| {
+            page.plugin_records()
+                .iter()
+                .find(|record| record.id.as_ref() == "registry-alpha")
+                .map(|record| record.action_label())
+        }),
         Some(SharedString::from("Remove"))
     );
 
-    app.update(|cx| page.remove_plugin("registry-alpha", cx))
-        .expect("registry plugin removal should succeed");
+    app.update_entity(&page, |page, cx| {
+        page.remove_plugin("registry-alpha", cx)
+            .expect("registry plugin removal should succeed");
+    });
+    app.run_until_parked();
     assert_eq!(
         store.plugin_status("registry-alpha"),
         Some(PluginStatus::NotInstalled)
     );
 
-    app.update(|cx| page.install_development_plugin(std::path::Path::new("/tmp/dev-beta"), cx))
-        .expect("development plugin install should succeed");
+    app.update_entity(&page, |page, cx| {
+        page.install_development_plugin(std::path::Path::new("/tmp/dev-beta"), cx)
+            .expect("development plugin install should succeed");
+    });
+    app.run_until_parked();
     assert_eq!(
         store.plugin_status("dev-beta"),
         Some(PluginStatus::Installed)
     );
     assert_eq!(
-        page.plugin_records()
-            .iter()
-            .find(|record| record.id.as_ref() == "dev-beta")
-            .map(|record| record.action_label()),
+        app.read_entity(&page, |page, _| {
+            page.plugin_records()
+                .iter()
+                .find(|record| record.id.as_ref() == "dev-beta")
+                .map(|record| record.action_label())
+        }),
         Some(SharedString::from("Remove"))
     );
 

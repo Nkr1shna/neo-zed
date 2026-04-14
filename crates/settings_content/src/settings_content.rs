@@ -5,6 +5,7 @@ mod fallible_options;
 mod language;
 mod language_model;
 pub mod merge_from;
+mod plugin;
 mod project;
 mod serde_helper;
 mod terminal;
@@ -19,6 +20,7 @@ pub use fallible_options::*;
 pub use language::*;
 pub use language_model::*;
 pub use merge_from::MergeFrom as MergeFromTrait;
+pub use plugin::*;
 pub use project::*;
 use serde::de::DeserializeOwned;
 pub use serde_helper::{
@@ -89,6 +91,9 @@ pub struct SettingsContent {
 
     #[serde(flatten)]
     pub extension: ExtensionSettingsContent,
+
+    #[serde(flatten)]
+    pub plugin: PluginSettingsContent,
 
     #[serde(flatten)]
     pub workspace: WorkspaceSettingsContent,

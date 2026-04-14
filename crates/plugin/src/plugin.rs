@@ -11,6 +11,9 @@ use std::path::{Path, PathBuf};
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use anyhow::{Context, Result, bail};
+use async_compression::futures::bufread::GzipDecoder;
+use async_tar::Archive;
+use futures::io::BufReader;
 use plugin_protocol::{
     PanelDescriptor, PluginActionDescriptor, PluginId, PluginInstallState, TitlebarWidgetDescriptor,
 };
@@ -30,6 +33,7 @@ pub struct PluginStoreLayout {
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub enum PluginInstallSource {
     Directory(PathBuf),
+    Registry { version: String },
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -60,6 +64,81 @@ impl PluginStore {
         &mut self,
         source_directory: impl AsRef<Path>,
     ) -> Result<InstalledPlugin> {
+        self.install_directory_with_source(
+            source_directory.as_ref(),
+            PluginInstallSource::Directory(source_directory.as_ref().to_path_buf()),
+        )
+    }
+
+    pub fn install_registry_plugin_from_directory(
+        &mut self,
+        source_directory: impl AsRef<Path>,
+        version: impl Into<String>,
+    ) -> Result<InstalledPlugin> {
+        self.install_directory_with_source(
+            source_directory.as_ref(),
+            PluginInstallSource::Registry {
+                version: version.into(),
+            },
+        )
+    }
+
+    pub async fn install_registry_plugin_from_tar_gz(
+        &mut self,
+        archive_bytes: &[u8],
+    ) -> Result<InstalledPlugin> {
+        ensure_directory(&self.layout.installed_root)?;
+
+        let extraction_directory = unique_temporary_directory(
+            &self.layout.installed_root.join(".registry-plugin"),
+            "extracting",
+        );
+        ensure_directory(&extraction_directory)?;
+
+        let decoder = GzipDecoder::new(BufReader::new(archive_bytes));
+        let archive = Archive::new(decoder);
+        if let Err(error) = archive.unpack(&extraction_directory).await {
+            let cleanup_result = remove_directory_if_exists(&extraction_directory).with_context(|| {
+                format!(
+                    "failed to clean up extracted plugin archive {}",
+                    extraction_directory.display()
+                )
+            });
+            return match cleanup_result {
+                Ok(()) => Err(error).context("extracting plugin archive"),
+                Err(cleanup_error) => Err(error)
+                    .context("extracting plugin archive")
+                    .context(cleanup_error),
+            };
+        }
+
+        let install_result = async {
+            let plugin_root = extracted_plugin_root(&extraction_directory)?;
+            let manifest = PluginManifest::load(&plugin_root)?;
+            self.install_registry_plugin_from_directory(&plugin_root, manifest.version)
+        }
+        .await;
+
+        let cleanup_result = remove_directory_if_exists(&extraction_directory).with_context(|| {
+            format!(
+                "failed to clean up extracted plugin archive {}",
+                extraction_directory.display()
+            )
+        });
+
+        match (install_result, cleanup_result) {
+            (Ok(plugin), Ok(())) => Ok(plugin),
+            (Ok(_), Err(cleanup_error)) => Err(cleanup_error),
+            (Err(install_error), Ok(())) => Err(install_error),
+            (Err(install_error), Err(cleanup_error)) => Err(install_error).context(cleanup_error),
+        }
+    }
+
+    fn install_directory_with_source(
+        &mut self,
+        source_directory: &Path,
+        source: PluginInstallSource,
+    ) -> Result<InstalledPlugin> {
         let source_directory = source_directory.as_ref();
         ensure_not_symlink(source_directory)?;
         let manifest = PluginManifest::load(source_directory)?;
@@ -83,7 +162,7 @@ impl PluginStore {
 
         let installation = PluginInstallation {
             root: installed_directory.clone(),
-            source: PluginInstallSource::Directory(source_directory.to_path_buf()),
+            source,
         };
         if let Err(error) = write_installation_metadata(&staging_directory, &installation) {
             remove_directory_if_exists(&staging_directory).with_context(|| {
@@ -757,6 +836,37 @@ fn remove_directory_if_exists(path: &Path) -> Result<()> {
             .with_context(|| format!("failed to remove directory {}", path.display()))?;
     }
     Ok(())
+}
+
+fn extracted_plugin_root(extraction_root: &Path) -> Result<PathBuf> {
+    let manifest_path = extraction_root.join(PLUGIN_MANIFEST_NAME);
+    if manifest_path.is_file() {
+        return Ok(extraction_root.to_path_buf());
+    }
+
+    let mut candidate_directories = fs::read_dir(extraction_root)
+        .with_context(|| {
+            format!(
+                "reading extracted plugin directory {}",
+                extraction_root.display()
+            )
+        })?
+        .filter_map(|entry| entry.ok().map(|entry| entry.path()))
+        .filter(|path| path.is_dir() && path.join(PLUGIN_MANIFEST_NAME).is_file())
+        .collect::<Vec<_>>();
+
+    if candidate_directories.len() == 1 {
+        return candidate_directories.pop().with_context(|| {
+            format!(
+                "expected one extracted plugin directory in {}",
+                extraction_root.display()
+            )
+        });
+    }
+
+    bail!(
+        "plugin archive must contain a plugin root with plugin.toml at the archive root or as the only top-level directory"
+    );
 }
 
 fn replace_installed_directory(staging_directory: &Path, installed_directory: &Path) -> Result<()> {

@@ -8,7 +8,7 @@ use anyhow::Result;
 use editor::{Editor, EditorElement, EditorStyle};
 use gpui::{
     Action, AnyElement, App, Context, Entity, EventEmitter, FocusHandle, Focusable, KeyContext,
-    ParentElement, Render, SharedString, Styled, TextStyle, UniformListScrollHandle, Window,
+    ParentElement, Render, SharedString, Styled, Task, TextStyle, UniformListScrollHandle, Window,
     actions, point, prelude::*, px, uniform_list,
 };
 use project::DirectoryLister;
@@ -68,6 +68,10 @@ pub enum PluginStatus {
     NotInstalled,
     Installing,
     Installed,
+    UpdateAvailable {
+        installed_version: SharedString,
+        latest_version: SharedString,
+    },
     Removing,
     Failed(SharedString),
 }
@@ -78,6 +82,9 @@ impl PluginStatus {
             Self::NotInstalled => "Not installed".into(),
             Self::Installing => "Installing".into(),
             Self::Installed => "Installed".into(),
+            Self::UpdateAvailable { latest_version, .. } => {
+                SharedString::from(format!("Update available: {latest_version}"))
+            }
             Self::Removing => "Removing".into(),
             Self::Failed(message) => SharedString::from(format!("Error: {message}")),
         }
@@ -92,7 +99,7 @@ impl PluginStatus {
     }
 
     pub fn is_installed(&self) -> bool {
-        matches!(self, Self::Installed)
+        matches!(self, Self::Installed | Self::UpdateAvailable { .. })
     }
 
     pub fn error_message(&self) -> Option<SharedString> {
@@ -167,6 +174,7 @@ impl PluginRecord {
                 PluginSource::Development { .. } => "Installing Dev".into(),
             },
             PluginStatus::Installed => "Remove".into(),
+            PluginStatus::UpdateAvailable { .. } => "Update".into(),
             PluginStatus::Removing => "Removing".into(),
         }
     }
@@ -181,10 +189,11 @@ impl PluginRecord {
 }
 
 pub trait PluginStoreApi: 'static {
-    fn list_plugins(&self) -> Result<Vec<PluginRecord>>;
-    fn install_plugin(&self, plugin_id: &str, cx: &mut App) -> Result<()>;
-    fn remove_plugin(&self, plugin_id: &str, cx: &mut App) -> Result<()>;
-    fn install_development_plugin(&self, source_directory: &Path, cx: &mut App) -> Result<()>;
+    fn list_plugins(&self, cx: &mut App) -> Task<Result<Vec<PluginRecord>>>;
+    fn install_plugin(&self, plugin_id: &str, cx: &mut App) -> Task<Result<()>>;
+    fn remove_plugin(&self, plugin_id: &str, cx: &mut App) -> Task<Result<()>>;
+    fn install_development_plugin(&self, source_directory: &Path, cx: &mut App)
+    -> Task<Result<()>>;
     fn open_panel(
         &self,
         plugin_id: &str,
@@ -208,23 +217,31 @@ enum PluginFilter {
 struct NoopPluginStore;
 
 impl PluginStoreApi for NoopPluginStore {
-    fn list_plugins(&self) -> Result<Vec<PluginRecord>> {
-        Ok(Vec::new())
+    fn list_plugins(&self, _cx: &mut App) -> Task<Result<Vec<PluginRecord>>> {
+        Task::ready(Ok(Vec::new()))
     }
 
-    fn install_plugin(&self, plugin_id: &str, _cx: &mut App) -> Result<()> {
-        anyhow::bail!("plugin store is not configured; cannot install `{plugin_id}`")
+    fn install_plugin(&self, plugin_id: &str, _cx: &mut App) -> Task<Result<()>> {
+        Task::ready(Err(anyhow::anyhow!(
+            "plugin store is not configured; cannot install `{plugin_id}`"
+        )))
     }
 
-    fn remove_plugin(&self, plugin_id: &str, _cx: &mut App) -> Result<()> {
-        anyhow::bail!("plugin store is not configured; cannot remove `{plugin_id}`")
+    fn remove_plugin(&self, plugin_id: &str, _cx: &mut App) -> Task<Result<()>> {
+        Task::ready(Err(anyhow::anyhow!(
+            "plugin store is not configured; cannot remove `{plugin_id}`"
+        )))
     }
 
-    fn install_development_plugin(&self, source_directory: &Path, _cx: &mut App) -> Result<()> {
-        anyhow::bail!(
+    fn install_development_plugin(
+        &self,
+        source_directory: &Path,
+        _cx: &mut App,
+    ) -> Task<Result<()>> {
+        Task::ready(Err(anyhow::anyhow!(
             "plugin store is not configured; cannot install development plugin from `{}`",
             source_directory.display()
-        )
+        )))
     }
 
     fn open_panel(
@@ -335,8 +352,8 @@ pub fn init_with_provider(provider: Arc<dyn PluginStoreProvider>, cx: &mut App) 
                             }
                         };
 
-                        match workspace_handle.update(cx, |workspace, cx| {
-                            store.install_development_plugin(&plugin_path, cx)?;
+                        let install_task = match workspace_handle.update(cx, |workspace, cx| {
+                            let task = store.install_development_plugin(&plugin_path, cx);
                             let plugins_page = workspace
                                 .active_pane()
                                 .read(cx)
@@ -349,9 +366,9 @@ pub fn init_with_provider(provider: Arc<dyn PluginStoreProvider>, cx: &mut App) 
                                 });
                             }
 
-                            Ok::<(), anyhow::Error>(())
+                            task
                         }) {
-                            Ok(_) => {}
+                            Ok(task) => task,
                             Err(error) => {
                                 workspace_handle
                                     .update(cx, |workspace, cx| {
@@ -363,7 +380,19 @@ pub fn init_with_provider(provider: Arc<dyn PluginStoreProvider>, cx: &mut App) 
                                         );
                                     })
                                     .ok();
+                                return None;
                             }
+                        };
+
+                        if let Err(error) = install_task.await {
+                            workspace_handle
+                                .update(cx, |workspace, cx| {
+                                    workspace.show_error(
+                                        &format!("Failed to install development plugin: {error}"),
+                                        cx,
+                                    );
+                                })
+                                .ok();
                         }
 
                         Some(())
@@ -433,8 +462,8 @@ impl PluginsPage {
         self.refilter_plugins();
     }
 
-    pub fn reload_from_store(&mut self) -> Result<()> {
-        self.plugins = self.store.list_plugins()?;
+    fn apply_loaded_plugins(&mut self, plugins: Vec<PluginRecord>) {
+        self.plugins = plugins;
         self.plugins.sort_by(|left, right| {
             left.name
                 .as_ref()
@@ -448,41 +477,61 @@ impl PluginsPage {
                 })
         });
         self.refilter_plugins();
-        self.load_error = None;
-        self.has_loaded_plugins = true;
-        Ok(())
     }
 
     pub fn refresh(&mut self, cx: &mut Context<Self>) {
         self.is_loading_plugins = true;
-        if let Err(error) = self.reload_from_store() {
-            self.plugins.clear();
-            self.filtered_plugin_indices.clear();
-            self.has_loaded_plugins = true;
-            self.load_error = Some(SharedString::from(error.to_string()));
-        }
-        self.is_loading_plugins = false;
+        self.load_error = None;
         cx.notify();
+
+        let task = self.store.list_plugins(cx);
+        cx.spawn(async move |this, cx| {
+            let result = task.await;
+            this.update(cx, |this, cx| {
+                match result {
+                    Ok(plugins) => {
+                        this.apply_loaded_plugins(plugins);
+                        this.load_error = None;
+                    }
+                    Err(error) => {
+                        this.plugins.clear();
+                        this.filtered_plugin_indices.clear();
+                        this.load_error = Some(SharedString::from(error.to_string()));
+                    }
+                }
+                this.has_loaded_plugins = true;
+                this.is_loading_plugins = false;
+                cx.notify();
+            })?;
+            Ok::<(), anyhow::Error>(())
+        })
+        .detach();
     }
 
-    pub fn install_plugin(&mut self, plugin_id: &str, cx: &mut App) -> Result<()> {
-        self.store.install_plugin(plugin_id, cx)?;
-        self.reload_from_store()
+    pub fn install_plugin(&mut self, plugin_id: &str, cx: &mut Context<Self>) -> Result<()> {
+        let previous_status = self.plugin_status(plugin_id);
+        self.set_plugin_status(plugin_id, PluginStatus::Installing);
+        let task = self.store.install_plugin(plugin_id, cx);
+        self.run_store_operation(task, Some((plugin_id.to_string(), previous_status)), cx);
+        Ok(())
     }
 
-    pub fn remove_plugin(&mut self, plugin_id: &str, cx: &mut App) -> Result<()> {
-        self.store.remove_plugin(plugin_id, cx)?;
-        self.reload_from_store()
+    pub fn remove_plugin(&mut self, plugin_id: &str, cx: &mut Context<Self>) -> Result<()> {
+        let previous_status = self.plugin_status(plugin_id);
+        self.set_plugin_status(plugin_id, PluginStatus::Removing);
+        let task = self.store.remove_plugin(plugin_id, cx);
+        self.run_store_operation(task, Some((plugin_id.to_string(), previous_status)), cx);
+        Ok(())
     }
 
     pub fn install_development_plugin(
         &mut self,
         source_directory: &Path,
-        cx: &mut App,
+        cx: &mut Context<Self>,
     ) -> Result<()> {
-        self.store
-            .install_development_plugin(source_directory, cx)?;
-        self.reload_from_store()
+        let task = self.store.install_development_plugin(source_directory, cx);
+        self.run_store_operation(task, None, cx);
+        Ok(())
     }
 
     pub fn open_panel(
@@ -493,7 +542,8 @@ impl PluginsPage {
         cx: &mut Context<Self>,
     ) -> Result<()> {
         self.store.open_panel(plugin_id, panel_id, window, cx)?;
-        self.reload_from_store()
+        self.refresh(cx);
+        Ok(())
     }
 
     pub fn focus_plugin(&mut self, plugin_id: impl Into<Arc<str>>) {
@@ -607,6 +657,52 @@ impl PluginsPage {
     fn scroll_to_top(&mut self, cx: &mut Context<Self>) {
         self.list.set_offset(point(px(0.), px(0.)));
         cx.notify();
+    }
+
+    fn set_plugin_status(&mut self, plugin_id: &str, status: PluginStatus) {
+        if let Some(plugin) = self
+            .plugins
+            .iter_mut()
+            .find(|plugin| plugin.id.as_ref() == plugin_id)
+        {
+            plugin.status = status;
+        }
+    }
+
+    fn plugin_status(&self, plugin_id: &str) -> PluginStatus {
+        self.plugins
+            .iter()
+            .find(|plugin| plugin.id.as_ref() == plugin_id)
+            .map(|plugin| plugin.status.clone())
+            .unwrap_or(PluginStatus::NotInstalled)
+    }
+
+    fn run_store_operation(
+        &mut self,
+        task: Task<Result<()>>,
+        revert_status: Option<(String, PluginStatus)>,
+        cx: &mut Context<Self>,
+    ) {
+        self.is_loading_plugins = true;
+        cx.notify();
+        cx.spawn(async move |this, cx| {
+            let result = task.await;
+            this.update(cx, |this, cx| {
+                if let Err(error) = result {
+                    if let Some((plugin_id, previous_status)) = revert_status {
+                        this.set_plugin_status(&plugin_id, previous_status);
+                    }
+                    this.load_error = Some(SharedString::from(error.to_string()));
+                    this.is_loading_plugins = false;
+                    cx.notify();
+                    return;
+                }
+
+                this.refresh(cx);
+            })?;
+            Ok::<(), anyhow::Error>(())
+        })
+        .detach();
     }
 
     fn on_query_change(
@@ -961,9 +1057,10 @@ impl PluginsPage {
     ) -> Result<()> {
         match status {
             PluginStatus::Installed | PluginStatus::Removing => self.remove_plugin(&plugin_id, cx),
-            PluginStatus::NotInstalled | PluginStatus::Installing | PluginStatus::Failed(_) => {
-                self.install_plugin(&plugin_id, cx)
-            }
+            PluginStatus::NotInstalled
+            | PluginStatus::Installing
+            | PluginStatus::UpdateAvailable { .. }
+            | PluginStatus::Failed(_) => self.install_plugin(&plugin_id, cx),
         }
     }
 
@@ -980,9 +1077,10 @@ impl PluginsPage {
                 PluginStatus::Installed | PluginStatus::Removing => {
                     self.remove_plugin(&plugin_id, cx)
                 }
-                PluginStatus::NotInstalled | PluginStatus::Installing | PluginStatus::Failed(_) => {
-                    self.install_development_plugin(&path, cx)
-                }
+                PluginStatus::NotInstalled
+                | PluginStatus::Installing
+                | PluginStatus::UpdateAvailable { .. }
+                | PluginStatus::Failed(_) => self.install_development_plugin(&path, cx),
             },
         }
     }
@@ -1212,14 +1310,6 @@ mod tests {
     use std::path::PathBuf;
 
     #[test]
-    fn install_plugin_surfaces_store_errors() {
-        let store = Arc::new(EmptyStore);
-        let mut page = PluginsPage::new(store);
-        let mut app = gpui::TestApp::new();
-        assert!(app.update(|cx| page.install_plugin("plugin", cx)).is_err());
-    }
-
-    #[test]
     fn focus_plugin_tracks_the_selected_plugin_identifier() {
         let store = Arc::new(EmptyStore);
         let mut page = PluginsPage::new(store);
@@ -1302,6 +1392,24 @@ mod tests {
     }
 
     #[test]
+    fn update_available_status_counts_as_installed_and_uses_update_action() {
+        let plugin = registry_plugin(
+            "registry-alpha",
+            PluginStatus::UpdateAvailable {
+                installed_version: "1.0.0".into(),
+                latest_version: "1.1.0".into(),
+            },
+        );
+
+        assert_eq!(plugin.action_label(), SharedString::from("Update"));
+        assert!(plugin.status.is_installed());
+        assert_eq!(
+            plugin.status.label(),
+            SharedString::from("Update available: 1.1.0")
+        );
+    }
+
+    #[test]
     fn filter_and_header_labels_include_counts() {
         let plugins = vec![
             registry_plugin("registry-alpha", PluginStatus::Installed),
@@ -1368,24 +1476,24 @@ mod tests {
     struct EmptyStore;
 
     impl PluginStoreApi for EmptyStore {
-        fn list_plugins(&self) -> Result<Vec<PluginRecord>> {
-            Ok(Vec::new())
+        fn list_plugins(&self, _cx: &mut App) -> Task<Result<Vec<PluginRecord>>> {
+            Task::ready(Ok(Vec::new()))
         }
 
-        fn install_plugin(&self, _plugin_id: &str, _cx: &mut App) -> Result<()> {
-            Err(anyhow!("not implemented"))
+        fn install_plugin(&self, _plugin_id: &str, _cx: &mut App) -> Task<Result<()>> {
+            Task::ready(Err(anyhow!("not implemented")))
         }
 
-        fn remove_plugin(&self, _plugin_id: &str, _cx: &mut App) -> Result<()> {
-            Err(anyhow!("not implemented"))
+        fn remove_plugin(&self, _plugin_id: &str, _cx: &mut App) -> Task<Result<()>> {
+            Task::ready(Err(anyhow!("not implemented")))
         }
 
         fn install_development_plugin(
             &self,
             _source_directory: &Path,
             _cx: &mut App,
-        ) -> Result<()> {
-            Err(anyhow!("not implemented"))
+        ) -> Task<Result<()>> {
+            Task::ready(Err(anyhow!("not implemented")))
         }
 
         fn open_panel(

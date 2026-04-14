@@ -62,6 +62,34 @@ fn install_and_remove_update_bookkeeping() {
 }
 
 #[test]
+fn registry_install_persists_registry_source_metadata() {
+    let fixture = PluginFixture::new("acme-test-panel");
+    fixture.write_plugin("source-plugin", "0.1.0");
+    let mut store = fixture.store();
+
+    let installed = store
+        .install_registry_plugin_from_directory(fixture.plugin_dir("source-plugin"), "0.1.0")
+        .unwrap();
+
+    assert_eq!(installed.state, PluginState::Installed);
+    assert_eq!(
+        installed.installation.source,
+        PluginInstallSource::Registry {
+            version: "0.1.0".into(),
+        }
+    );
+
+    let plugins = store.list().unwrap();
+    assert_eq!(plugins.len(), 1);
+    assert_eq!(
+        plugins[0].installation.source,
+        PluginInstallSource::Registry {
+            version: "0.1.0".into(),
+        }
+    );
+}
+
+#[test]
 fn enumerates_installed_and_dev_plugins_with_expected_states() {
     let fixture = PluginFixture::new("acme-test-panel");
     fixture.write_plugin("installed-source", "0.1.0");
