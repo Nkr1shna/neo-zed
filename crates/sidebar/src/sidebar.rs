@@ -4834,7 +4834,7 @@ impl Sidebar {
     }
 
     fn render_acp_import_onboarding(&mut self, cx: &mut Context<Self>) -> impl IntoElement {
-        let description = "Import threads from agents like Claude Agent, Codex, and more, whether started in Zed or another client.";
+        let description = "Import threads from agents like Claude Agent, Codex, and more, whether started in Neo Zed or another client.";
 
         let bg = cx.theme().colors().text_accent;
 

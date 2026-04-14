@@ -1,4 +1,4 @@
-//! Headless CLI binary for running Zed's agent in evaluation/benchmark environments.
+//! Headless CLI binary for running Neo Zed's agent in evaluation/benchmark environments.
 //!
 //! Designed to work inside containerized environments (like Harbor/termbench) where:
 //! - The repository is already checked out at the working directory
@@ -57,7 +57,7 @@ use crate::headless::AgentCliAppState;
 #[derive(Parser, Debug)]
 #[command(
     name = "eval-cli",
-    about = "Run Zed's agent headlessly in evaluation/benchmark environments"
+    about = "Run Neo Zed's agent headlessly in evaluation/benchmark environments"
 )]
 struct Args {
     /// Output current environment variables as JSON to stdout.

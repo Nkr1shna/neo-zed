@@ -1,0 +1,213 @@
+/* Neo Zed docs theme overrides. Loaded via additional-css in book.toml. */
+/* Applied on top of mdBook's built-in themes so the docs match the Neo Zed theme. */
+
+:root,
+html[data-theme="light"],
+html[data-theme="rust"],
+html[data-theme="coal"],
+html[data-theme="navy"],
+html[data-theme="ayu"],
+html[data-theme="dark"],
+html.light,
+html.rust,
+html.coal,
+html.navy,
+html.ayu,
+html.dark {
+    --bg: #111111;
+    --fg: #ffffff;
+
+    --sidebar-bg: #111111;
+    --sidebar-fg: #888888;
+    --sidebar-non-existant: #666666;
+    --sidebar-active: #00AEFF;
+    --sidebar-active-bg: #333333;
+    --sidebar-spacer: #2D2D2D;
+    --sidebar-mobile-shadow: 0px 16px 16px #00000099;
+
+    --divider: #2D2D2D;
+    --scrollbar: #333333;
+
+    --icons: #888888;
+    --icons-hover: #ffffff;
+    --icon-btn-bg-hover: #333333;
+
+    --links: #00AEFF;
+    --link-line-decoration: #00AEFF33;
+    --link-line-decoration-hover: #00AEFF66;
+
+    --full-contrast: #ffffff;
+
+    --inline-code-color: #ffffff;
+    --code-text: #ffffff;
+    --code-bg: #141414;
+    --keybinding-bg: #141414;
+
+    --pre-bg: #141414;
+    --pre-border: #2D2D2D;
+    --pre-shadow: #00000000;
+
+    --theme-popup-bg: #141414;
+    --theme-popup-border: #2D2D2D;
+    --theme-hover: #333333;
+
+    --quote-bg: #141414;
+    --quote-border: #00AEFF;
+
+    --warning-border: #FFD14A;
+    --warning-bg: #FFD14A1f;
+    --warning-icon: #FFD14A;
+
+    --table-border-color: #2D2D2D;
+    --table-header-bg: #141414;
+    --table-alternate-bg: #141414;
+
+    --toc-link-underline: #333333;
+    --toc-link-underline-hover: #88DDFF;
+
+    --searchbar-border-color: #2D2D2D;
+    --searchbar-bg: #141414;
+    --searchbar-fg: #ffffff;
+    --searchbar-shadow-color: #111111;
+    --searchresults-header-fg: #888888;
+    --searchresults-border-color: #2D2D2D;
+    --searchresults-li-bg: #333333;
+    --search-mark-bg: #333333;
+
+    --download-btn-bg: #141414;
+    --download-btn-bg-hover: #333333;
+    --download-btn-color: #ffffff;
+    --download-btn-border: #2D2D2D;
+    --download-btn-border-hover: #00AEFF;
+    --download-btn-shadow: #00000000;
+
+    --search-btn-bg: #141414;
+    --search-btn-bg-hover: #333333;
+    --search-btn-border: #2D2D2D;
+
+    --toast-bg: #141414;
+    --toast-border: #2D2D2D;
+    --toast-border-success: #91DD64;
+    --toast-border-error: #E27E8D;
+
+    --color-scheme: dark;
+}
+
+html,
+body {
+    background: #111111;
+    color: #ffffff;
+    font-family: ui-sans-serif, -apple-system, "Inter", system-ui, sans-serif;
+}
+
+.sidebar {
+    background: #111111;
+    border-right: 1px solid #2D2D2D;
+}
+
+.chapter li.chapter-item a,
+.chapter li.part-title {
+    color: #888888;
+}
+
+.chapter li.chapter-item a:hover,
+.chapter li.chapter-item a.active {
+    color: #00AEFF;
+}
+
+.chapter li a.active,
+.pagetoc a.active {
+    background: #333333;
+    color: #00AEFF !important;
+}
+
+.pagetoc a.active {
+    text-decoration-color: #00AEFF33;
+}
+
+.pagetoc a.active:hover {
+    text-decoration-color: #88DDFF;
+}
+
+#menu-bar,
+.menu-bar,
+.nav-chapters {
+    background: #111111;
+    backdrop-filter: saturate(180%) blur(12px);
+    -webkit-backdrop-filter: saturate(180%) blur(12px);
+    border-bottom: 1px solid #2D2D2D;
+}
+
+.menu-title {
+    font-family: ui-monospace, "SF Mono", "JetBrains Mono", Menlo, monospace;
+    font-weight: 600;
+    color: #ffffff;
+    letter-spacing: -0.01em;
+}
+
+h1, h2, h3, h4, h5, h6 {
+    font-family: ui-monospace, "SF Mono", "JetBrains Mono", Menlo, monospace;
+    letter-spacing: -0.02em;
+    color: #ffffff;
+}
+
+code, pre, kbd {
+    font-family: ui-monospace, "SF Mono", Menlo, monospace;
+}
+
+pre,
+pre > code {
+    background: #141414;
+    border: 1px solid #2D2D2D;
+    border-radius: 8px;
+}
+
+:not(pre) > code {
+    background: #141414;
+    border: 1px solid #2D2D2D;
+    border-radius: 4px;
+    padding: 0.1em 0.35em;
+    color: #ffffff;
+}
+
+code:not(pre code).hljs,
+kbd.keybinding {
+    background: #141414 !important;
+    color: #ffffff !important;
+    border: 1px solid #2D2D2D;
+}
+
+a {
+    color: #00AEFF;
+}
+
+a:hover {
+    color: #88DDFF;
+}
+
+blockquote {
+    background: #141414;
+    border-left: 3px solid #00AEFF;
+    color: #ffffff;
+}
+
+mark,
+ul#searchresults span.teaser em {
+    background: #333333;
+    color: #ffffff;
+}
+
+#searchbar:focus,
+#searchbar.active {
+    border-color: #00AEFF;
+    box-shadow: 0 0 0 1px #00AEFF;
+}
+
+hr {
+    border-color: #2D2D2D;
+}
+
+table td,
+table th {
+    border-color: #2D2D2D;
+}

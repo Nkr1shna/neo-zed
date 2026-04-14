@@ -102,12 +102,14 @@ You can trigger formatting via {#kb editor::Format} or the `editor: format` acti
 Configure formatting in Settings ({#kb zed::OpenSettings}) under Languages > C++, or add to your settings file:
 
 ```json [settings]
+{
   "languages": {
     "C++": {
       "format_on_save": "on",
       "tab_size": 2
     }
   }
+}
 ```
 
 ## More server configuration

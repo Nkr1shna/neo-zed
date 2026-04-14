@@ -1,6 +1,6 @@
 # eval-cli
 
-Headless CLI binary for running Zed's agent in evaluation/benchmark
+Headless CLI binary for running Neo Zed's agent in evaluation/benchmark
 environments. Designed to work inside containerized environments like
 [Harbor](https://harborframework.com/) where the repository is already
 checked out and API keys are provided via environment variables.

@@ -29,10 +29,10 @@
 .pagetoc a.active {
   background-color: var(--sidebar-active-bg);
   color: var(--sidebar-active) !important;
-  text-decoration-color: hsl(219, 93%, 42%, 0.1);
+  text-decoration-color: var(--link-line-decoration);
 }
 .pagetoc a.active:hover {
-  text-decoration-color: hsl(219, 93%, 42%, 0.8);
+  text-decoration-color: var(--toc-link-underline-hover);
 }
 .pagetoc .active {
   background: var(--sidebar-bg);

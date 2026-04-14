@@ -23,7 +23,7 @@ default-description = "Learn how to use and customize Zed, the fast, collaborati
 default-title = "Zed Code Editor Documentation"
 no-section-label = true
 preferred-dark-theme = "dark"
-additional-css = ["theme/page-toc.css", "theme/plugins.css", "theme/highlight.css", "theme/consent-banner.css"]
+additional-css = ["theme/page-toc.css", "theme/plugins.css", "theme/highlight.css", "theme/consent-banner.css", "theme/neo-zed-overrides.css"]
 additional-js  = ["theme/page-toc.js", "theme/plugins.js", "theme/c15t@2.0.0-rc.3.js", "theme/analytics.js"]
 
 [output.zed-html.print]
@@ -79,14 +79,14 @@ enable = false
 "/adding-new-languages.html" = "/docs/extensions/languages.html"
 "/elixir.html" = "/docs/languages/elixir.html"
 "/javascript.html" = "/docs/languages/javascript.html"
+"/python.html" = "/docs/languages/python.html"
+"/ruby.html" = "/docs/languages/ruby.html"
 "/languages/languages/html.html" = "/docs/languages/html.html"
 "/languages/languages/javascript.html" = "/docs/languages/javascript.html"
 "/languages/languages/makefile.html" = "/docs/languages/makefile.html"
 "/languages/languages/nim.html" = "/docs/languages/nim.html"
 "/languages/languages/ruby.html" = "/docs/languages/ruby.html"
 "/languages/languages/scala.html" = "/docs/languages/scala.html"
-"/python.html" = "/docs/languages/python.html"
-"/ruby.html" = "/docs/languages/ruby.html"
 
 # Zed development
 "/contribute-to-zed.html" = "/docs/development.html#contributor-links"

@@ -558,7 +558,7 @@ fn main() -> Result<()> {
     }
 
     let (server, server_name) =
-        IpcOneShotServer::<IpcHandshake>::new().context("Handshake before Zed spawn")?;
+        IpcOneShotServer::<IpcHandshake>::new().context("Handshake before Neo Zed spawn")?;
     let url = format!("zed-cli://{server_name}");
 
     let open_new_workspace = if args.new {
@@ -684,7 +684,7 @@ fn main() -> Result<()> {
             let exit_status = exit_status.clone();
             let user_data_dir_for_thread = user_data_dir.clone();
             move || {
-                let (_, handshake) = server.accept().context("Handshake after Zed spawn")?;
+                let (_, handshake) = server.accept().context("Handshake after Neo Zed spawn")?;
                 let (tx, rx) = (handshake.requests, handshake.responses);
 
                 #[cfg(target_os = "windows")]
@@ -826,14 +826,14 @@ fn prompt_open_behavior() -> Option<cli::CliOpenBehavior> {
 
     let blue = console::Style::new().blue();
     let items = [
-        format!("Add to existing Zed window ({})", blue.apply_to("zed -e")),
+        format!("Add to existing Neo Zed window ({})", blue.apply_to("zed -e")),
         format!("Open a new window ({})", blue.apply_to("zed -n")),
     ];
 
     let prompt = format!(
         "Configure default behavior for {}\n{}",
         blue.apply_to("zed <path>"),
-        console::style("You can change this later in Zed settings"),
+        console::style("You can change this later in Neo Zed settings"),
     );
 
     let selection = dialoguer::Select::new()

@@ -552,8 +552,8 @@ pub struct GitExcludeOverride {
 }
 
 impl GitExcludeOverride {
-    const START_BLOCK_MARKER: &str = "\n\n#  ====== Auto-added by Zed: =======\n";
-    const END_BLOCK_MARKER: &str = "\n#  ====== End of auto-added by Zed =======\n";
+    const START_BLOCK_MARKER: &str = "\n\n#  ====== Auto-added by Neo Zed: =======\n";
+    const END_BLOCK_MARKER: &str = "\n#  ====== End of auto-added by Neo Zed =======\n";
 
     pub async fn new(git_exclude_path: PathBuf) -> Result<Self> {
         let original_excludes =
@@ -3583,10 +3583,10 @@ fn parse_upstream_track(upstream_track: &str) -> Result<UpstreamTracking> {
 
 fn checkpoint_author_envs() -> HashMap<String, String> {
     HashMap::from_iter([
-        ("GIT_AUTHOR_NAME".to_string(), "Zed".to_string()),
-        ("GIT_AUTHOR_EMAIL".to_string(), "hi@zed.dev".to_string()),
-        ("GIT_COMMITTER_NAME".to_string(), "Zed".to_string()),
-        ("GIT_COMMITTER_EMAIL".to_string(), "hi@zed.dev".to_string()),
+        ("GIT_AUTHOR_NAME".to_string(), "Neo Zed".to_string()),
+        ("GIT_AUTHOR_EMAIL".to_string(), "hi@neozed.dev".to_string()),
+        ("GIT_COMMITTER_NAME".to_string(), "Neo Zed".to_string()),
+        ("GIT_COMMITTER_EMAIL".to_string(), "hi@neozed.dev".to_string()),
     ])
 }
 

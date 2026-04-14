@@ -468,7 +468,7 @@ fn main() {
             app_commit_sha,
             *release_channel::RELEASE_CHANNEL,
         );
-        println!("Zed System Specs (from CLI):\n{}", system_specs);
+        println!("Neo Zed System Specs (from CLI):\n{}", system_specs);
         return;
     }
 
